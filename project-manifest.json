@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "project": "ERP RESTAURANTES / TRIDENTPOS",
+  "project_id": "TRIDENTPOS-REST",
+  "project_repository": "https://github.com/Lucas030509/TRIDENTPOS.git",
+  "default_branch": "main",
+  "eaaf_repository": "https://github.com/Lucas030509/EAAF-Framework",
+  "eaaf_version": "1.2.0",
+  "eaaf_ref": "codex/eaaf-v1.2-governance",
+  "eaaf_commit": "7e036f43240b3dc28ccb996e350263598275b2cd",
+  "adoption_status": "GOVERNED",
+  "active_lifecycle_phase": "SOLUTION ARCHITECTURE — REMEDIATION",
+  "next_gate": "SOLUTION_ARCHITECTURE_GATE",
+  "gate_reviewer_authority": "Independent Solution Architect",
+  "ssot_functional_artifacts": [
+    "RESTAURANT_SOFTWARE_RECONSTRUCTION_SPEC.md",
+    "FUNCTIONAL_ARCHITECTURE.md",
+    "PRODUCT_SCOPE.md",
+    "PRODUCT_DECISIONS.md",
+    "MODULE_CATALOG.md",
+    "CAPABILITY_MAP.md",
+    "OPEN_QUESTIONS.md"
+  ],
+  "solution_architecture_artifacts": [
+    "SYSTEM_CONTEXT.md",
+    "SOLUTION_ARCHITECTURE.md",
+    "DEPLOYMENT_TOPOLOGY.md",
+    "SYNC_AND_OFFLINE_ARCHITECTURE.md",
+    "TECH_STACK_DECISIONS.md",
+    "ARCHITECTURE_RISKS.md"
+  ],
+  "adr_suite": [
+    "ADR/ADR-001-modular-monolith-bounded-contexts.md",
+    "ADR/ADR-002-cloud-branch-data-authority-by-topology.md",
+    "ADR/ADR-003-edge-host-runtime-electron-vs-tauri.md",
+    "ADR/ADR-004-embedded-database-sqlite-durability.md",
+    "ADR/ADR-005-local-lan-communication-protocol.md",
+    "ADR/ADR-006-outbox-and-idempotent-sync.md",
+    "ADR/ADR-007-durable-cloud-integration-events.md",
+    "ADR/ADR-008-disaster-recovery-strategy.md"
+  ],
+  "pending_po_decisions": 9,
+  "governance_notes": [
+    "PARTIAL — AGENT 06 V2.0 NOT YET INSTALLED in upstream EAAF ref. Not blocking Solution Architecture phase."
+  ]
+}
