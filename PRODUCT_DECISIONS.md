@@ -1,9 +1,11 @@
 # PRODUCT DECISIONS — ERP RESTAURANTES
 
-**Versión:** 1.2 (FINAL NORMALIZED)  
-**Fecha:** 2026-08-31  
-**SSOT Baseline:** [`RESTAURANT_SOFTWARE_RECONSTRUCTION_SPEC.md`](file:///Volumes/SSD_ORICO/BRAIN/TRIDENTPOSREST/RESTAURANT_SOFTWARE_RECONSTRUCTION_SPEC.md) (v1.1 APPROVED) & [`FUNCTIONAL_ARCHITECTURE.md`](file:///Volumes/SSD_ORICO/BRAIN/TRIDENTPOSREST/FUNCTIONAL_ARCHITECTURE.md) (v1.2 APPROVED).  
-**Rol:** `02_Functional / Business Architect`
+**Document ID:** `ARCH-DEC-001`  
+**Version:** `1.3 NORMALIZED / REMEDIATED`  
+**Status:** `READY FOR INDEPENDENT REVIEW`  
+**Date:** 2026-09-01  
+**Baseline:** `EAAF v1.2.0 @ 7e036f43240b3dc28ccb996e350263598275b2cd`  
+**Supersedes:** `PRODUCT_DECISIONS.md v1.2`  
 
 ---
 
@@ -71,7 +73,7 @@
 - **Contexto:** La dependencia de conectividad constante a la nube representa un riesgo operativo crítico para cocinas y puntos de venta en situaciones de saturación o falla de internet.
 - **Decisión:** El transporte operativo entre terminales POS, comanderos móviles, cajas y pantallas KDS pertenece y es resuelto dentro de la vertical **`TRIDENTPOS`**, operando primordialmente sobre la red local de la sucursal (LAN / WiFi). `Platform Core` aporta las primitivas transversales de identidad y seguridad. La sincronización con el backoffice y servicios en la nube se realiza de manera asíncrona.
 - **Consecuencias:**
-  - *Positivas:* Cero interrupciones en la atención a comensales, preparación en cocina, cobro y emisión de cortes ante contingencias de internet.
+  - *Positivas:* DESIGN OBJECTIVE: Continuidad en la atención a comensales, preparación en cocina, cobro y emisión de cortes ante contingencias de internet.
   - *Compromisos:* Los servicios externos (pagos bancarios PinPAD en línea, timbrado fiscal) dependen de sus propios enlaces y no se asumen offline.
 
 ---
@@ -120,4 +122,4 @@
 
 ---
 
-PRODUCT DECISIONS V1.1: READY FOR FINAL APPROVAL
+DOCUMENT STATUS: READY FOR INDEPENDENT REVIEW

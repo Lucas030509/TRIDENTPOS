@@ -36,12 +36,12 @@ framework_governance:
 
 ## 2. Quality Attributes
 
-- **Availability & Resilience:** Alta disponibilidad operativa local en sucursal mediante arquitectura Edge aislada; tolerancia a fallos de enlace a internet para operaciones de toma de pedidos, KDS, impresión y cobro en efectivo.
-- **Latency & Performance:** Procesamiento en red local (LAN) con latencia < 5 ms para eventos de comanda y actualización en pantallas KDS.
+- **Availability & Resilience:** `DESIGN OBJECTIVE: Continuidad operativa local en sucursal mediante arquitectura Edge aislada; tolerancia a fallos de enlace a internet para operaciones de toma de pedidos, KDS, impresión y cobro en efectivo.`
+- **Latency & Performance:** `LATENCY TARGET: < 5 ms en red local cableada o WiFi 5GHz dedicada para eventos de comanda y actualización en pantallas KDS — REQUIRES HARDWARE BENCHMARK.`
 - **Target RPO / RTO (Disaster Recovery):**
-  - *Reinicio de Software / Caída con UPS:* RPO = 0, RTO < 3 minutos.
-  - *Pérdida Total de Hardware del Edge Host:* RTO < 30 minutos (bootstrap automático desde Cloud para catálogos y configuración) + Protocolo de Reconciliación Manual y Auditoría Física para transacciones locales pendientes de sincronización.
-- **Validation Method:** Pruebas automatizadas de corte de energía (power-loss testing) en hardware representativo, pruebas de carga concurrente LAN y pruebas de reconciliación asíncrona.
+  - *Reinicio de Software / Caída con UPS:* `RPO TARGET: 0, RTO TARGET: < 3 minutos.`
+  - *Pérdida Total de Hardware del Edge Host:* `RTO TARGET: < 30 minutos (bootstrap automático desde Cloud para catálogos y configuración) + Protocolo de Reconciliación Manual y Auditoría Física para transacciones locales pendientes de sincronización — REQUIRES DR VALIDATION.`
+- **Validation Method:** Pruebas automatizadas de corte de energía (power-loss testing) en hardware representativo, pruebas de carga concurrente LAN y simulacro de recuperación ante desastres.
 
 ---
 

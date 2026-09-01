@@ -1,8 +1,12 @@
 # FUNCTIONAL ARCHITECTURE — ERP RESTAURANTES
 
-**Versión:** 1.2 (FINAL NORMALIZED)  
-**Fecha:** 2026-08-31  
-**SSOT Baseline:** [`RESTAURANT_SOFTWARE_RECONSTRUCTION_SPEC.md`](file:///Volumes/SSD_ORICO/BRAIN/TRIDENTPOSREST/RESTAURANT_SOFTWARE_RECONSTRUCTION_SPEC.md) (v1.1 APPROVED).  
+**Document ID:** `ARCH-FUNC-001`  
+**Version:** `1.3 NORMALIZED / REMEDIATED`  
+**Status:** `READY FOR INDEPENDENT REVIEW`  
+**Date:** 2026-09-01  
+**Baseline:** `EAAF v1.2.0 @ 7e036f43240b3dc28ccb996e350263598275b2cd`  
+**Supersedes:** `FUNCTIONAL_ARCHITECTURE.md v1.2`  
+
 **Rol:** `02_Functional / Business Architect`
 
 ---
@@ -147,9 +151,10 @@ classDiagram
     }
     class Delivery {
         +DeliveryZone
+        +DeliveryTariff
         +Driver
         +DispatchOrder
-        +ExternalPlatformOrder
+        +DriverSettlement
     }
     class Loyalty {
         +LoyaltyCard
@@ -165,6 +170,7 @@ classDiagram
     class Integrations {
         +ExternalConnector
         +EntityMapping
+        +ExternalPlatformOrderMapping
         +IntegrationAudit
     }
 ```
@@ -180,10 +186,10 @@ classDiagram
 | 5 | **Finance** | Cuentas por pagar (proveedores), cuentas por cobrar (crédito), gastos operativos, liquidación de propinas y pólizas contables (consumidor de Cortes Z). | `CuentaPorPagar`, `CuentaPorCobrar`, `GastoOperativo`, `LiquidacionPropina`, `ComisionAgente`, `PolizaContableInterfaz` | Platform Core |
 | 6 | **Billing** | Esquemas de impuestos multi-nivel/cascada, timbrado fiscal (CFDI / Int.), facturación individual/lote/dividida. | `EsquemaImpuesto`, `FacturaFiscal`, `TimbreFiscal`, `LoteFacturas` | Platform Core |
 | 7 | **CRM** | Directorio unificado de clientes, direcciones geolocalizadas, convenios y cuentas corporativas. | `Cliente`, `DireccionCliente`, `CuentaCorporativa` | Platform Core |
-| 8 | **Delivery** | Control de repartidores propios, zonas de cobertura y módulo de ingesta para plataformas agregadoras. | `ZonaDelivery`, `Repartidor`, `PedidoDelivery`, `PlataformaExterna` | Platform Core |
+| 8 | **Delivery** | Control logístico de flota propia: zonas de cobertura, tarifas de envío, asignación de repartidores y liquidación de choferes. | `ZonaDelivery`, `TarifaDelivery`, `Repartidor`, `PedidoDelivery`, `LiquidacionChofer` | Platform Core |
 | 9 | **Loyalty** | Programas de puntos, monedero electrónico recargable (RestCard), cortesías y cupones de descuento. | `TarjetaLealtad`, `Monedero`, `TransaccionPuntos`, `CuponDescuento` | Platform Core |
 | 10 | **Analytics** | Reportes operacionales en tiempo real, tableros consolidados cross-branch y métricas de auditoría. | `SnapshotVentas`, `MetricaProduccionKDS`, `ReporteAuditoria` | Platform Core |
-| 11 | **Integrations** | Conectores funcionales para hotelería (PMS), delivery agregadores, pasarelas y ERPs externos. | `ConectorExterno`, `MapeoEntidades`, `BitacoraIntegracion` | Platform Core |
+| 11 | **Integrations** | Conectores para plataformas externas (Uber Eats, Rappi, Didi, Deliverect), PAC fiscal, PMS hotelero y ERPs corporativos. | `ConectorExterno`, `CredencialConector`, `MapeoEntidades`, `BitacoraIntegracion` | Platform Core |
 
 ---
 
@@ -262,7 +268,7 @@ graph TD
 | **TRIDENTPOS** | Platform Core | Inventory, Finance, Billing, Loyalty | **Opera de forma autónoma completa:** Mesas, comanda, KDS, cobro, turnos de caja y **generación de Cortes X y Z diarios**. Si Finance no está, almacena los cortes localmente; si Inventory no está, no descuenta stock; si Billing no está, opera con ticket interno. |
 | **Inventory** | Platform Core | TRIDENTPOS, Procurement, ERP Externo | **Opera de forma autónoma:** Resuelve productos desde Platform Core, gestiona bodegas, centros de consumo, kárdex, recetas y costeo. Recibe consumos de TRIDENTPOS, de un POS externo o mediante capturas manuales de salidas. |
 | **Procurement** | Platform Core | Inventory, Finance, ERP Externo | Gestiona proveedores y órdenes de compra. Si Inventory está presente, afecta stock; si no, emite órdenes de compra para consumo de un sistema externo. |
-| **Finance** | Platform Core | TRIDENTPOS, Procurement, ERP Externo | **Suscriptor financiero:** Administra gastos, CxP y CxC. Consume los eventos `CorteZGenerado` y `TurnoCerrado` de TRIDENTPOS para conciliar ingresos y emitir pólizas contables. Si TRIDENTPOS no está, opera con asientos directos. |
+| **Finance** | Platform Core | TRIDENTPOS, Procurement, ERP Externo | **Suscriptor financiero:** Administra gastos, CxP y CxC. Consume los eventos `CorteZGenerado` y `TurnoCajaCerrado` de TRIDENTPOS para conciliar ingresos y emitir pólizas contables. Si TRIDENTPOS no está, opera con asientos directos. |
 | **Billing** | Platform Core | TRIDENTPOS, ERP Externo | Emite comprobantes fiscales a partir de folios pagados de TRIDENTPOS interno o transacciones inyectadas por sistemas externos. |
 | **Delivery** | Platform Core | TRIDENTPOS, Integrations | Gestiona flotas y rutas de reparto. Si TRIDENTPOS está presente, inyecta pedidos a mostrador; alternativamente puede operar como despachador logístico independiente. |
 | **Loyalty** | Platform Core | TRIDENTPOS, CRM | Administra monederos y puntos. Si TRIDENTPOS está disponible, redime en caja; de lo contrario opera vía portal web o terminal de lealtad. |
@@ -321,7 +327,7 @@ Los contratos funcionales definen los puntos de integración e intercambio de da
 ---
 
 ### 6.4 Contrato Procurement ↔ Inventory & Finance (Abastecimiento)
-- **Evento Disparador:** `RecepcionCompraAplicada`.
+- **Evento Disparador:** `RecepcionCompraRegistrada` (Canonical Name / REM-11).
 - **Parámetros del Contrato Funcional:**
   - `proveedorId`, `sucursalId`, `almacenDestinoId`, `ordenCompraId`, `itemsRecibidos[]`, `costosUnitarios[]`, `condicionesPago`
 - **Comportamiento Condicionado:**
@@ -330,9 +336,10 @@ Los contratos funcionales definen los puntos de integración e intercambio de da
 
 ---
 
-### 6.5 Contrato Delivery ↔ TRIDENTPOS (Ingesta y Despacho)
-- **Comandos Funcionales:**
-  - `InyectarPedidoExterno(canalOrigen, pedidoExternoId, cliente, items[], total, formaPago)`
+### 6.5 Contrato Integrations & Delivery ↔ TRIDENTPOS (Ingesta y Despacho)
+- **Ingesta de Plataformas Externas (Integrations Hub → TRIDENTPOS):**
+  - Comando: `IngestarPedidoExterno(canalOrigen, pedidoExternoId, cliente, items[], total, formaPago)`
+- **Gestión de Flota Propia (Delivery → TRIDENTPOS):**
   - `AsignarRepartidorPedido(pedidoDeliveryId, repartidorId)`
   - `ConfirmarEntregaPedido(pedidoDeliveryId, horaEntrega)`
   - `LiquidarEfectivoRepartidor(repartidorId, turnoCajaId, montoEfectivo)`
@@ -378,4 +385,4 @@ Para garantizar que un restaurante de alto volumen mantenga su ritmo de servicio
 
 ---
 
-ERP RESTAURANTES FUNCTIONAL ARCHITECTURE: READY FOR FINAL APPROVAL
+DOCUMENT STATUS: READY FOR INDEPENDENT REVIEW

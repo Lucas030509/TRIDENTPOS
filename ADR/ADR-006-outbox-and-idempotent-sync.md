@@ -1,27 +1,70 @@
 # ADR-006: Sincronización Asíncrona mediante Transactional Outbox e Ingesta Idempotente
 
-**Estado:** APROBADA  
-**Fecha:** 2026-08-31  
-**Autor:** `01_Solution Architect`  
-**Alcance:** Sync Architecture / Resiliencia Cloud-Edge  
+**Status:** `ACCEPTED WITH VALIDATION REQUIRED`  
+**Date:** 2026-09-01  
+**Owners:** `01_Solution Architect`  
+**Related documents:** `SYNC_AND_OFFLINE_ARCHITECTURE.md`, `ARCHITECTURE_RISKS.md`  
 
 ---
 
-## Contexto y Planteamiento del Problema
-La comunicación entre las sucursales y la nube sufre desconexiones recurrentes. Se requiere un mecanismo que garantice que ningún evento de venta o corte se pierda, que el orden causal de las transacciones se respete y que los reintentos de red no dupliquen cobros ni pólizas contables.
+## 1. Context
+La comunicación WAN entre los restaurantes y la nube experimenta caídas e intermitencias frecuentes. Se requiere garantizar la entrega confiable de transacciones sin duplicación de cobros ni pólizas contables.
 
-## Decisión
-Se implementa el patrón **Transactional Outbox Local con Ingesta Idempotente en Cloud**:
-1. **Escritura Atómica en Borde:** Toda mutación de estado en el Edge Host se persiste en SQLite junto con un registro en la tabla `OutboxQueue` en la misma transacción ACID.
-2. **Claves de Idempotencia Lógicas:** Cada evento lleva una clave determinista que representa una operación lógica única:
-   $$\text{idempotencyKey} = \text{orgId} : \text{branchId} : \text{aggregateType} : \text{aggregateId} : \text{action} : \text{clientOpId}$$
-3. **Orden Causal por Agregado:** Se utiliza `aggregateSequenceNumber` o `streamOffset` monotónico para ordenar los eventos de cada cuenta o turno. Se prohíbe el uso de timestamps o UUIDv7 como única garantía de orden causal.
-4. **Deduplicación en Cloud:** La base de datos central aplica una restricción de unicidad (`ON CONFLICT (idempotency_key) DO NOTHING`) en la tabla de ingesta.
+## 2. Problem
+La retransmisión no coordinada de peticiones HTTP genera duplicados en la base de datos central (*At-Least-Once Delivery* sin idempotencia). Adicionalmente, eventos recibidos fuera de orden causan inconsistencias de estado.
 
-## Consecuencias
-### Positivas
-- Cero pérdida de eventos de venta o caja durante períodos de desconexión prolongados.
-- Tolerancia total a reintentos de red (At-Least-Once Delivery sin duplicación de efectos secundarios).
+## 3. Architectural Drivers
+- Entrega confiable de eventos de venta, caja y cocina sin duplicados.
+- Preservación del orden causal de las operaciones de cada cuenta o turno.
+- Aislamiento de eventos malformados o venenosos.
 
-### Compromisos y Mitigaciones
-- Acumulación de eventos en el Outbox durante caídas prolongadas de internet. *Mitigación:* Se implementa compactación periódica de eventos marcados como `SYNCED`.
+## 4. Options Considered
+### Option A: Sincronización Directa API REST sin Outbox
+- *Pros:* Simple.
+- *Cons:* Pérdida de eventos ante fallas de red durante la llamada y duplicación por reintentos ciegos.
+- *Risks:* Inconsistencia grave en cierres de caja.
+
+### Option B: Transactional Outbox Local + Ingesta Idempotente con Secuenciación Causal — *Seleccionada*
+- *Pros:* Persistencia atómica de la mutación y el evento outbox en SQLite; deduplicación determinista en Cloud mediante `idempotencyKey` y preservación de orden mediante `aggregateSequenceNumber`.
+- *Cons:* Requiere gestión de buffers de reordenamiento y cola de eventos fallidos (DLQ).
+- *Risks:* Muy bajo; estándar de la industria para sistemas distribuidos offline-first.
+
+## 5. Decision
+Se adopta el patrón **Transactional Outbox Local con Ingesta Idempotente en Cloud**:
+1. Toda mutación local se guarda en SQLite junto con un registro en `OutboxQueue` en la misma transacción ACID.
+2. Clave de idempotencia lógica determinista: `org:branch:aggregateType:aggregateId:action:clientOpId`.
+3. `clientOpId` generado por el dispositivo en la acción inicial y reutilizado en todos los reintentos.
+4. Orden causal mediante `aggregateSequenceNumber` monotónico por agregado (no por timestamps).
+5. Estados de confirmación estructurados: `RECEIVED` -> `DURABLY_STORED` -> `APPLIED` -> `DUPLICATE_ACCEPTED`.
+6. Límite de 5 reintentos con backoff exponencial; eventos venenosos transferidos a `CloudIntegrationDLQ`.
+
+## 6. Rationale
+Garantiza que ninguna transacción se pierda y que los reintentos de red sean perfectamente idempotentes y consistentes.
+
+## 7. Consequences
+### Positive
+- Tolerancia total a interrupciones de conectividad.
+- Cero duplicación de efectos secundarios en la base de datos central.
+### Negative
+- Requiere almacenamiento de log de idempotencia en Cloud durante 90 días.
+### Operational
+- Monitoreo del backlog del outbox en Edge y de la DLQ en Cloud.
+
+## 8. Failure Modes
+- Evento malformado bloquea la cola outbox. Mitigación: Tras 5 fallos se aísla en DLQ y se continúa procesando la cola.
+
+## 9. Security Considerations
+- Validación de firmas y tokens de autenticación de sucursal en cada payload de sincronización.
+
+## 10. Observability Requirements
+- Métricas de latencia de sincronización y alertas automáticas si el backlog outbox supera 100 eventos pendientes.
+
+## 11. Validation / Evidence Required
+- Pruebas de desconexión prolongada, inyección de duplicados y eventos fuera de orden.
+
+## 12. Revisit Triggers
+- Retrasos sistemáticos en la ingesta en Cloud durante picos masivos de cierre de sucursales.
+
+## 13. Traceability
+- Atiende: REM-04.
+- SSOT: `SYNC_AND_OFFLINE_ARCHITECTURE.md v1.3`.

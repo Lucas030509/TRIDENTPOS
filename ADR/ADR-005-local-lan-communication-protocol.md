@@ -1,25 +1,67 @@
 # ADR-005: Protocolo de Comunicación en Red Local (LAN) para TRIDENTPOS
 
-**Estado:** APROBADA  
-**Fecha:** 2026-08-31  
-**Autor:** `01_Solution Architect`  
-**Alcance:** Branch Operational Plane / Protocolos de Red Local  
+**Status:** `ACCEPTED WITH VALIDATION REQUIRED`  
+**Date:** 2026-09-01  
+**Owners:** `01_Solution Architect`  
+**Related documents:** `SOLUTION_ARCHITECTURE.md`, `DEPLOYMENT_TOPOLOGY.md`  
 
 ---
 
-## Contexto y Planteamiento del Problema
-En un restaurante concurrido, decenas de eventos de comanda, modificaciones y cambios de estado en KDS ocurren simultáneamente por minuto. Si las terminales de cocina y comanderos móviles utilizan polling HTTP continuo sobre la red WiFi, la red local se satura y se generan retrasos en la preparación de platillos.
+## 1. Context
+En el restaurante operan múltiples dispositivos en red local (terminal de cobro, pantallas KDS en cocina/barra, comanderos móviles e impresoras térmicas).
 
-## Decisión
-Se adopta una arquitectura de comunicación en red local basada en **HTTP REST para Comandos Transaccionales** y **WebSocket Server nativo (`ws`) para Transmisión Push Bidireccional**:
-1. **Comandos de Negocio:** Peticiones como `AbrirMesa()`, `PagarCuenta()`, `AbrirTurno()` se envían vía llamadas HTTP POST locales con payload tipado y Control de Concurrencia Optimista (`expectedVersion`).
-2. **Distribución en Tiempo Real (Push):** El Edge Server mantiene conexiones WebSocket abiertas con todas las pantallas KDS y comanderos móviles. Al registrarse una comanda o cambio de estado, se emite un broadcast inmediato a los clientes suscritos.
-3. **Heartbeat y Reconexión Local:** Los clientes móviles y KDS envían un ping de heartbeat cada 5 segundos; ante desconexión de WiFi, el cliente reintenta la conexión automáticamente y solicita el estado completo de la mesa o pantalla.
+## 2. Problem
+El polling continuo mediante HTTP satura el ancho de banda de la red WiFi, incrementa el consumo de batería en tablets y genera retrasos en la visualización de órdenes en cocina.
 
-## Consecuencias
-### Positivas
-- Latencia mínima (< 5 ms en LAN Ethernet/WiFi 5GHz) en la actualización de comandas en KDS.
-- Eliminación del tráfico residual y reducción drástica del consumo de batería en tablets de meseros.
+## 3. Architectural Drivers
+- Actualización en tiempo real de pantallas KDS.
+- Consumo mínimo de batería en dispositivos móviles.
+- Resiliencia ante desconexiones transitorias de WiFi.
 
-### Compromisos y Mitigaciones
-- Sensibilidad a la calidad de la señal WiFi en áreas alejadas del comedor. *Mitigación:* Se recomienda como baseline un Access Point empresarial dedicado con SSID exclusivo para el sistema.
+## 4. Options Considered
+### Option A: HTTP Polling Periódico (Pull)
+- *Pros:* Simple de implementar.
+- *Cons:* Tráfico innecesario, latencia de visualización (1–3s) y consumo de batería excesivo.
+- *Risks:* Congestión de la red local en horas pico.
+
+### Option B: HTTP REST (Comandos) + WebSockets `ws` (Push) — *Seleccionada*
+- *Pros:* Entrega instantánea de comandas a KDS (*LATENCY TARGET: < 5 ms en LAN dedicada — REQUIRES BENCHMARK*), canal persistente y mínimo overhead.
+- *Cons:* Requiere gestión de reconexión y heartbeats en clientes.
+- *Risks:* Sensibilidad a la cobertura WiFi en zonas muertas del restaurante.
+
+## 5. Decision
+Se adopta una arquitectura híbrida en red local:
+1. **Comandos de Negocio:** Peticiones HTTP POST locales con payload tipado y Control de Concurrencia Optimista (`expectedVersion`).
+2. **Distribución Push:** Servidor WebSocket nativo (`ws`) en el Edge Host para emisión inmediata de eventos a pantallas KDS y comanderos.
+3. **Heartbeat y Reconexión:** Heartbeats cada 5 segundos con re-sincronización de estado completa ante reconexión.
+
+## 6. Rationale
+La combinación de HTTP para mutaciones y WebSockets para notificaciones push garantiza la consistencia transaccional con la menor latencia de interfaz posible.
+
+## 7. Consequences
+### Positive
+- Notificaciones instantáneas de pedidos en cocina.
+- Eliminación del tráfico residual en la red WiFi.
+### Negative
+- Requiere lógica de reconexión en los clientes móviles.
+### Operational
+- Requiere asignación de IP estática o mDNS para el Edge Host en la red local.
+
+## 8. Failure Modes
+- Desconexión temporal de un comandero móvil por falta de señal. Mitigación: El cliente almacena las acciones pendientes localmente y solicita el estado consolidado de la mesa al reconectar.
+
+## 9. Security Considerations
+- Autenticación mediante token de estación/dispositivo firmado localmente en el handshake de WebSocket.
+
+## 10. Observability Requirements
+- Registro de conexiones y desconexiones de clientes WebSocket en el log del Edge Server.
+
+## 11. Validation / Evidence Required
+- Pruebas de latencia y saturación con 20 clientes WebSocket conectados concurrentemente en red local.
+
+## 12. Revisit Triggers
+- Degradación de rendimiento o desconexiones recurrentes de WebSockets en redes locales no optimizadas.
+
+## 13. Traceability
+- Atiende: REM-05, REM-08.
+- SSOT: `SOLUTION_ARCHITECTURE.md v1.3`.

@@ -1,177 +1,144 @@
 # SYNC AND OFFLINE ARCHITECTURE — ERP RESTAURANTES
 
-**Versión:** 1.1 (SOLUTION ARCHITECTURE NORMALIZED)  
-**Fecha:** 2026-08-31  
-**SSOT Baseline:** [`FUNCTIONAL_ARCHITECTURE.md`](file:///Volumes/SSD_ORICO/BRAIN/TRIDENTPOSREST/FUNCTIONAL_ARCHITECTURE.md) (v1.2 APPROVED) & [`PRODUCT_DECISIONS.md`](file:///Volumes/SSD_ORICO/BRAIN/TRIDENTPOSREST/PRODUCT_DECISIONS.md) (v1.2 APPROVED).  
-**Rol:** `01_Solution Architect`
+**Document ID:** `ARCH-SYNC-001`  
+**Version:** `1.3 NORMALIZED / REMEDIATED`  
+**Status:** `READY FOR INDEPENDENT REVIEW`  
+**Date:** 2026-09-01  
+**Baseline:** `EAAF v1.2.0 @ 7e036f43240b3dc28ccb996e350263598275b2cd`  
+**Supersedes:** `SYNC_AND_OFFLINE_ARCHITECTURE.md v1.1`  
 
 ---
 
-## 1. Principio Fundamental de Autoridad de Datos por Topología
+## 1. Protocolo de Continuidad Segura de Folios y Recuperación ante Desastres (REM-01)
 
-La autoridad sobre los datos se estructura según la topología de despliegue activa:
+### Planteamiento del Problema
+Cuando una sucursal pierde conectividad a internet, el Edge Host continúa emitiendo tickets y comandas. Si el equipo sufre una pérdida total (destrucción física, daño irrecuperable de disco o robo) antes de sincronizar sus últimas transacciones, un equipo de reemplazo no puede reutilizar los números de folio emitidos localmente.
 
-```mermaid
-graph TD
-    subgraph Topologies_Authority["Matriz de Autoridad de Datos"]
-        subgraph T1["1. Full Suite"]
-            T1_Cloud["Cloud SoR: Org, Branch, RBAC, Catálogo Maestro, Clientes"]
-            T1_Branch["Branch Write Authority: Mesas, Cuentas, KDS, Caja, Cortes X/Z"]
-        end
-
-        subgraph T2["2. TRIDENTPOS Standalone"]
-            T2_Local["Local Host: Autoridad 100% de Catálogo Embebido, Operación y Cortes"]
-        end
-
-        subgraph T3["3. Backoffice Standalone"]
-            T3_Cloud["Cloud SoR: Catálogo, Recetas, Almacenes, Compras, Finanzas"]
-            T3_ExtPOS["POS Externo: Autoridad Primaria de Venta"]
-        end
-
-        subgraph T4["4. Híbrido Corporativo"]
-            T4_Branch["Branch Edge: Autoridad de Piso y Caja"]
-            T4_ERP["ERP Externo: Autoridad Contable Corporativa"]
-        end
-    end
-```
-
----
-
-## 2. Patrón de Sincronización: Transactional Outbox Local
-
-En el nodo de sucursal (`TRIDENTPOS Edge Server`), toda acción operativa se guarda atómicamente en la base de datos local junto con su registro en la cola de salida (`OutboxQueue`):
+### Arquitectura de Rangos Preasignados con Épocas (`epochId`) y Fencing Tokens
+Para resolver este problema de manera matemáticamente estricta:
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant UI as Terminal POS / Comandero / KDS
-    participant Engine as TRIDENTPOS Core Engine
-    participant DB as Local Database (SQLite WAL)
-    participant Outbox as Local Outbox Queue
-    participant SyncAgent as Local Sync Agent
-    participant CloudSync as Cloud Sync Gateway (Render)
-    participant CloudDB as Cloud Database (Supabase)
+    participant Cloud as Cloud Control Plane (PostgreSQL)
+    participant EdgeOld as Edge Host 1 (Epoch 1 - Destruido)
+    participant EdgeNew as Edge Host 2 (Epoch 2 - Reemplazo)
 
-    Note over UI,Outbox: Operación Transaccional en Red Local (LAN)
-    UI->>Engine: Command: PagarCuenta(cuentaId, payments, expectedVersion: 4)
-    rect rgb(240, 248, 255)
-        Note over Engine,Outbox: Transacción ACID Local Unificada
-        Engine->>DB: UPDATE Cuenta SET estado = 'Pagada', version = 5 WHERE id = 'c_1' AND version = 4
-        Engine->>DB: INSERT INTO PagoCuenta (...)
-        Engine->>Outbox: INSERT INTO OutboxQueue (eventId, aggregateType, aggregateId, aggregateSequenceNo, idempotencyKey, payload, status='PENDING')
-    end
-    Engine-->>UI: Response: Cuenta Liquidada Exitosamente (Imprimir Ticket)
+    Note over Cloud,EdgeOld: Fase Normal Online
+    EdgeOld->>Cloud: Solicitar Rango de Folios (epochId: "ep_1", branchId: "BR-01")
+    Cloud->>Cloud: Reservar Bloque [1001-1500] como ALLOCATED_POTENTIALLY_CONSUMED (epoch: "ep_1")
+    Cloud-->>EdgeOld: Conceder Rango [1001-1500], leaseId: "L-01", epochId: "ep_1"
+    
+    Note over EdgeOld: Desconexión a Internet (Modo Offline)
+    EdgeOld->>EdgeOld: Consume folios 1001, 1002, 1003, 1004, 1005
+    Note over EdgeOld: DESTRUCCIÓN TOTAL DEL HARDWARE (Pérdida de Disco)
 
-    Note over SyncAgent,CloudDB: Proceso Asíncrono de Sincronización
-    loop Intervalo Periódico o Push WSS
-        SyncAgent->>Outbox: SELECT * FROM OutboxQueue WHERE status = 'PENDING' ORDER BY aggregateSequenceNo ASC LIMIT 50
-        alt Conexión a Internet Disponible
-            SyncAgent->>CloudSync: POST /sync/upstream/events (Batch con Auth Token)
-            CloudSync->>CloudDB: Ingesta Idempotente con Deduplicación (ON CONFLICT DO NOTHING)
-            CloudSync-->>SyncAgent: HTTP 200 OK (ACK eventIds)
-            SyncAgent->>Outbox: UPDATE OutboxQueue SET status = 'SYNCED', syncedAt = NOW() WHERE eventId IN (...)
-        else Sin Conexión a Internet
-            SyncAgent->>SyncAgent: Registra estado offline y reintenta con backoff exponencial.
-        end
-    end
+    Note over Cloud,EdgeNew: Aprovisionamiento de Equipo de Reemplazo (Disaster Recovery)
+    EdgeNew->>Cloud: Solicitar Bootstrap Inicial (branchId: "BR-01")
+    Cloud->>Cloud: Incrementar Época a "ep_2" (Genera fencingToken activo)
+    Cloud->>Cloud: Marcar Rango no sincronizado de ep_1 [1001-1500] como ABANDONED_CONTINGENCY_RANGE
+    Cloud->>Cloud: Reservar Nuevo Rango [1501-2000] como ALLOCATED_POTENTIALLY_CONSUMED (epoch: "ep_2")
+    Cloud-->>EdgeNew: Conceder Rango [1501-2000], leaseId: "L-02", epochId: "ep_2", fencingToken: "FT-02"
+    EdgeNew->>EdgeNew: Inicia operaciones seguras emitiendo desde 1501 (CERO colisiones)
+
+    Note over Cloud,EdgeOld: Fencing contra Zombie / Reaparición de Nodo Viejo
+    EdgeOld-->>Cloud: Intento de sincronización tardía con epochId "ep_1" (Stale Lease)
+    Cloud-->>EdgeOld: 403 Forbidden / LEASE_REVOKED { activeEpoch: "ep_2" }
+    EdgeOld->>EdgeOld: Bloqueo inmediato en modo READ-ONLY para auditoría forense
 ```
 
+### Reglas del Protocolo de Folios
+1. **Asignación en Cloud:** Cloud reserva bloques finitos de folios (ej. 500 folios) marcándolos en base de datos como `ALLOCATED_POTENTIALLY_CONSUMED` vinculado a un `epochId` y `leaseId` antes de su uso local.
+2. **Operación Offline:** El Edge Host consume números secuencialmente dentro de su rango concedido.
+3. **Pérdida Total y Reemplazo:** Al registrar un nuevo Edge Host, Cloud incrementa la época (`epochId`), invalida el lease previo y marca el rango anterior como `ABANDONED_CONTINGENCY_RANGE`. Estos folios **nunca se reasignan silenciosamente**.
+4. **Fencing de Nodos Antiguos (Zombie Protection):** Si el nodo antiguo reaparece, toda comunicación hacia Cloud es rechazada con `403 LEASE_REVOKED` debido a disparidad de épocas (`ep_1 < ep_2`), forzando al nodo a entrar en modo solo-lectura protegido.
+5. **Protocolo de Reconciliación Manual y Auditoría Física:** Los folios pertenecientes al rango de contingencia abandonado se concilian contablemente mediante el cotejo de vouchers bancarios físicos de PinPAD, arqueo de efectivo en caja y registro de un `TurnoDeAjustePorContingencia` en Cloud.
+
 ---
 
-## 3. Idempotencia y Secuenciación Causal
+## 2. Idempotencia Lógica, Secuenciación Causal y Semántica de ACK (REM-04)
 
-### 3.1 Clave de Idempotencia Lógica (Idempotency Key)
-Para evitar la duplicidad por reintentos de red, cada evento lleva una clave determinista que representa una **operación lógica única**:
-$$\text{idempotencyKey} = \text{orgId} : \text{branchId} : \text{aggregateType} : \text{aggregateId} : \text{action} : \text{operationClientToken}$$
+### Estructura de Clave de Idempotencia y Ciclo de Vida de `clientOpId`
+$$\text{idempotencyKey} = \text{orgId} : \text{branchId} : \text{aggregateType} : \text{aggregateId} : \text{action} : \text{clientOpId}$$
 
-*Ejemplo:* `org_corp01:br_norte:cuenta:c_88921:pago:op_token_9912`
+- **`clientOpId`:** UUIDv4 generado determinísticamente por el dispositivo cliente en el instante de la acción del usuario y persistido localmente antes del envío por red.
+- **Regla de Reintentos:** Se reutiliza exactamente el mismo `clientOpId` en cualquier reintento o reconexión de red. Queda estrictamente prohibido regenerar un `clientOpId` por timeouts de red sin una nueva acción explícita del usuario.
+- **Almacenamiento y Retención:** Cloud almacena los hashes de idempotencia en la tabla `IngestedIdempotencyLog` con retención mínima de **90 días**. Si se recibe una clave duplicada, Cloud retorna el resultado persistido previamente sin reejecutar efectos secundarios (`DUPLICATE_ACCEPTED`).
 
-### 3.2 Secuenciación Causal por Agregado / Stream
-> [!IMPORTANT]
-> **No se utiliza UUIDv7 ni ULID como garantía de orden causal.** Aunque los identificadores basados en tiempo ayudan a la indexación, los desfases de reloj (clock skew) entre terminales móviles y el host impiden garantizar causalidad estricta mediante timestamps.
-> 
-> La causalidad se garantiza mediante **`aggregateSequenceNumber`** (número secuencial monotónico incremental por agregado) o **`streamOffset`** gestionado por el Edge Server local.
+### Orden Causal y Buffer de Reordenamiento de Secuencias
+- Cada agregado (ej. `Cuenta`, `TurnoCaja`) mantiene un contador monotónico `aggregateSequenceNumber` gestionado por el host local.
+- **Manejo de Gaps / Desorden en Cloud:**
+  - Si `incomingSequence == expectedSequence`: Se procesa y avanza el contador.
+  - Si `incomingSequence < expectedSequence`: Se clasifica como duplicado y se responde `DUPLICATE_ACCEPTED`.
+  - Si `incomingSequence > expectedSequence` (Gap / Desorden): El evento se almacena temporalmente en `ReorderingBufferQueue` y se solicita al Edge el reenvío de las secuencias faltantes; no se aplica a base de datos principal hasta cerrar la brecha.
 
-```json
-{
-  "eventId": "01J6X7A8B9C0D1E2F3G4H5J6K7",
-  "organizationId": "org_corporativo_01",
-  "branchId": "branch_norte_05",
-  "aggregateType": "Cuenta",
-  "aggregateId": "acc_88921",
-  "aggregateSequenceNo": 14,
-  "aggregateVersion": 5,
-  "eventType": "CuentaPagada",
-  "timestamp": "2026-08-31T19:15:30.124Z",
-  "idempotencyKey": "org_corp01:br_norte:cuenta:acc_88921:pago:op_9912",
-  "payload": {
-    "folioVenta": "A-000492",
-    "total": 540.00,
-    "propina": 54.00,
-    "formaPago": [
-      { "tipo": "EFECTIVO", "monto": 200.00 },
-      { "tipo": "TARJETA_CREDITO", "monto": 394.00, "autorizacion": "084129" }
-    ],
-    "turnoId": "shift_20260831_caja1_01"
-  }
-}
+### Estados Estructurados de Confirmación (ACK)
+El pipeline de sincronización utiliza estados tipados explícitos:
+
+```text
+[RECEIVED] ──> [DURABLY_STORED] ──> [APPLIED] ──> Retorna ACK de Éxito al Edge
+      │                │
+      │                └──> [DUPLICATE_ACCEPTED] ──> Retorna ACK de Éxito idempotente
+      │
+      └──> [REJECTED] / [REQUIRES_RECONCILIATION] ──> Mueve a DLQ y alerta a Admin
 ```
 
----
+- **Criterio de Sincronizado en Edge:** El Edge Host marca un registro del outbox como `SYNCED` **únicamente** tras recibir una respuesta HTTP/WSS con estado `APPLIED` o `DUPLICATE_ACCEPTED` acompañada de la firma de transacción en Cloud.
 
-## 4. Durabilidad de SQLite en Borde: Análisis de Modos de Sincronización
-
-En el nodo Edge de sucursal, la selección de parámetros de SQLite implica un compromiso directo entre rendimiento de disco y durabilidad ante cortes de energía:
-
-| Configuración SQLite | Mecanismo de Disco | Nivel de Durabilidad | Riesgo ante Pérdida Súbita de Energía | Caso de Uso |
-|---|---|---|---|---|
-| `journal_mode = WAL` + `synchronous = NORMAL` | Realiza fsync principalmente en los checkpoints del WAL. Las escrituras en WAL no hacen fsync por cada commit. | Resistente a caídas de la aplicación y del sistema operativo. Muy alto rendimiento de escritura. | **Riesgo:** Si el equipo pierde energía de golpe y la unidad SSD tiene caché de escritura volátil sin respaldo de batería, pueden perderse las últimas transacciones no descargadas al medio físico. | Modo estándar para operaciones de alta velocidad en horas pico. |
-| `journal_mode = WAL` + `synchronous = FULL` | Realiza fsync explícito en cada commit de transacción en el archivo WAL. | Máxima durabilidad transaccional en disco. Menor rendimiento bajo ráfagas intensas. | **Sin pérdida de commits confirmados:** Las transacciones confirmadas quedan selladas físicamente en el almacenamiento antes de retornar ACK. | Recomendado para operaciones críticas (emisión de Corte Z, arqueo final de caja). |
-
-> [!CAUTION]
-> **Requisito de Validación:** Es **obligatorio ejecutar pruebas automatizadas de corte de energía (power-loss testing)** sobre el hardware objetivo seleccionado para validar el comportamiento real del controlador de disco ante apagones intempestivos.
+### Eventos Venenosos y Dead Letter Queue (DLQ)
+- Todo evento con error irrecuperable de validación o que supere **5 reintentos con backoff exponencial** se transfiere a la tabla `CloudIntegrationDLQ`.
+- La DLQ almacena el payload crudo, código de error, traza y requiere autorización expresa de un administrador para su reejecución o descarte auditado.
 
 ---
 
-## 5. Estrategia de Recuperación ante Desastres (Disaster Recovery)
+## 3. Durabilidad y Almacenamiento en Borde (SQLite 3 WAL) (REM-07)
 
-En caso de **destrucción total, daño irreversible o robo del equipo Edge Host** de la sucursal, se aplica una estrategia diferenciada entre datos ya sincronizados y datos locales no sincronizados:
+### Configuración del Motor
+- **Modo de Journal:** `PRAGMA journal_mode = WAL;` (Lecturas concurrentes sin bloqueo).
+- **Modo de Sincronización:**
+  - `PRAGMA synchronous = NORMAL;` para operaciones operativas de alta frecuencia (mesas, KDS, comanderos).
+  - `PRAGMA synchronous = FULL;` (forzando fsync a disco) para transacciones financieras críticas: **Cierre de Turno de Caja**, **Corte X** y **Corte Z**.
 
-```mermaid
-graph TD
-    subgraph DR_Strategy["Estrategia de Disaster Recovery en Sucursal"]
-        subgraph Synced_Data["1. Datos Sincronizados en Cloud"]
-            S1["Catálogos Maestros y Overrides"]
-            S2["Usuarios, Roles y PINs"]
-            S3["Folios de Venta y Pagos ya Recibidos en Cloud"]
-            S4["Cortes Z Previos Sincronizados"]
-            S5["Restauración Automática en Minutos (RTO < 30 min)"]
-        end
-
-        subgraph Unsynced_Data["2. Datos Locales No Sincronizados (Pérdida en Edge Host)"]
-            U1["Comandas y Cuentas Abiertas en el Turno Activo"]
-            U2["Cobros Recientes no Enviados a Cloud (RPO = Período Offline)"]
-            U3["Protocolo de Reconciliación Manual y Auditoría Física"]
-        end
-    end
-```
-
-### 5.1 Objetivos Conceptuales de RPO y RTO
-
-| Escenario de Desastre | RPO Conceptual (Pérdida Máxima de Datos) | RTO Conceptual (Tiempo Máximo de Recuperación) |
-|---|---|---|
-| **Reinicio tras Caída de Software / Apagón con UPS** | **RPO = 0** (Sin pérdida de datos; SQLite WAL recupera estado) | **RTO < 3 minutos** (Reinicio del Edge Host y reconexión LAN) |
-| **Pérdida Total de Hardware del Edge Host (Robo / Destrucción)** | **RPO = Ventana de eventos offline no sincronizados** (0 si había enlace a internet activo al momento del siniestro) | **RTO < 30 minutos** (Instalación de nueva máquina, provisión de credenciales y descarga de catálogo desde Cloud) |
-
-### 5.2 Protocolo de Reconciliación ante Pérdida de Datos No Sincronizados
-Si el hardware del Edge Host se pierde durante una caída prolongada de internet con transacciones pendientes en el Outbox:
-1. **Aprovisionamiento de Nuevo Nodo:** Se instala la aplicación en una máquina de reemplazo, se autentica con la Organización y Sucursal, y se descarga la configuración base.
-2. **Reconciliación de Folios Consecutivos:** La nube asigna el siguiente rango de Folios de Venta y número de Corte Z garantizando que no existan duplicidades con los folios históricos.
-3. **Reconstrucción Contable y Auditoría:**
-   - **Comprobantes Bancarios:** Se cotejan los vouchers físicos de las terminales PinPAD bancarias o el reporte del adquirente.
-   - **Efectivo en Cajón:** Se realiza un arqueo físico del efectivo disponible en el cajón de dinero.
-   - **Registro de Regularización:** El Gerente emite un `TurnoDeAjustePorContingencia` en el nuevo nodo para registrar los ingresos físicos reconstruidos y balancear la tesorería.
+### Supuestos de Hardware y Protección de Disco
+1. **Dependencia de UPS y Almacenamiento:** Para evitar pérdida de escrituras pendientes en caches volátiles de SSDs comerciales ante apagones repentinos, se establece como prerrequisito que el equipo host cuente con respaldo de energía mediante UPS/No-Break.
+2. **Política de Checkpointing WAL:** Ejecución pasiva de checkpoint cada 1,000 páginas y forzado manual al finalizar cada turno de caja.
+3. **Monitoreo de Espacio en Disco:**
+   - *Alerta Temprana:* Espacio libre < 15%.
+   - *Modo de Emergencia:* Espacio libre < 5% activa modo de solo-lectura y suspensión de comandas nuevas hasta liberar espacio de logs.
+4. **Detección y Recuperación de Corrupción:** Ejecución diaria de `PRAGMA integrity_check`. En caso de detección de corrupción física, el sistema restaura el último snapshot local íntegro y solicita a Cloud el reenvío de deltas mediante el protocolo de recuperación.
+5. **Certificación Obligatoria:** `REQUIRES HARDWARE POWER-LOSS VALIDATION ON TARGET POS DEVICES`.
 
 ---
 
-SYNC AND OFFLINE ARCHITECTURE V1.1: READY FOR FINAL APPROVAL
+## 4. Sincronización Descendente Cloud → Edge y Snapshots Económicos (REM-10)
+
+1. **Distribución de Catálogos y Configuración:**
+   - Cloud emite deltas versionados (`snapshotVersion`, `deltaVersion`) para productos, categorías, menús, modificadores, listas de precios, branch overrides y roles.
+   - El Edge Host aplica los deltas en una transacción atómica local utilizando tablas de staging con verificación de checksum antes de la activación.
+2. **Preservación Obligatoria del Snapshot Económico en Cuentas Abiertas:**
+   - Toda comanda o cuenta abierta en el restaurante almacena una copia inmutable (*frozen economic snapshot*) de: `nombre de producto`, `precio unitario vigente al ordenar`, `tasa de impuesto aplicada`, `precios de modificadores` y `descuentos`.
+   - Una actualización de precios o catálogo en Cloud **NUNCA modifica retroactivamente el importe de una cuenta abierta en el restaurante**.
+
+---
+
+## 5. Arquitectura de Identidad y Autorización Offline (REM-09)
+
+1. **Credenciales en Caché Local:** Hashes salteados (Argon2id) de PIN de empleados almacenados localmente.
+2. **Snapshot de RBAC:** Permisos locales indexados con `snapshotVersion`, `issuedAt` y `expiresAt`.
+3. **Ventana Máxima de Desconexión:** Configurada en **72 horas**. Al expirar, las operaciones sensibles quedan bloqueadas hasta reconectar con Cloud o ingresar el PIN de autorización de Gerente General.
+
+---
+
+## 6. Metas y Calibración de Disponibilidad y RPO/RTO (REM-06)
+
+| Escenario de Falla | RPO Target | RTO Target | Estrategia de Mitigación |
+|---|---|---|---|
+| **Caída de Enlace a Internet** | RPO = 0 (Local) | RTO = 0 (Ininterrumpido) | Operación autónoma en Edge Host con SQLite WAL local. |
+| **Reinicio de Software / Crash Local con UPS** | RPO = 0 (Local) | RTO < 3 min | Recuperación automática del proceso Node.js y replay de WAL. |
+| **Pérdida Total de Hardware del Edge Host** | RPO = Intervalo offline no sincronizado | RTO < 30 min | Aprovisionamiento de nuevo hardware, bootstrap desde Cloud + Protocolo de Reconciliación Manual y Auditoría Física. |
+
+*Nota:* Las métricas de RTO/RPO representan objetivos de diseño y requieren validación formal mediante pruebas de contingencia (`REQUIRES DR VALIDATION`).
+
+---
+
+DOCUMENT STATUS: READY FOR INDEPENDENT REVIEW

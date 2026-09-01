@@ -1,9 +1,11 @@
 # PRODUCT SCOPE — ERP RESTAURANTES
 
-**Versión:** 1.2 (FINAL NORMALIZED)  
-**Fecha:** 2026-08-31  
-**SSOT Baseline:** [`RESTAURANT_SOFTWARE_RECONSTRUCTION_SPEC.md`](file:///Volumes/SSD_ORICO/BRAIN/TRIDENTPOSREST/RESTAURANT_SOFTWARE_RECONSTRUCTION_SPEC.md) (v1.1 APPROVED) & [`FUNCTIONAL_ARCHITECTURE.md`](file:///Volumes/SSD_ORICO/BRAIN/TRIDENTPOSREST/FUNCTIONAL_ARCHITECTURE.md) (v1.2 APPROVED).  
-**Rol:** `02_Functional / Business Architect`
+**Document ID:** `ARCH-SCP-001`  
+**Version:** `1.3 NORMALIZED / REMEDIATED`  
+**Status:** `READY FOR INDEPENDENT REVIEW`  
+**Date:** 2026-09-01  
+**Baseline:** `EAAF v1.2.0 @ 7e036f43240b3dc28ccb996e350263598275b2cd`  
+**Supersedes:** `PRODUCT_SCOPE.md v1.2`  
 
 ---
 
@@ -181,4 +183,4 @@ Alcance mínimo indispensable para operar un restaurante en piso, cocina y caja:
 
 ---
 
-PRODUCT SCOPE V1.1: READY FOR FINAL APPROVAL
+DOCUMENT STATUS: READY FOR INDEPENDENT REVIEW

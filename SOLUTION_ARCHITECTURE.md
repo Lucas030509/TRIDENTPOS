@@ -1,243 +1,147 @@
-# SOLUTION ARCHITECTURE — ERP RESTAURANTES
+# SOLUTION ARCHITECTURE & COMPONENT MODEL — ERP RESTAURANTES
 
-**Versión:** 1.1 (SOLUTION ARCHITECTURE NORMALIZED)  
-**Fecha:** 2026-08-31  
-**SSOT Baseline:** [`FUNCTIONAL_ARCHITECTURE.md`](file:///Volumes/SSD_ORICO/BRAIN/TRIDENTPOSREST/FUNCTIONAL_ARCHITECTURE.md) (v1.2 APPROVED) & [`MODULE_CATALOG.md`](file:///Volumes/SSD_ORICO/BRAIN/TRIDENTPOSREST/MODULE_CATALOG.md) (v1.2 APPROVED).  
-**Rol:** `01_Solution Architect`
+**Document ID:** `ARCH-SOL-001`  
+**Version:** `1.3 NORMALIZED / REMEDIATED`  
+**Status:** `READY FOR INDEPENDENT REVIEW`  
+**Date:** 2026-09-01  
+**Baseline:** `EAAF v1.2.0 @ 7e036f43240b3dc28ccb996e350263598275b2cd`  
+**Supersedes:** `SOLUTION_ARCHITECTURE.md v1.1`  
 
 ---
 
-## 1. Estilo Arquitectónico: Monolito Modular con Bounded Contexts Fuertes
-
-Para `ERP RESTAURANTES`, la arquitectura del backend en el Cloud Control Plane se diseña bajo el patrón **Modular Monolith (Monolito Modular)** con aislamiento estricto entre Bounded Contexts y comunicación dual: **In-Process Domain Events** para efectos intra-transaccionales y **Durable Integration Events** para efectos inter-módulo que no pueden perderse.
+## 1. C4 Model — Nivel 2: Diagrama de Contenedores
 
 ```mermaid
-graph TB
-    subgraph Modular_Monolith["Modular Monolith Architecture (Cloud Core Backend)"]
-        direction TB
-        subgraph Core_Package["Platform & Foundation"]
-            PF["Platform Foundation (Tenant, Branch, RBAC, Station, Audit)"]
-            MC["Master Catalog Service (Products, Categories, Menus, Modifiers, Overrides)"]
-        end
-
-        subgraph Ops_Package["Operations Contexts"]
-            TP_CLOUD["TRIDENTPOS Cloud Bridge & Reconciler"]
-            DEL["Delivery Module (Logística & Despacho)"]
-        end
-
-        subgraph Supply_Package["Supply Chain Contexts"]
-            INV["Inventory Module (Recetas, Almacén, Kárdex)"]
-            PROC["Procurement Module (Compras, Órdenes, Proveedores)"]
-        end
-
-        subgraph Finance_Package["Finance & Fiscal Contexts"]
-            FIN["Finance Module (Tesorería, CxP, CxC, Gastos, Consumo Corte Z)"]
-            BILL["Billing Module (Impuestos Compuestos, Emisión Fiscal)"]
-        end
-
-        subgraph Customer_Package["Customer Experience"]
-            CRM["CRM Module (Clientes, Directorio)"]
-            LOY["Loyalty Module (Monedero RestCard, Puntos)"]
-        end
-
-        subgraph Cross_Package["Cross-Cutting & Integration"]
-            ANA["Analytics & Reporting Engine"]
-            INT["Integrations Hub (Connectors, Mappings, Webhooks)"]
-        end
-
-        subgraph Event_Infrastructure["Infraestructura de Eventos"]
-            InMemBus["In-Process Mediator (Efectos Inmediatos / Validaciones)"]
-            CloudOutbox[("Durable Cloud Integration Outbox (Supabase Postgres)")]
-        end
+graph TD
+    subgraph Client_Plane["Plano de Clientes"]
+        AdminWeb["Backoffice Web App (Next.js / Vercel)"]
+        POSApp["TRIDENTPOS GUI (Electron Renderer / POS Desktop)"]
+        KDSApp["KDS Display / Mobile Comandero (Browser / Tablet)"]
     end
 
-    PF <--> InMemBus
-    MC <--> InMemBus
-    TP_CLOUD <--> InMemBus
-    DEL <--> InMemBus
-    INV <--> InMemBus
-    PROC <--> InMemBus
-    FIN <--> InMemBus
-    BILL <--> InMemBus
-    CRM <--> InMemBus
-    LOY <--> InMemBus
-    ANA <--> InMemBus
-    INT <--> InMemBus
-
-    TP_CLOUD --> CloudOutbox
-    PROC --> CloudOutbox
-    CloudOutbox -. "Despacho Asíncrono Confiable" .-> INV
-    CloudOutbox -. "Despacho Asíncrono Confiable" .-> FIN
-    CloudOutbox -. "Despacho Asíncrono Confiable" .-> BILL
-```
-
-### 1.1 Justificación del Monolito Modular y Manejo de Eventos Durables
-1. **Aislamiento por Contratos Fuertes:** Cada módulo se encapsula en un paquete de código con su propia API pública (Comandos, Queries y Eventos). Queda **estrictamente prohibido el acceso a estructuras internas o almacenamiento privado de otro módulo sin pasar por su contrato público**.
-2. **Diferenciación de Eventos:**
-   - **In-Process Domain Events:** Eventos que se ejecutan dentro del mismo límite de transacción y ciclo de vida de la petición (ej. validación de reglas de negocio, sincronización en memoria).
-   - **Durable Integration Events:** Eventos de negocio que representan transacciones inter-módulo críticas (ej. `CorteZGenerado`, `RecepcionCompraRegistrada`, `OrdenProduccionConfirmadaEnKDS`). Estos eventos **se persisten de forma durable en la tabla `CloudIntegrationOutbox` dentro de la transacción principal** para garantizar que no se pierdan ante caídas de proceso antes de ser consumidos por los módulos de Inventory, Finance o Billing.
-3. **Sin Broker Externo Prematuro:** No se introduce Kafka ni RabbitMQ inicialmente; la tabla de Outbox en PostgreSQL gestionada por workers internos proporciona garantías transaccionales suficientes con menor costo y complejidad operativa.
-
----
-
-## 2. Diagrama de Contenedores del Sistema (C4 Container Level)
-
-```mermaid
-C4Container
-    title Diagrama de Contenedores — ERP RESTAURANTES
-
-    Person(user_admin, "Admin / Gerente", "Accede a administración y analítica")
-    Person(user_floor, "Personal de Piso / Caja / Cocina", "Opera salón, comandas, caja y KDS")
-
-    Container_Boundary(c_cloud, "Cloud Control Plane (Vercel + Render + Supabase)") {
-        Container(spa_admin, "Backoffice Web SPA", "Next.js / React (Vercel)", "Panel administrativo SaaS multi-tenant.")
-        Container(portal_cust, "Portal Autofacturación [PROPOSED]", "Next.js (Vercel)", "Portal web para comensales.")
-        Container(api_cloud, "Core API Modular Monolith", "Node.js / TypeScript (Render)", "Servicios de negocio, catálogos, finanzas, inventarios y contratos.")
-        Container(sync_cloud, "Cloud Sync Gateway", "Node.js / WebSockets (Render)", "Ingesta bidireccional asíncrona de eventos de sucursales.")
-        ContainerDb(db_cloud, "Cloud Database & Storage", "PostgreSQL (Supabase)", "Almacén central multi-tenant, auditoría y catálogos maestros.")
-    }
-
-    Container_Boundary(c_branch, "Branch Operational Plane (TRIDENTPOS Edge)") {
-        Container(pos_host, "TRIDENTPOS Local Host Node", "Node.js / Local Host Runtime", "Servidor local de sucursal: despacha API y WebSockets LAN.")
-        Container(ui_pos, "POS Floor & Cash UI", "Web / Desktop Client", "Interfaz táctil de toma de pedidos, comanda y caja.")
-        Container(ui_kds, "KDS Kitchen Screen UI", "Web / Touch Client", "Monitor táctil de cocina con cronómetro y confirmación de preparación.")
-        Container(ui_mobile, "Comandero Móvil UI", "PWA / Responsive Client", "Captura móvil para tablets de meseros.")
-        ContainerDb(db_local, "Local Embedded Database", "SQLite 3 (WAL Mode)", "Persistencia transaccional local y cola Outbox de eventos.")
-        Container(hw_bridge, "Hardware Gateway", "Local Service (Node/Native)", "Control de impresoras ESC/POS, cajón de dinero, báscula y PinPAD.")
-    }
-
-    Container_Boundary(c_int, "External Integration Plane") {
-        Container(int_engine, "Integration Adapters Hub", "Node.js Worker (Render)", "Conectores de PAC Fiscal, Delivery Hub, PMS y ERPs.")
-    }
-
-    Rel(user_admin, spa_admin, "Usa interfaz administrativa", "HTTPS")
-    Rel(spa_admin, api_cloud, "Consume API REST / GraphQL", "HTTPS / JSON")
-    Rel(api_cloud, db_cloud, "Lee y escribe datos centrales", "SQL / Pooler")
-
-    Rel(user_floor, ui_pos, "Opera caja y salón", "Táctil")
-    Rel(user_floor, ui_kds, "Confirma preparación", "Táctil")
-    Rel(user_floor, ui_mobile, "Comanda en mesa", "WiFi LAN")
-
-    Rel(ui_pos, pos_host, "Llama operaciones de piso", "HTTP / WebSocket (LAN)")
-    Rel(ui_kds, pos_host, "Recibe comandas y envía surtido", "WebSocket (LAN)")
-    Rel(ui_mobile, pos_host, "Envía comandas de mesa", "WebSocket (LAN)")
-
-    Rel(pos_host, db_local, "Persiste transacciones y eventos Outbox", "SQL Local")
-    Rel(pos_host, hw_bridge, "Envía tickets y corte de cajón", "Local IPC / TCP")
-
-    Rel(pos_host, sync_cloud, "Sincroniza eventos de venta y recibe catálogo", "WSS / HTTPS (Asíncrono)")
-    Rel(sync_cloud, api_cloud, "Despacha eventos de sucursal al outbox cloud", "In-Memory / Durable Outbox")
-
-    Rel(api_cloud, int_engine, "Despacha tareas de integración", "Internal RPC")
-    Rel(int_engine, db_cloud, "Registra bitácoras y mapeos", "SQL")
-```
-
----
-
-## 3. Descomposición Interna: Platform Foundation vs. Master Catalog
-
-Funcionalmente, ambos componentes pertenecen a `Platform Core` como Bounded Context unificado. Arquitectónicamente, se implementan en dos submódulos internos con interfaces desacopladas:
-
-```mermaid
-graph LR
-    subgraph Platform_Core_Package["Platform Core (Bounded Context)"]
-        subgraph Sub_Foundation["Submódulo A: Platform Foundation"]
-            A1["Tenant & Organization Manager"]
-            A2["Branch Registry"]
-            A3["Identity, RBAC & PIN Authenticator"]
-            A4["Station & Device Identity Manager"]
-            A5["Central Audit Trail Engine"]
+    subgraph Cloud_Control_Plane["Cloud Control Plane (Modular Monolith en Render)"]
+        CloudGateway["API Gateway & Auth Handler (Node.js / Express)"]
+        
+        subgraph Modular_Monolith_Modules["Bounded Context Modules (In-Process)"]
+            PlatCore["Platform Core Module (Kernel & Catálogos)"]
+            InvMod["Inventory Module (Recetas & Kárdex)"]
+            ProcMod["Procurement Module (Compras)"]
+            FinMod["Finance Module (Tesorería & CxP/CxC)"]
+            BillMod["Billing Module (Fiscal CFDI)"]
+            DelivMod["Delivery Module (Flota Propia)"]
+            IntegMod["Integrations Hub Module (Conectores)"]
+            OtherMods["CRM, Loyalty, Analytics Modules"]
         end
 
-        subgraph Sub_Catalog["Submódulo B: Master Catalog & Overrides"]
-            B1["Master Product & Category Registry"]
-            B2["Modifier & ModifierGroup Registry"]
-            B3["Base Price Engine"]
-            B4["Branch Overrides Engine (Price, Visibility, Tax)"]
-            B5["Menu & Schedule Resolver"]
-        end
-
-        Sub_Foundation -. "Valida Permiso y Sucursal" .-> Sub_Catalog
+        CloudOutboxWorker["Cloud Integration Outbox Worker"]
+        CloudDB[(PostgreSQL Central Database - Supabase)]
     end
 
-    Sub_Catalog ==> "Expone Catálogo Resuelto" ==> Other_Modules["TRIDENTPOS / Inventory / Billing"]
+    subgraph Branch_Operational_Plane["Branch Operational Plane (Edge Server en Sucursal)"]
+        LocalHost["TRIDENTPOS Edge Host Runtime (Node.js Background Process)"]
+        LocalWS["Local WebSocket Server (ws)"]
+        LocalHTTP["Local HTTP REST Command Handler"]
+        LocalEngine["Local POS / KDS / Cash Shift Engine"]
+        LocalOutboxWorker["Local Outbox Sync Worker"]
+        LocalDB[(SQLite 3 WAL Database)]
+        LocalPrinters["Thermal Printers / ESC-POS Drivers"]
+    end
+
+    AdminWeb -->|HTTPS REST / JWT| CloudGateway
+    CloudGateway --> Modular_Monolith_Modules
+    Modular_Monolith_Modules --> CloudDB
+    Modular_Monolith_Modules -->|Durable Events Insert| CloudDB
+    CloudOutboxWorker -->|Read & Dispatch Pending Events| CloudDB
+    CloudOutboxWorker -.->|Dispatch Inter-Module| Modular_Monolith_Modules
+
+    POSApp -->|In-Process IPC / Local HTTP| LocalHost
+    KDSApp -->|Local HTTP REST Commands| LocalHTTP
+    KDSApp <-->|Local WebSockets (Push Updates)| LocalWS
+    
+    LocalHTTP --> LocalEngine
+    LocalEngine --> LocalDB
+    LocalEngine --> LocalPrinters
+    LocalEngine -.->|Broadcast Event| LocalWS
+    LocalEngine -->|Atomic Local Outbox Insert| LocalDB
+    
+    LocalOutboxWorker -->|Read Pending Outbox| LocalDB
+    LocalOutboxWorker <-->|WSS / HTTPS Sync Tunnel| CloudGateway
 ```
 
 ---
 
-## 4. Control de Concurrencia en Red Local (Optimistic Concurrency Control)
+## 2. Modelo de Concurrencia Local: Control de Concurrencia Optimista (OCC) (REM-02)
 
-Para evitar la sobreescritura silenciosa de datos cuando múltiples operadores o comanderos interactúan sobre una misma mesa o cuenta, el sistema implementa **Control de Concurrencia Optimista (OCC)** basado en versionado de agregados:
+Para prevenir sobreescrituras silenciosas (*Lost Updates* o *First-Write-Wins* destructivo) en escenarios de múltiples meseros interactuando simultáneamente con una misma cuenta, se implementa **Control de Concurrencia Optimista (OCC)** con versionado explícito en los agregados de `Cuenta`, `Mesa` y `TurnoCaja`.
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant Waiter1 as Comandero Mesero A
-    participant Waiter2 as Comandero Mesero B
-    participant Edge as TRIDENTPOS Edge Server
-    participant DB as Local Database (SQLite)
+    actor MeseroA as Mesero A (Tablet 1)
+    actor MeseroB as Mesero B (Tablet 2)
+    participant Edge as TRIDENTPOS Edge Host
+    participant SQLite as SQLite 3 (WAL)
 
-    Note over Waiter1,Waiter2: Ambos meseros abren Mesa 5 al mismo tiempo
-    Waiter1->>Edge: GET /cuentas/mesa_5 -> Retorna Cuenta (version: 12, items: [...])
-    Waiter2->>Edge: GET /cuentas/mesa_5 -> Retorna Cuenta (version: 12, items: [...])
+    Note over MeseroA,MeseroB: Ambos consultan la Cuenta Mesa 4 (version = 5)
+    MeseroA->>Edge: POST /api/cuentas/mesa-4/comandar { expectedVersion: 5, items: [Pizza] }
+    MeseroB->>Edge: POST /api/cuentas/mesa-4/comandar { expectedVersion: 5, items: [Bebida] }
 
-    Waiter1->>Edge: Command: AgregarItems(cuentaId, newItems, expectedVersion: 12)
-    Edge->>DB: UPDATE Cuenta SET version = 13, items = [...] WHERE id = 'c_5' AND version = 12
-    DB-->>Edge: 1 fila actualizada (Éxito)
-    Edge-->>Waiter1: 200 OK (Comanda enviada, version: 13)
-    Edge-->>Waiter2: WebSocket Broadcast: CuentaActualizada(mesa_5, version: 13)
+    Edge->>SQLite: BEGIN TRANSACTION
+    Edge->>SQLite: UPDATE Cuentas SET items = items || Pizza, version = 6 WHERE id = 'mesa-4' AND version = 5
+    SQLite-->>Edge: 1 fila afectada (SUCCESS)
+    Edge->>SQLite: COMMIT TRANSACTION
+    Edge-->>MeseroA: 200 OK { version: 6, status: 'COMANDA_REGISTRADA' }
 
-    Note over Waiter2: Mesero B intenta agregar bebida usando la versión obsoleta 12
-    Waiter2->>Edge: Command: AgregarItems(cuentaId, drinkItems, expectedVersion: 12)
-    Edge->>DB: UPDATE Cuenta WHERE id = 'c_5' AND version = 12
-    DB-->>Edge: 0 filas actualizadas (Conflicto detectado)
-    Edge-->>Waiter2: 409 Conflict (ConcurrencyConflictError: Versión actual es 13)
-    Note over Waiter2: La interfaz refresca la cuenta y fusiona el intento de captura
+    Edge->>SQLite: BEGIN TRANSACTION
+    Edge->>SQLite: UPDATE Cuentas SET items = items || Bebida, version = 6 WHERE id = 'mesa-4' AND version = 5
+    SQLite-->>Edge: 0 filas afectadas (STALE VERSION DETECTED)
+    Edge->>SQLite: ROLLBACK TRANSACTION
+    Edge-->>MeseroB: 409 Conflict { errorCode: 'CONCURRENT_MUTATION_CONFLICT', currentVersion: 6 }
+    
+    Note over MeseroB: Tablet 2 recarga el estado actual (v6) y permite reintentar la acción
 ```
 
-- **Mecanismo:** Toda mutación sobre `Cuenta`, `Mesa` o `TurnoCaja` incluye el campo `expectedVersion`.
-- **Detección de Conflicto:** Si la versión en base de datos difiere de la esperada, la operación se rechaza atómicamente con error `409 Conflict`, obligando al cliente móvil a recargar el estado actual y reintentar de forma informada sin pérdida accidental de comandas.
+### Reglas de Ejecución OCC
+1. Toda mutación sobre `Cuenta`, `Mesa` o `TurnoCaja` debe enviar el campo `expectedVersion`.
+2. La sentencia SQL ejecuta la actualización condicionada: `UPDATE ... WHERE id = :id AND version = :expectedVersion`.
+3. Si el número de filas afectadas es `0`, el motor aborta la transacción y responde con `409 Conflict` conteniendo la versión actual del agregado para que el cliente realice una fusión informada.
 
 ---
 
-## 5. Ejecución en TRIDENTPOS (Branch Operational Plane)
+## 3. Manejo de Eventos en Cloud: In-Process vs. Durable Integration Outbox (REM-05)
 
-El nodo local de sucursal expone servicios de baja latencia para toda la red local:
+Dentro del Monolito Modular en Cloud se implementa una separación estricta:
 
-```mermaid
-graph TD
-    subgraph LAN_Network["Red Local de Sucursal (LAN / WiFi)"]
-        subgraph Edge_Server["TRIDENTPOS Edge Server (Host Local)"]
-            LOCAL_API["Local REST & WebSocket Gateway"]
-            LOCAL_CORE["TRIDENTPOS Core Engine (Mesas, Cuentas, KDS, Caja)"]
-            LOCAL_DB[("Local SQLite WAL Store")]
-            OUTBOX_Q[("Transactional Outbox Queue")]
-            LOCAL_SYNC["Local Sync Agent"]
-            LOCAL_HW["Hardware Service (ESC/POS Driver)"]
-        end
-
-        POS_TERM["Terminal Caja / Piso (Táctil)"]
-        KDS_TERM["Monitor Cocina KDS (Táctil)"]
-        MOB_TERM["Comandero Móvil (Tablet Mesero)"]
-        PRINTER_TICKETS["Impresora Tickets Caja (Ethernet/USB)"]
-        PRINTER_KITCHEN["Impresora Cocina (Ethernet)"]
-
-        POS_TERM <== "WebSocket / HTTP" ==> LOCAL_API
-        KDS_TERM <== "WebSocket" ==> LOCAL_API
-        MOB_TERM <== "WiFi / WebSocket" ==> LOCAL_API
-
-        LOCAL_API --> LOCAL_CORE
-        LOCAL_CORE --> LOCAL_DB
-        LOCAL_CORE --> OUTBOX_Q
-        LOCAL_CORE --> LOCAL_HW
-        LOCAL_HW --> PRINTER_TICKETS
-        LOCAL_HW --> PRINTER_KITCHEN
-    end
-
-    OUTBOX_Q --> LOCAL_SYNC
-    LOCAL_SYNC <== "HTTPS / WSS (Sincronización Asíncrona)" ==> CLOUD_SYNC["Cloud Sync Gateway"]
-```
+1. **In-Process Domain Events (Eventos de Dominio en Memoria):**
+   - Utilizados para orquestación interna dentro del mismo ciclo de vida de la petición HTTP (ej. cálculo de totales, validación de inventario en memoria, validación de reglas de negocio intra-módulo).
+2. **Durable Cloud Integration Events (Transactional Outbox en PostgreSQL):**
+   - Todo efecto colateral inter-módulo que **no puede perderse** ante reinicios o fallas del proceso backend se persiste atómicamente en la tabla `CloudIntegrationOutbox` dentro de la misma transacción ACID que la mutación principal.
+   - **Eventos Críticos Durables:**
+     - `TRIDENTPOS.CorteZGenerado` -> Consumido durablemente por `Finance` para contabilizar ingresos del día.
+     - `Procurement.RecepcionCompraRegistrada` -> Consumido durablemente por `Inventory` (incremento de kárdex) y `Finance` (generación de pasivo CxP).
+     - `TRIDENTPOS.OrdenProduccionConfirmadaEnKDS` -> Consumido durablemente por `Inventory` para el costeo y descuento de insumos/recetas.
+   - **Worker de Despacho:** Un worker asíncrono lee eventos pendientes en `CloudIntegrationOutbox` mediante `LISTEN / NOTIFY` y los despacha a los manejadores de los módulos suscriptores. En caso de fallas recurrentes tras 5 intentos, el evento se mueve a la tabla `CloudIntegrationDLQ` para auditoría y remediación manual.
 
 ---
 
-SOLUTION ARCHITECTURE V1.1: READY FOR FINAL APPROVAL
+## 4. Arquitectura de Seguridad e Identidad Offline (REM-09)
+
+1. **Local Cached Identity Store:** El Edge Host almacena en SQLite una tabla segura `CachedUsers` con los hashes salteados de PIN (Argon2id) de los empleados autorizados en la sucursal.
+2. **Control de Validez y Expiración:**
+   - Cada snapshot de credenciales posee `snapshotVersion`, `credentialVersion`, `issuedAt` y `expiresAt`.
+   - **Ventana Máxima Offline:** La política predeterminada restringe la validez del cache a **72 horas**. Si el nodo no se comunica con Cloud en este lapso, las operaciones administrativas privilegiadas (cancelaciones de cuenta, descuentos mayores al 10%) requieren autorización expresa de Gerente de Turno local.
+3. **Escenarios de Revocación Offline:**
+   - *Usuario revocado en Cloud mientras la sucursal está desconectada:* El usuario continuará operando hasta que el Edge reciba el delta de revocación o expire la ventana offline; toda operación sensible queda auditada con firma de terminal.
+   - *Dispositivo / Terminal revocada:* El Edge Server rechaza la conexión WebSocket de cualquier dispositivo no listado en la tabla `AuthorizedDevices`.
+
+---
+
+## 5. Metas y Calibración de Rendimiento (REM-06, REM-08)
+
+- **Tiempo de Respuesta en Comandas LAN:** `DESIGN OBJECTIVE: Latencia de distribución en tiempo real < 5 ms en red cableada o WiFi 5GHz — REQUIRES HARDWARE BENCHMARK.`
+- **Capacidad de Concurrencia Local:** `TARGET: Procesamiento de hasta 20 terminales concurrentes (KDS + comanderos) por Edge Host en hardware POS estándar.`
+- **Durabilidad Local:** `ESTIMATE: Cero corrupción de datos en SQLite WAL mediante protección por UPS y fsync en cierres de turno — REQUIRES POWER-LOSS TESTING.`
+
+---
+
+DOCUMENT STATUS: READY FOR INDEPENDENT REVIEW

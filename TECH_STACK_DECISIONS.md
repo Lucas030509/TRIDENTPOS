@@ -1,93 +1,55 @@
-# TECH STACK DECISIONS — ERP RESTAURANTES
+# TECH STACK DECISIONS & RUNTIME EVALUATION — ERP RESTAURANTES
 
-**Versión:** 1.1 (SOLUTION ARCHITECTURE NORMALIZED)  
-**Fecha:** 2026-08-31  
-**SSOT Baseline:** [`FUNCTIONAL_ARCHITECTURE.md`](file:///Volumes/SSD_ORICO/BRAIN/TRIDENTPOSREST/FUNCTIONAL_ARCHITECTURE.md) (v1.2 APPROVED).  
-**Rol:** `01_Solution Architect`
-
----
-
-## 1. Evaluación del Stack Tecnológico Objetivo
-
-Para `ERP RESTAURANTES`, se ha evaluado la combinación del Cloud Plane (**`Vercel + Render + Supabase + Sentry`**) y las alternativas del Edge Host Runtime en sucursal (**`Electron/Node` vs. `Tauri/Rust`**).
-
-```mermaid
-graph TB
-    subgraph Target_Stack["Evaluación del Stack Tecnológico"]
-        subgraph Cloud_Stack["Cloud Control Plane"]
-            VERCEL["Vercel: Frontend SaaS Hosting, CDN Global, Next.js SPA & Portal Autofacturación [PROPOSED]"]
-            RENDER["Render: Core API Monolith (Node.js/TS), Sync WebSocket Gateway & Background Workers"]
-            SUPABASE["Supabase: PostgreSQL Multi-Tenant, Pooler PgBouncer, Auth Broker & S3 Storage"]
-            SENTRY_CLOUD["Sentry Cloud: Telemetría, Monitoreo de Errores y Trazabilidad"]
-        end
-
-        subgraph Edge_Stack["Branch Operational Plane (Sucursal)"]
-            EDGE_RUNTIME["Edge Host Runtime (Evaluación: Electron/Node vs. Tauri/Rust)"]
-            SQLITE_LOCAL["SQLite 3 (WAL Mode): Base de Datos Embebida Transaccional Local"]
-            WS_LOCAL["Local WebSocket Server (ws): Comunicación Bidireccional LAN"]
-            HW_BRIDGE["Hardware Driver Bridge: Protocolos ESC/POS, RS232 Serial y TCP Raw"]
-            SENTRY_EDGE["Sentry SDK Local: Registro de Fallos en Borde con Buffer Offline"]
-        end
-
-        VERCEL --> RENDER
-        RENDER --> SUPABASE
-        RENDER --> SENTRY_CLOUD
-        EDGE_RUNTIME --> SQLITE_LOCAL
-        EDGE_RUNTIME --> WS_LOCAL
-        EDGE_RUNTIME --> HW_BRIDGE
-        EDGE_RUNTIME --> SENTRY_EDGE
-        EDGE_RUNTIME <== "WSS Sync" ==> RENDER
-    end
-```
+**Document ID:** `ARCH-STK-001`  
+**Version:** `1.3 NORMALIZED / REMEDIATED`  
+**Status:** `READY FOR INDEPENDENT REVIEW`  
+**Date:** 2026-09-01  
+**Baseline:** `EAAF v1.2.0 @ 7e036f43240b3dc28ccb996e350263598275b2cd`  
+**Supersedes:** `TECH_STACK_DECISIONS.md v1.1`  
 
 ---
 
-## 2. Componentes Cloud: Justificación y Responsabilidades
+## 1. Stack Tecnológico de Referencia
 
-### 2.1 Vercel (Capa de Presentación y Distribución Global)
-- **Rol:** Hospeda la aplicación web administrativa (Backoffice SPA) y el portal público de autofacturación `[PROPOSED / FUTURE]`.
-- **Justificación:** Distribución en CDN global, renderizado híbrido con Next.js y aislamiento del frontend respecto a la carga transaccional del backend.
-
-### 2.2 Render (Capa de Cómputo Backend y Workers)
-- **Rol:** Ejecuta el contenedor del Monolito Modular (Node.js/TypeScript), el Gateway de Sincronización WebSocket (`WSS`) y Workers de integración en segundo plano.
-- **Justificación:** Soporte de conexiones WebSocket persistentes para sincronización con sucursales, procesos en segundo plano para tareas asíncronas y despliegues reproducibles.
-
-### 2.3 Supabase (Capa de Datos, Almacenamiento y Seguridad)
-- **Rol:** Base de datos principal relacional (PostgreSQL), gestión de archivos y autenticación.
-- **Justificación:**
-  - **PostgreSQL Relacional:** Motor ACID con soporte de transacciones complejas, JSONB indexado para catálogos y esquemas fiscales.
-  - **PgBouncer / Pooler:** Manejo eficiente de conexiones concurrentes provenientes de los servicios backend.
-  - **Supabase Storage:** Almacenamiento de XMLs de facturas fiscales, PDFs y recursos multimedia.
-  - **Row Level Security (RLS):** Garantía a nivel de motor de aislamiento de datos entre Tenants (`OrganizationId`).
-
-### 2.4 Sentry (Observabilidad, Telemetría y Monitoreo de Errores)
-- **Rol:** Monitoreo transversal de excepciones, salud de sincronización, cuellos de botella de rendimiento y caídas en cloud y sucursales.
-- **Justificación:** Trazabilidad distribuida para rastrear eventos desde el comandero móvil en sucursal hasta el procesamiento en la nube, con alertas automáticas.
-
----
-
-## 3. Comparativa del Runtime del Edge Host en Sucursal: Electron/Node vs. Tauri/Rust
-
-| Criterio de Evaluación | Alternativa A: Electron / Node.js (Baseline Actual) | Alternativa B: Tauri / Rust (Alternativa de Alto Rendimiento) |
+| Capa / Componente | Tecnología Seleccionada | Justificación Arquitectónica |
 |---|---|---|
-| **Consumo de Memoria RAM** | ~150 MB - 300 MB por proceso (V8 + Chromium embebido). | ~30 MB - 60 MB (Utiliza webview nativo del SO + binario Rust). |
-| **Velocidad y Latencia de Ejecución** | Alta (Node.js I/O no bloqueante con V8 JIT). | Ultra-alta (Código máquina nativo compilado en Rust). |
-| **Integración con Periféricos Locales** | Excelente: Ecosistema maduro de paquetes npm para ESC/POS, RS232 serial y raw TCP. | Excelente pero requiere desarrollo nativo en Rust para librerías de hardware específicas. |
-| **Velocidad de Desarrollo y Ecosistema** | **Muy Alta:** Mismo lenguaje (TypeScript) y librerías compartidas entre Cloud y Edge. | **Media:** Requiere dominio avanzado de Rust y gestión de bindings FFI. |
-| **Despliegue e Instalador** | Paquetes instalables (~80-120 MB) para Windows / Linux / macOS. | Binarios extremadamente ligeros (~10-20 MB). |
-| **Veredicto Arquitectónico** | **ADOPTADA COMO BASELINE:** Permite reutilizar modelos y contratos TypeScript entre Cloud y Edge con máxima velocidad de entrega. | **EVALUADA PARA FASE AVANZADA:** Si el benchmark en terminales POS de gama muy baja (<= 2GB RAM) muestra saturación de memoria, se migrará el host a Tauri. |
+| **Cloud Web Presentation** | Next.js / React (TypeScript) en Vercel | Renderizado híbrido SSR/SSG para portal administrativo y optimización global de assets estáticos. |
+| **Cloud Backend & Sync** | Node.js / TypeScript (Express / Fastify) en Render | Ejecución del Monolito Modular con tipado estricto compartido y soporte para workers en segundo plano. |
+| **Base de Datos Central** | PostgreSQL multi-tenant en Supabase | Integridad transaccional ACID, soporte de Row-Level Security (RLS) y notificaciones `LISTEN / NOTIFY` para el outbox. |
+| **Edge Host Runtime** | Electron / Node.js (TypeScript) — *Baseline Actual* | Ecosistema probado para drivers de periféricos (ESC/POS, serial, básculas), reutilización 100% de tipos TypeScript con Cloud. |
+| **Base de Datos en Borde** | SQLite 3 (Modo WAL) | Motor embebido de cero administración con transacciones ACID y lecturas concurrentes sin bloqueo. |
+| **Comunicaciones LAN** | HTTP REST (Comandos) + WebSockets `ws` (Push) | Mínima sobrecarga de red y actualización en tiempo real de pantallas KDS y comanderos. |
+| **Monitoreo & Telemetría** | Sentry Cloud + Buffer Local Offline | Trazabilidad de excepciones, detección de degradación en sincronización y monitoreo de periféricos. |
 
 ---
 
-## 4. Almacenamiento Local en Sucursal: SQLite 3 y Durabilidad
+## 2. Comparativa Cualitativa y Técnica de Runtimes en Borde (REM-08)
 
-- **Motor Seleccionado:** **SQLite 3 con WAL (Write-Ahead Logging)**.
-- **Justificación:** Cero configuración de administración, embebido en proceso, transaccional ACID y resistente a fallos de software.
-- **Estrategia de Durabilidad:**
-  - `synchronous = NORMAL` para operaciones continuas de comandas y mesas.
-  - `synchronous = FULL` para operaciones financieras críticas (Cierre de Turno y emisión de Corte Z).
-  - **Validación Requerida:** Ejecución de pruebas de corte de energía (power-loss testing) en hardware objetivo antes del despliegue en producción.
+Se evaluó la selección del runtime para el Edge Server en sucursal entre **Electron / Node.js** (Baseline Seleccionado) y **Tauri / Rust** (Alternativa de Optimización):
+
+| Dimensión de Evaluación | Electron / Node.js (Baseline Actual) | Tauri / Rust (Alternativa de Optimización) |
+|---|---|---|
+| **Consumo de Memoria RAM** | *Estimación de industria:* ~150–300 MB (*INDUSTRY ESTIMATE — NOT PROJECT BENCHMARKED*). | *Estimación de industria:* ~30–60 MB (*INDUSTRY ESTIMATE — NOT PROJECT BENCHMARKED*). |
+| **Tamaño de Instalador** | *Estimación de industria:* ~80–120 MB (*INDUSTRY ESTIMATE — NOT PROJECT BENCHMARKED*). | *Estimación de industria:* ~10–20 MB (*INDUSTRY ESTIMATE — NOT PROJECT BENCHMARKED*). |
+| **Acceso a Periféricos POS** | Librerías npm maduras y probadas para ESC/POS (`node-escpos`, `serialport`, `raw-socket`), básculas y cajones RJ11. | Requiere bindings FFI en Rust o reimplementación de protocolos de comunicación serial para modelos de hardware específicos. |
+| **Reutilización de Código** | Reutilización directa del 100% de esquemas Zod, tipos de dominio TypeScript y validadores entre Cloud y Edge. | Requiere mantener modelos de datos duales en Rust (Edge) y TypeScript (Cloud/Frontend). |
+| **Velocidad de Iteración** | Muy alta. El equipo unifica el stack completo en TypeScript. | Moderada / Baja. Curva de aprendizaje y gestión de memoria estricta en Rust. |
+| **Mantenibilidad & Upgrades** | Actualizaciones automáticas con `electron-updater` estándar. | Actualizaciones ligeras mediante Tauri updater nativo. |
+| **Soporte Multiplataforma** | Soporte robusto en Windows 10/11, Ubuntu/Debian Linux y macOS. | Soporte multiplataforma dependiente del WebView del sistema operativo (WebView2 en Windows, WebKitGTK en Linux). |
+
+### Decisión y Directiva de Certificación (REM-08)
+1. Se ratifica **Electron / Node.js como Baseline de Arquitectura** para maximizar la velocidad de entrega y garantizar compatibilidad inmediata con el ecosistema de hardware POS de Latinoamérica.
+2. **Clasificación de Métricas:** Las cifras de consumo de memoria y tamaño de binario corresponden a estimaciones estándar de la industria y no a mediciones empíricas del proyecto.
+3. **Directiva Obligatoria:** `FINAL EDGE RUNTIME CERTIFICATION REQUIRES BENCHMARK ON TARGET POS HARDWARE.` En caso de que pruebas de carga en terminales de muy bajos recursos (<= 2 GB RAM) evidencien saturación, se activará la migración del módulo Edge Host a Tauri/Rust.
 
 ---
 
-TECH STACK DECISIONS V1.1: READY FOR FINAL APPROVAL
+## 3. Durabilidad del Almacenamiento Local (SQLite 3 WAL) (REM-07)
+
+- **Configuración:** `PRAGMA journal_mode = WAL;` con `PRAGMA synchronous = NORMAL;` para operaciones operativas y `PRAGMA synchronous = FULL;` para cierres de turno y Cortes Z.
+- **Dependencia de Hardware:** Requiere almacenamiento de estado sólido (SSD/eMMC) y respaldo eléctrico (UPS) en la sucursal para evitar pérdida de escrituras en caché volátil ante cortes de energía.
+- **Certificación Requerida:** `REQUIRES HARDWARE POWER-LOSS VALIDATION.`
+
+---
+
+DOCUMENT STATUS: READY FOR INDEPENDENT REVIEW
