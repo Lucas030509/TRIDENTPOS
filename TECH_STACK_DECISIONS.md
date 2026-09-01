@@ -2,7 +2,7 @@
 
 **Document ID:** `ARCH-STK-001`  
 **Version:** `1.3 NORMALIZED / REMEDIATED`  
-**Status:** `READY FOR INDEPENDENT REVIEW`  
+**Status:** `APPROVED / FROZEN`  
 **Date:** 2026-09-01  
 **Baseline:** `EAAF v1.2.0 @ 7e036f43240b3dc28ccb996e350263598275b2cd`  
 **Supersedes:** `TECH_STACK_DECISIONS.md v1.1`  
@@ -52,4 +52,4 @@ Se evaluó la selección del runtime para el Edge Server en sucursal entre **Ele
 
 ---
 
-DOCUMENT STATUS: READY FOR INDEPENDENT REVIEW
+DOCUMENT STATUS: APPROVED / FROZEN — 2026-09-01

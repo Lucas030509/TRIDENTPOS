@@ -2,7 +2,7 @@
 
 **Document ID:** `ARCH-FUNC-001`  
 **Version:** `1.3 NORMALIZED / REMEDIATED`  
-**Status:** `READY FOR INDEPENDENT REVIEW`  
+**Status:** `APPROVED / FROZEN`  
 **Date:** 2026-09-01  
 **Baseline:** `EAAF v1.2.0 @ 7e036f43240b3dc28ccb996e350263598275b2cd`  
 **Supersedes:** `FUNCTIONAL_ARCHITECTURE.md v1.2`  
@@ -385,4 +385,4 @@ Para garantizar que un restaurante de alto volumen mantenga su ritmo de servicio
 
 ---
 
-DOCUMENT STATUS: READY FOR INDEPENDENT REVIEW
+DOCUMENT STATUS: APPROVED / FROZEN — 2026-09-01

@@ -2,7 +2,7 @@
 
 **Document ID:** `ARCH-SCP-001`  
 **Version:** `1.3 NORMALIZED / REMEDIATED`  
-**Status:** `READY FOR INDEPENDENT REVIEW`  
+**Status:** `APPROVED / FROZEN`  
 **Date:** 2026-09-01  
 **Baseline:** `EAAF v1.2.0 @ 7e036f43240b3dc28ccb996e350263598275b2cd`  
 **Supersedes:** `PRODUCT_SCOPE.md v1.2`  
@@ -183,4 +183,4 @@ Alcance mínimo indispensable para operar un restaurante en piso, cocina y caja:
 
 ---
 
-DOCUMENT STATUS: READY FOR INDEPENDENT REVIEW
+DOCUMENT STATUS: APPROVED / FROZEN — 2026-09-01
