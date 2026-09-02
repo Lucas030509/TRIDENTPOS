@@ -1,7 +1,7 @@
 # SECURITY ARCHITECTURE — ERP RESTAURANTES / TRIDENTPOS
 
 **Document ID:** `ARCH-SEC-001`  
-**Version:** `1.0 DRAFT`  
+**Version:** `1.1 REMEDIATED DRAFT`  
 **Status:** `READY FOR INDEPENDENT REVIEW`  
 **Date:** 2026-09-01  
 **Framework:** `EAAF v1.2.0 @ 7e036f43240b3dc28ccb996e350263598275b2cd`  
@@ -13,14 +13,14 @@
 
 ## 1. Security Philosophy and Core Principles
 
-La arquitectura de seguridad de **ERP RESTAURANTES / TRIDENTPOS** está diseñada bajo el principio de **Zero Trust Híbrido** y **Defensa en Profundidad**, considerando que el entorno físico de operación (restaurantes, cocinas y terminales de cobro) es intrínsecamente hostil y expuesto.
+La arquitectura de seguridad de **ERP RESTAURANTES / TRIDENTPOS** está diseñada bajo el principio de **Zero Trust Híbrido** y **Defensa en Profundidad**:
 
 ### Principios Fundamentales:
-1. **DISCOVERY IS NOT TRUST:** La visibilidad o anuncio por mDNS en red local no confiere autorización ni autenticidad.
-2. **AUTHENTICATION $\neq$ AUTHORIZATION:** La verificación de identidad es un paso previo; la autorización se ejecuta forzosamente en el boundary de confianza (`Trusted Boundary`) sobre el modelo de datos y capacidades.
+1. **DISCOVERY IS NOT TRUST:** La visibilidad o anuncio por mDNS en red local no confiere autorización ni autenticidad. El emparejamiento y la confianza inicial requieren un protocolo de enrolamiento criptográfico autenticado.
+2. **AUTHENTICATION $\neq$ AUTHORIZATION:** La verificación de identidad es un paso previo; la autorización se ejecuta forzosamente en el boundary de confianza (`Trusted Boundary`) sobre el modelo de datos y capacidades en el backend.
 3. **DEFAULT DENY MULTI-TENANCY:** Ninguna solicitud o consulta a base de datos se ejecuta sin un contexto explícito y validado de `organization_id`.
-4. **TAMPER-EVIDENT AUDIT:** Los eventos críticos (cancelaciones, descuentos, aperturas de cajón, reconciliaciones y contingencias de folios) se registran de forma encadenada e inmutable.
-5. **MINIMAL PCI SCOPE:** Prohibición estricta de almacenamiento de datos sensibles de tarjetas (PAN completo, CVV o tracks magnéticos); delegación a terminales dedicadas y tokens bancarios.
+4. **TAMPER-EVIDENT DESIGN:** Los eventos críticos (cancelaciones, descuentos, aperturas de cajón, reconciliaciones y contingencias de folios) se registran de forma encadenada e inmutable, complementados con puntos de anclaje remoto en Cloud. *Nota de diseño: El sistema es Tamper-Evident, no 'Tamper-Proof'. Un compromiso total del Edge Host antes de un anclaje externo representa un riesgo residual documentado.*
+5. **MINIMAL PCI SCOPE:** Objetivo de mantener los procesos de la aplicación fuera del flujo de datos de tarjetas (PAN completo, CVV o tracks magnéticos); delegación a terminales bancarias dedicadas y tokens de autorización.
 
 ```mermaid
 graph TD
@@ -49,7 +49,7 @@ graph TD
         Printer["Impresora ESC/POS (Raw 9100)"]
     end
 
-    Agregadores -->|Webhooks Firmados HMAC-SHA256| WAF
+    Agregadores -->|Webhooks Firmados (Provider Contract)| WAF
     BrowserAdmin -->|HTTPS TLS 1.3 + MFA| WAF
     WAF --> API_GW
     API_GW --> PG_DB
@@ -72,120 +72,131 @@ graph TD
 ### 2.1 Clasificación de Activos de Seguridad
 - **Críticos de Negocio / Financieros:** Cuentas, Pagos, Turnos de Caja, Cortes X/Z, Pólizas de Interfaz Contable, Facturación Fiscal.
 - **Identidad y Acceso:** Credenciales de usuario, Hashes de PIN (Argon2id), Roles RBAC, Tokens de sesión JWT, Claves de enrolamiento de terminales.
-- **Secretos del Sistema:** Credenciales OAuth de agregadores (Uber/Rappi/Didi), Llaves privadas CSD/PAC para CFDI, Tokens de Fencing, Llaves simétricas de cifrado local.
+- **Secretos del Sistema:** Credenciales OAuth de agregadores, Llaves privadas CSD/PAC para CFDI, Tokens de Fencing, Llaves simétricas de cifrado local.
 - **Integridad Operativa:** Leases de folios, `epochId`, `fencingToken`, Outbox transaccional, logs de idempotencia, bitácora de auditoría.
 - **Privacidad (PII):** Datos de clientes (nombre, teléfono, email, RFC), saldos de monedero RestCard.
 
 ### 2.2 Catálogo de 14 Trust Boundaries
-1. **Internet ↔ Cloud Control Plane:** Filtrado WAF, terminación TLS 1.3, rate limiting por IP/Tenant.
+1. **Internet ↔ Cloud Control Plane:** Filtrado WAF, terminación TLS 1.3, rate limiting por IP/Tenant (`SECURITY POLICY DEFAULT`).
 2. **Browser Admin ↔ Cloud API:** Autenticación Supabase Auth JWT, cookies seguras `SameSite=Strict`, `HttpOnly`, MFA obligatorio para roles ejecutivos.
-3. **Cloud API ↔ PostgreSQL:** Conexión pooling con `SET LOCAL app.current_organization_id`, políticas RLS estrictas.
+3. **Cloud API ↔ PostgreSQL:** Conexión pooling con `SET LOCAL app.current_organization_id`, políticas RLS estrictas (Default Deny).
 4. **Cloud ↔ Edge Host (WAN):** WebSocket seguro bidireccional (`WSS`) con TLS 1.3, autenticación de estación Edge mediante token firmado y `branch_id` criptográfico.
-5. **Edge Host ↔ POS Terminal (LAN):** TLS local con certificado autofirmado/CA local de sucursal y validación de `station_id` enrolado.
+5. **Edge Host ↔ POS Terminal (LAN):** TLS local con certificado verificado mediante protocolo de enrolamiento seguro y validación de `station_id` enrolado.
 6. **Edge Host ↔ KDS Display (LAN):** Subscripción WSS restringida a lectura/mutación exclusiva de estados de cocina.
 7. **Edge Host ↔ Comandero Móvil (WiFi):** Sesión efímera de mesero vinculada a dispositivo físico autorizado, rechazo por inactividad.
 8. **Edge Host ↔ Periféricos ESC/POS:** Comunicación directa TCP 9100 o USB; puerto restringido a la IP del Edge, sin exposición web ni cross-LAN.
-9. **Edge Process ↔ Archivo SQLite:** Permisos de sistema operativo restrictivos (`chmod 600` / Windows ACLs), cifrado en reposo con llave derivada en TPM/OS Keyring (`SECURITY BASELINE`).
-10. **Integrations Hub ↔ Agregadores Externos:** Validación de firma HMAC-SHA256 en webhooks entrantes, secretos aislados por Tenant en Vault.
+9. **Edge Process ↔ Archivo SQLite:** Permisos de sistema operativo restrictivos (`chmod 600` / Windows ACLs), cifrado en reposo con SQLCipher y llave en OS Keyring.
+10. **Integrations Hub ↔ Agregadores Externos:** Validación de firma criptográfica según contrato del proveedor (`PROVIDER CONTRACT — REQUIRES INTEGRATION VALIDATION`), secretos aislados en Vault.
 11. **Cloud ↔ Almacenamiento de Respaldos (S3):** Cifrado SSE-KMS, políticas de inmutabilidad (Object Lock / WORM) y retención gobernada.
-12. **Pipeline CI/CD ↔ Artefactos de Release:** Firma digital de instaladores Electron y metadatos de actualización (Ed25519).
-13. **Operador de Soporte / Superadmin ↔ Recursos Tenant:** Acceso Just-In-Time (JIT) con elevación temporal aprobada y bitácora de auditoría inviolable.
+12. **Pipeline CI/CD ↔ Artefactos de Release:** Firma digital de instaladores Electron y metadatos de actualización (Code Signing Ed25519/RSA).
+13. **Operador de Soporte / Superadmin ↔ Recursos Tenant:** Acceso Just-In-Time (JIT) con elevación temporal aprobada y bitácora de auditoría.
 14. **LAN Operativa Restaurante ↔ Wi-Fi Comensales / Huéspedes:** Separación física o VLAN aislada (VLAN Operativa POS vs. VLAN Invitados).
 
 ---
 
-## 3. Threat Modeling (STRIDE Methodology)
+## 3. Protocolo de Confianza Inicial y Enrolamiento de Terminales (SR-03)
 
-El análisis formal de amenazas abarca las 6 categorías STRIDE en [`THREAT_MODEL.md`](file:///Volumes/SSD_ORICO/BRAIN/TRIDENTPOSREST/eeaaf/TRIDENTPOS/THREAT_MODEL.md):
-- **Spoofing:** Falsificación de PIN, terminales no autorizadas intentando unirse a la LAN, Edge falso suplantando mDNS, webhooks falsos de delivery.
-- **Tampering:** Modificación no autorizada de SQLite, alteración de precios en tránsito local, manipulación de la cola Outbox o folios locales.
-- **Repudiation:** Negación de cancelaciones post-cocina, descuentos o faltantes en arqueos de caja.
-- **Information Disclosure:** Fuga cross-tenant en consultas analíticas, extracción de base de datos SQLite en terminal robada, exposición de secretos en logs.
-- **Denial of Service:** Inundación de mensajes WSS en LAN, saturación de KDS con comandas falsas, agotamiento de conexiones en Cloud.
-- **Elevation of Privilege:** Mesero ejecutando funciones de corte de caja, bypass de RLS mediante roles de servicio mal configurados, compromiso de Electron via IPC.
+El principio **Discovery is not Trust** establece que mDNS es únicamente un protocolo de localización de red. El establecimiento de confianza inicial entre una nueva terminal y el Edge Server sigue el siguiente protocolo:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Station as Nueva Terminal / Comandero
+    participant Admin as Gerente de Sucursal (Físico)
+    participant Edge as Edge Server Host (Local)
+    participant Cloud as Cloud Control Plane
+
+    Admin->>Edge: Solicitar Generación de Token de Enrolamiento (One-Time Pairing)
+    Edge->>Edge: Genera Pairing Secret (OTP 8 dígitos / QR) con expiración de 10 min
+    Edge-->>Admin: Muestra QR / Código en pantalla física del Edge Host
+    
+    Station->>Station: Descubre candidatos Edge vía mDNS en LAN
+    Station->>Admin: Solicita ingreso de Pairing Code / Escaneo de QR
+    Admin->>Station: Ingresa código OTP / Escanea QR
+    
+    Station->>Edge: Handshake de Enrolamiento (Pairing Code + Station Identity Request)
+    Edge->>Edge: Valida OTP no expirado y emite Certificado/Fingerprint local + Station Token
+    Edge-->>Station: Retorna Certificado Local + Station Token firmado
+    Station->>Station: Almacena Fingerprint en almacenamiento seguro local (Pinning)
+    Edge->>Edge: Registra evento de auditoría `TerminalEnrolada`
+    Edge-->>Cloud: Sincroniza nuevo `station_id` autorizado en próximo Outbox sync
+```
+
+### Invariantes del Enrolamiento:
+1. **Unicidad y Expiración:** El secreto de emparejamiento es de un solo uso con vigencia máxima de 10 minutos (`SECURITY POLICY DEFAULT`).
+2. **Re-enrolamiento y Des-enrolamiento:** Una estación revocada o robada se inhabilita en Cloud (`is_authorized = false`), provocando su rechazo local inmediato tras la siguiente sincronización.
+3. **Resistencia a Rogue Edge:** Un Edge no autorizado en la LAN no puede emparejarse sin la confirmación física del código OTP en la consola del Edge legítimo.
 
 ---
 
-## 4. Identity, Authentication and Session Security
+## 4. Threat Modeling (STRIDE Methodology)
 
-### 4.1 Identidad Administrativa en Cloud
-- Proveedor de identidad federada con emisión de tokens JWT de corta duración (15 minutos) y Refresh Tokens rotativos con detección de reuso.
-- Re-autenticación obligatoria con MFA para operaciones financieras críticas (cambios de precios de catálogo, exportaciones masivas, asignación de roles).
+Formalizado en [`THREAT_MODEL.md`](file:///Volumes/SSD_ORICO/BRAIN/TRIDENTPOSREST/eeaaf/TRIDENTPOS/THREAT_MODEL.md):
+- **Spoofing:** Falsificación de PIN, terminales no autorizadas en LAN, Edge falso en mDNS, webhooks falsos de delivery.
+- **Tampering:** Modificación no autorizada de SQLite, alteración de precios, manipulación de Outbox o folios, manipulación del reloj del sistema operativo.
+- **Repudiation:** Negación de cancelaciones post-cocina, descuentos o faltantes de caja.
+- **Information Disclosure:** Fuga cross-tenant, extracción de base de datos SQLite en hardware robado, exposición de secretos en logs.
+- **Denial of Service:** Inundación de mensajes WSS en LAN, saturación de KDS con comandas falsas, bloqueo malicioso por fuerza bruta intencional.
+- **Elevation of Privilege:** Bypass de RBAC, bypass de RLS, compromiso de Electron vía IPC.
 
-### 4.2 Offline IAM en Edge (Piso de Venta)
+---
+
+## 5. Identity, Authentication and Session Security
+
+### 5.1 Identidad Administrativa en Cloud
+- Proveedor de identidad federada con emisión de tokens JWT de corta duración (15 minutos — `SECURITY POLICY DEFAULT`) y Refresh Tokens rotativos con detección de reuso (7 días — `SECURITY POLICY DEFAULT`).
+- MFA obligatorio para roles administrativos en operaciones de configuración global.
+
+### 5.2 Offline IAM en Edge (Piso de Venta)
 - **Almacenamiento de PIN:** Hashes salteados con **Argon2id** (Baseline: $m=64\text{ MB}, t=3, p=4$ — `SECURITY BASELINE — REQUIRES TARGET HARDWARE BENCHMARK`).
-- **Protección contra Fuerza Bruta:** Bloqueo progresivo exponencial tras 3 intentos fallidos (demoras de 2s, 5s, 30s) y bloqueo temporal de estación tras 5 fallos consecutivos con alerta auditada al gerente.
-- **Ventana de Validez Offline:** Máximo de 72 horas para credenciales cacheadas (`expiresAt`). Tras 72 horas sin conexión a Cloud, se bloquea la apertura de nuevos turnos administrativos requiriendo validación en línea.
+- **Protección contra Fuerza Bruta:** Demoras progresivas exponenciales (demoras de 2s en intento 3, 5s en intento 4) y bloqueo temporal de estación de 5 minutos tras 5 fallos consecutivos (`SECURITY POLICY DEFAULT`) con alerta auditada.
+- **Ventana de Validez Offline:** Máximo de 72 horas para credenciales cacheadas (`SECURITY POLICY DEFAULT`). Tras 72 horas sin conexión a Cloud, se bloquea la apertura de nuevos turnos administrativos requiriendo validación en línea.
 
 ---
 
-## 5. Authorization and Multi-Tenant Isolation
+## 6. Authorization, Policy Points and Multi-Tenant Isolation
 
-### 5.1 Matriz de Enforcement en Trusted Boundary
-Todas las capacidades operativas (`CAP-OPS`, `CAP-SCM`, `CAP-FIN`) validan permisos en el servidor (Edge Host o Cloud API), nunca exclusivamente en el cliente frontend:
-- **Cancelaciones Post-Cocina:** Requieren rol `SUPERVISOR` / `GERENTE` y token de autorización firmado (manteniendo neutralidad sobre `OQ-SSOT-01`).
-- **Transferencia de Cuentas:** Registro obligatorio de `actor_id` y `station_id` emisor.
-- **Corte Z:** Exclusivo de rol `CAJERO_PRINCIPAL` o `GERENTE` con sesión activa.
+### 6.1 Policy Invariant para Operaciones Protegidas (SR-01)
+> **POLÍTICA DE AUTORIZACIÓN NEUTRAL:** Para operaciones sensibles sujetas a decisiones pendientes del Product Owner (como la cancelación post-cocina `OQ-SSOT-01`), la arquitectura de seguridad establece el invariante:
+> *Toda cancelación post-cocina DEBE ser autenticada, autorizada bajo la política configurada aprobada por el Product Owner (`POST_KITCHEN_CANCELLATION_POLICY`), justificada con código de motivo y auditada de forma inmutable.*
+> La arquitectura de seguridad no selecciona roles específicos (Gerente, Supervisor, etc.) mientras la decisión de negocio permanezca como `PENDING PO DECISION`.
 
-### 5.2 Aislamiento Multi-Tenant (Default Deny)
+### 6.2 Aislamiento Multi-Tenant (Default Deny)
 - **PostgreSQL RLS:** Políticas en todas las tablas que aplican `WHERE organization_id = current_setting('app.current_organization_id')::uuid`.
 - **Connection Pooling:** Inyección obligatoria de variable de sesión en el middleware antes de cualquier consulta: `SET LOCAL app.current_organization_id = :orgId;`.
 
 ---
 
-## 6. Secrets, Cryptography and Key Management
+## 7. Secrets, Cryptography and Key Management
 
-Detallado en [`SECRETS_AND_KEY_MANAGEMENT.md`](file:///Volumes/SSD_ORICO/BRAIN/TRIDENTPOSREST/eeaaf/TRIDENTPOS/SECRETS_AND_KEY_MANAGEMENT.md):
-- **Cifrado Local Edge:** Base de datos SQLite protegida mediante SQLCipher con llave de 256 bits derivada localmente mediante OS Keyring (Windows DPAPI / Linux Keyring) ligada al hardware del dispositivo.
-- **Secretos de Agregadores y PACs:** Cifrado en reposo con Envelope Encryption (llaves AES-256-GCM gestionadas en Cloud Vault). Prohibido almacenamiento en archivos de configuración o repositorios Git.
-- **Fencing Tokens:** Tokens criptográficos de 256 bits generados en Cloud al asignar leases de folios; validados en cada sincronización para cerco inmediato de terminales zombie.
-
----
-
-## 7. Transport, LAN and Peripheral Security
-
-- **mDNS y Descubrimiento:** El anuncio mDNS es únicamente para resolución de IP local. El cliente solicita autenticación al Edge Host mediante certificado TLS local con Fingerprint verificado durante el enrolamiento de la estación (`Device Enrollment`).
-- **Impresoras y Periféricos ESC/POS:** Acceso exclusivo desde el proceso del Edge Host. Reglas de firewall local bloquean el tráfico directo desde terminales móviles o comensales hacia los puertos de impresión (Raw TCP 9100).
+- **Envelope Encryption:** Llaves DEK (AES-256-GCM) cifradas por Root KEK en Secret Vault / KMS corporativo. Cero secretos en repositorios Git (`SECURITY REQUIREMENT`).
+- **Fencing Tokens:** Tokens criptográficos de 256 bits generados al asignar leases de folios; validados en cada sincronización para cerco inmediato (`403 LEASE_REVOKED`) de terminales desfasadas.
+- **Cifrado Local:** Base de datos SQLite protegida mediante SQLCipher con llave de 256 bits derivada del OS Keyring (Windows DPAPI / Linux Keyring) ligada al dispositivo.
 
 ---
 
-## 8. Electron / Node.js Runtime Hardening
+## 8. Peripheral and Payment Security Boundary (SR-08)
 
-En estricto cumplimiento de los estándares de seguridad para Electron:
+- **Objetivo de Seguridad en Pagos:** Los procesos de la aplicación TRIDENTPOS se mantendrán fuera del flujo de datos de tarjetas (`Cardholder Data Path`) siempre que la integración con la terminal bancaria lo soporte. Queda prohibido persistir PAN completo, CVV o datos de banda magnética. El alcance final de cumplimiento PCI depende de la integración técnica con la pasarela/PIN Pad y requiere validación formal de cumplimiento.
+- **Impresoras ESC/POS:** Acceso exclusivo desde el proceso del Edge Host. Firewall local bloquea el tráfico directo desde terminales móviles o comensales hacia los puertos de impresión (TCP 9100).
+
+---
+
+## 9. Electron Runtime Security Baseline
+
 - `contextIsolation = true` y `nodeIntegration = false` en todas las ventanas.
 - Preload scripts mínimos con puente IPC tipado y lista blanca estricta de canales autorizados.
 - Content Security Policy (CSP) restrictiva: `default-src 'self'; script-src 'self'; connect-src 'self' wss: https:;`.
-- Actualizaciones de software firmadas digitalmente con verificación de firma RSA/Ed25519 antes de la instalación.
+- Actualizaciones de software firmadas digitalmente (Code Signing Ed25519/RSA) con verificación de firma y hash SHA-512 previa a la instalación.
 
 ---
 
-## 9. Security Logging, Redaction and Tamper-Evidence
+## 10. Layered Tamper-Evident Audit & Clock Protection (SR-04, SR-12)
 
-- **Redacción Obligatoria:** Prohibición absoluta de registrar en logs: PINs en texto plano, contraseñas, tokens JWT completos, secretos de webhooks, llaves privadas CSD y datos de tarjetas.
-- **Diseño Tamper-Evident:** La bitácora local `local_audit_trail` implementa **Hash Chaining** criptográfico ($H_n = \text{SHA256}(H_{n-1} \parallel \text{EventData}_n)$) para evidenciar cualquier intento de alteración o borrado local antes de su replicación a Cloud.
-
----
-
-## 10. Supply Chain and Release Security
-
-- **Dependencias:** Lockfiles obligatorios (`package-lock.json`), escaneo automatizado de vulnerabilidades en CI/CD y generación de SBOM (Software Bill of Materials).
-- **Protección de Ramas:** Revisiones obligatorias por pares, checks de seguridad SAST automáticos y bloqueo de commits directos en ramas principales.
-
----
-
-## 11. Incident Response Playbooks
-
-10 procedimientos de respuesta a incidentes formalizados en [`SECURITY_INCIDENT_RESPONSE.md`](file:///Volumes/SSD_ORICO/BRAIN/TRIDENTPOSREST/eeaaf/TRIDENTPOS/SECURITY_INCIDENT_RESPONSE.md):
-1. Cuenta de empleado comprometida.
-2. Credencial de gerente filtrada.
-3. Robo físico de servidor Edge Host.
-4. Sospecha de fuga de datos multi-tenant.
-5. Fuga de secreto de integración (Uber/Rappi).
-6. Compromiso de llave fiscal CSD / PAC.
-7. Ataque de repetición de webhooks externos.
-8. Acceso cross-tenant accidental.
-9. Dependencia npm comprometida.
-10. Ransomware o corrupción en sucursal.
+- **Auditoría Local:** Encadenamiento criptográfico (Hash Chaining SHA-256) en `local_audit_trail` para detectar alteraciones accidentales, borrados parciales o desórdenes cronológicos.
+- **Anclaje Externo (Cloud Checkpoint):** Puntos de control periódicos y confirmaciones de sincronización (`Cloud Sync ACK`) firmadas para detectar reescrituras globales de la base de datos local.
+- **Riesgo Residual Documentado:** Un atacante con acceso total de escritura a SQLite antes de un anclaje externo podría potencialmente reescribir la historia no anclada; este riesgo se mitiga mediante anclajes frecuentes al cierre de cada transacción y turno.
+- **Protección de Manipulación del Reloj (Clock Rollback):** Los temporizadores de sesión local y expiración de tokens utilizan contadores monotónicos del proceso (`process.hrtime()` / monotonic clocks). La detección de retrasos significativos en el reloj del sistema operativo dispara una alerta de auditoría y no extiende la vigencia de credenciales offline.
 
 ---
 

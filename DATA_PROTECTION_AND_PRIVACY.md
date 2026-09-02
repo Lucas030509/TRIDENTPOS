@@ -1,7 +1,7 @@
 # DATA PROTECTION AND PRIVACY SPECIFICATION — ERP RESTAURANTES
 
 **Document ID:** `ARCH-PRV-001`  
-**Version:** `1.0 DRAFT`  
+**Version:** `1.1 REMEDIATED DRAFT`  
 **Status:** `READY FOR INDEPENDENT REVIEW`  
 **Date:** 2026-09-01  
 **Framework:** `EAAF v1.2.0 @ 7e036f43240b3dc28ccb996e350263598275b2cd`  
@@ -10,29 +10,34 @@
 
 ---
 
-## 1. Protección de Datos de Tarjetas y Alcance PCI-DSS (Minimal Scope)
+## 1. Alcance de Seguridad en Pagos y Límite de Datos Bancarios (SR-08)
 
-Para minimizar el alcance normativo PCI-DSS y eliminar el riesgo de exfiltración masiva de datos bancarios:
-1. **Datos Prohibidos:** Queda estrictamente prohibido procesar, transmitir o almacenar en cualquier nodo del sistema:
-   - Primary Account Number (PAN) completo en texto plano.
-   - Código de Seguridad (CVV / CVC / CID).
-   - Datos de banda magnética (Track 1 / Track 2).
-   - PIN de tarjeta bancaria.
-2. **Modelo de Cobro Integrado:** Las terminales de cobro bancario (PIN Pads / SmartPOS) operan de forma desacoplada; el sistema únicamente recibe y almacena:
-   - Token de autorización bancaria (`reference_auth_code`).
-   - Últimos 4 dígitos de la tarjeta (`card_last4`).
-   - Nombre del titular (si lo retorna la pasarela) e institución emisora.
+> **ARCHITECTURAL SECURITY OBJECTIVE:**
+> Los procesos de la aplicación TRIDENTPOS DEBEN permanecer fuera del flujo de datos de tarjetas (`Cardholder Data Path`) siempre que la integración con la terminal de pago lo soporte.
+> 
+> Queda estrictamente prohibido que TRIDENTPOS persista:
+> - Primary Account Number (PAN) completo en texto plano.
+> - Código de Seguridad (CVV / CVC / CID).
+> - Datos de banda magnética (Track 1 / Track 2).
+> - PIN de tarjeta bancaria.
+> 
+> El sistema interactúa exclusivamente con PIN Pads / SmartPOS mediante pasarelas autorizadas, recibiendo únicamente:
+> - Token o referencia de autorización bancaria (`reference_auth_code`).
+> - Últimos 4 dígitos de la tarjeta (`card_last4`).
+> - Nombre del titular e institución emisora (si es devuelto por la pasarela).
+> 
+> *El alcance final de cumplimiento PCI-DSS depende de la integración específica de cada terminal/pasarela y requiere validación formal de cumplimiento.*
 
 ---
 
-## 2. Matriz de Datos Personales (PII) y Tratamiento de Privacidad
+## 2. Matriz de Datos Personales (PII) y Tratamiento de Privacidad (SR-07)
 
-| Categoría de PII | Propósito de Negocio | Origen del Dato | Control de Acceso | Retención Sugerida | Mecanismo de Anonimización |
+| Categoría de PII | Propósito de Negocio | Origen del Dato | Control de Acceso | Retención Clasificada | Mecanismo de Anonimización / Supresión |
 |---|---|---|---|---|---|
-| **Nombre de Cliente** | Facturación, Reservas y CRM | Captura en POS / Web | Restringido por Tenant (RLS) | `LEGAL/PRIVACY VALIDATION REQUIRED` | Enmascaramiento de nombre en solicitudes de derecho de supresión. |
-| **Teléfono Móvil** | Notificaciones de Delivery y WhatsApp | Captura en Comanda / Web | Operador de Despacho y CRM | `LEGAL/PRIVACY VALIDATION REQUIRED` | Hasheo o eliminación física del registro de contacto. |
-| **Email y RFC / Tax ID** | Emisión de CFDI / Facturas | Captura en Portal Fiscal | Administrador y Facturación | `5 a 10 años (Obligación Fiscal)` | Preservación de factura inmutable; disociación en catálogo CRM. |
-| **Dirección de Entrega** | Logística de Flota Propia | Captura en Pedido Delivery | Repartidor asignado y Despacho | `30 días post-entrega (Operativo)` | Purga de coordenadas y texto de dirección tras cierre contable. |
+| **Nombre de Cliente** | Facturación, Reservas y CRM | Captura en POS / Web | Restringido por Tenant (RLS) | `PROVISIONAL RETENTION — LEGAL/PRIVACY VALIDATION REQUIRED` | Enmascaramiento de nombre en solicitudes de derecho de supresión. |
+| **Teléfono Móvil** | Notificaciones de Delivery y WhatsApp | Captura en Comanda / Web | Operador de Despacho y CRM | `PROVISIONAL RETENTION — LEGAL/PRIVACY VALIDATION REQUIRED` | Hasheo o eliminación física del registro de contacto. |
+| **Email y RFC / Tax ID** | Emisión de CFDI / Facturas | Captura en Portal Fiscal | Administrador y Facturación | `PROVISIONAL FISCAL RANGE (5–10 AÑOS) — LEGAL VALIDATION REQUIRED` | Preservación de factura inmutable; disociación en catálogo CRM. |
+| **Dirección de Entrega** | Logística de Flota Propia | Captura en Pedido Delivery | Repartidor asignado y Despacho | `BUSINESS POLICY DEFAULT (30 DÍAS) — PO VALIDATION REQUIRED` | Purga de coordenadas y texto de dirección tras cierre contable. |
 
 ---
 
