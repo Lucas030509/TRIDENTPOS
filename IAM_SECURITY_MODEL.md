@@ -1,11 +1,11 @@
 # IAM SECURITY MODEL SPECIFICATION — ERP RESTAURANTES
 
 **Document ID:** `ARCH-IAM-001`  
-**Version:** `1.1 REMEDIATED DRAFT`  
+**Version:** `1.2 REMEDIATED DRAFT (R2.1)`  
 **Status:** `READY FOR INDEPENDENT REVIEW`  
-**Date:** 2026-09-01  
+**Date:** 2026-09-02  
 **Framework:** `EAAF v1.2.0 @ 7e036f43240b3dc28ccb996e350263598275b2cd`  
-**Author Agent:** `08_Security_Architect`  
+**Author Agent:** `08_Security_Architect — Remediation Author`  
 **Approved Baseline Commit:** `9d076c1a8f674b2411991b20fa4faa83b85f708a` (Tag `data-architecture-v1.0-approved`)  
 
 ---
@@ -76,14 +76,20 @@ graph TD
 | **Cloud Refresh Token**| Cloud Auth Service | 7 días | Criptográfico Opaco (256-bit) | `SECURITY POLICY DEFAULT` | Revocación inmediata en base de datos al rotar o cerrar sesión. |
 | **Local Station Token** | Edge Host | 12 horas (Turno) | HMAC-SHA256 (Llave Local) | `SECURITY POLICY DEFAULT` | Revocación en memoria al cerrar turno de caja o des-enrolar terminal.|
 | **One-Time Override Token**| Edge Host | 60 segundos | HMAC-SHA256 (Llave Local) | `SECURITY POLICY DEFAULT` | Consumo único (One-Time Use) al autorizar operación sensible. |
-| **Pairing Secret OTP** | Edge Host | 10 minutos | Criptográfico Numérico (8 dígitos)| `SECURITY POLICY DEFAULT` | Consumo único en protocolo de enrolamiento de nueva terminal. |
+| **Pairing Secret Payload** | Edge Host | 10 minutos | JSON Criptográfico con Fingerprint| `SECURITY POLICY DEFAULT` | Consumo atómico único tras verificación de fingerprint TLS. |
 
 ---
 
-## 5. Protocolo de Confianza y Resiliencia Temporal (SR-03, SR-12)
+## 5. Protocolo Criptográfico de Enrolamiento y Resiliencia Temporal (R2F-01, SR-12)
 
-1. **Bootstrap de Confianza Inicial:** Las terminales en LAN local descubren el Edge Host mediante mDNS pero **no confían automáticamente en él**. El emparejamiento requiere el ingreso o escaneo del secreto de enrolamiento (`Pairing Secret OTP`) desplegado físicamente en el Edge Host legítimo, tras lo cual se realiza el intercambio y fijación de certificados TLS locales (`Certificate Pinning`).
-2. **Protección contra Manipulación de Reloj (Clock Rollback):** Para evitar que un usuario altere la hora del sistema operativo local para extender la vigencia de tokens o credenciales cacheadas:
+1. **Bootstrap Criptográfico con Vinculación de Identidad (R2F-01):**
+   - El Edge Server genera un payload estructurado que contiene: `branchId`, `edgeId`, `edgePublicKeyFingerprint`, `pairingId`, `expiresAt` y `pairingSecret`.
+   - La terminal obtiene este payload físicamente (escaneo QR en la pantalla del Edge) y descubre los candidatos en LAN vía mDNS.
+   - Antes de enviar el `pairingSecret`, la terminal establece una conexión TLS y exige el certificado del servidor candidato, comprobando que su huella digital coincida exactamente con `edgePublicKeyFingerprint`.
+   - Si no coincide, la conexión es abortada sin transmitir el secreto, neutralizando cualquier intento de relay o proxy malicioso por un Rogue Edge en la LAN.
+   - Tras la validación del fingerprint, el `pairingSecret` se envía cifrado bajo la sesión TLS verificada, el Edge lo valida y consume atómicamente, y emite el `Station Token`.
+
+2. **Protección contra Manipulación de Reloj (Clock Rollback):**
    - Los temporizadores de expiración de sesiones efímeras se calculan utilizando contadores monotónicos del proceso (`process.hrtime.bigint()`).
    - El Edge Server compara periódicamente el reloj local contra la última marca de tiempo recibida de Cloud (`lastKnownCloudTime`). Retrocesos de reloj mayores a 5 minutos bloquean la emisión de nuevos tokens y generan una alerta de auditoría (`ClockRollbackDetected`).
 

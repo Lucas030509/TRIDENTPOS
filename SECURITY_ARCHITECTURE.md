@@ -1,11 +1,11 @@
 # SECURITY ARCHITECTURE — ERP RESTAURANTES / TRIDENTPOS
 
 **Document ID:** `ARCH-SEC-001`  
-**Version:** `1.1 REMEDIATED DRAFT`  
+**Version:** `1.2 REMEDIATED DRAFT (R2.1)`  
 **Status:** `READY FOR INDEPENDENT REVIEW`  
-**Date:** 2026-09-01  
+**Date:** 2026-09-02  
 **Framework:** `EAAF v1.2.0 @ 7e036f43240b3dc28ccb996e350263598275b2cd`  
-**Author Agent:** `08_Security_Architect`  
+**Author Agent:** `08_Security_Architect — Remediation Author`  
 **Approved Baseline Commit:** `9d076c1a8f674b2411991b20fa4faa83b85f708a` (Tag `data-architecture-v1.0-approved`)  
 **Target Gate:** `SECURITY_GATE`  
 
@@ -16,10 +16,10 @@
 La arquitectura de seguridad de **ERP RESTAURANTES / TRIDENTPOS** está diseñada bajo el principio de **Zero Trust Híbrido** y **Defensa en Profundidad**:
 
 ### Principios Fundamentales:
-1. **DISCOVERY IS NOT TRUST:** La visibilidad o anuncio por mDNS en red local no confiere autorización ni autenticidad. El emparejamiento y la confianza inicial requieren un protocolo de enrolamiento criptográfico autenticado.
+1. **DISCOVERY IS NOT TRUST:** La visibilidad o anuncio por mDNS en red local no confiere autorización ni autenticidad. El emparejamiento requiere un protocolo criptográfico donde el material de enrolamiento está vinculado a la identidad del Edge legítimo antes de exponer cualquier secreto.
 2. **AUTHENTICATION $\neq$ AUTHORIZATION:** La verificación de identidad es un paso previo; la autorización se ejecuta forzosamente en el boundary de confianza (`Trusted Boundary`) sobre el modelo de datos y capacidades en el backend.
 3. **DEFAULT DENY MULTI-TENANCY:** Ninguna solicitud o consulta a base de datos se ejecuta sin un contexto explícito y validado de `organization_id`.
-4. **TAMPER-EVIDENT DESIGN:** Los eventos críticos (cancelaciones, descuentos, aperturas de cajón, reconciliaciones y contingencias de folios) se registran de forma encadenada e inmutable, complementados con puntos de anclaje remoto en Cloud. *Nota de diseño: El sistema es Tamper-Evident, no 'Tamper-Proof'. Un compromiso total del Edge Host antes de un anclaje externo representa un riesgo residual documentado.*
+4. **TAMPER-EVIDENT DESIGN:** Los eventos críticos se registran de forma encadenada e inmutable localmente, complementados con puntos de anclaje remoto en Cloud. *Nota de gobernanza: El sistema es Tamper-Evident. La reescritura total previa al anclaje remoto constituye un riesgo residual documentado cuya aceptación formal corresponde a la autoridad autorizada bajo gobernanza EAAF.*
 5. **MINIMAL PCI SCOPE:** Objetivo de mantener los procesos de la aplicación fuera del flujo de datos de tarjetas (PAN completo, CVV o tracks magnéticos); delegación a terminales bancarias dedicadas y tokens de autorización.
 
 ```mermaid
@@ -81,7 +81,7 @@ graph TD
 2. **Browser Admin ↔ Cloud API:** Autenticación Supabase Auth JWT, cookies seguras `SameSite=Strict`, `HttpOnly`, MFA obligatorio para roles ejecutivos.
 3. **Cloud API ↔ PostgreSQL:** Conexión pooling con `SET LOCAL app.current_organization_id`, políticas RLS estrictas (Default Deny).
 4. **Cloud ↔ Edge Host (WAN):** WebSocket seguro bidireccional (`WSS`) con TLS 1.3, autenticación de estación Edge mediante token firmado y `branch_id` criptográfico.
-5. **Edge Host ↔ POS Terminal (LAN):** TLS local con certificado verificado mediante protocolo de enrolamiento seguro y validación de `station_id` enrolado.
+5. **Edge Host ↔ POS Terminal (LAN):** TLS local con certificado verificado mediante protocolo de enrolamiento seguro con vinculación de identidad criptográfica.
 6. **Edge Host ↔ KDS Display (LAN):** Subscripción WSS restringida a lectura/mutación exclusiva de estados de cocina.
 7. **Edge Host ↔ Comandero Móvil (WiFi):** Sesión efímera de mesero vinculada a dispositivo físico autorizado, rechazo por inactividad.
 8. **Edge Host ↔ Periféricos ESC/POS:** Comunicación directa TCP 9100 o USB; puerto restringido a la IP del Edge, sin exposición web ni cross-LAN.
@@ -94,45 +94,69 @@ graph TD
 
 ---
 
-## 3. Protocolo de Confianza Inicial y Enrolamiento de Terminales (SR-03)
+## 3. Protocolo Criptográfico de Enrolamiento con Vinculación de Identidad (R2F-01)
 
-El principio **Discovery is not Trust** establece que mDNS es únicamente un protocolo de localización de red. El establecimiento de confianza inicial entre una nueva terminal y el Edge Server sigue el siguiente protocolo:
+Para prevenir ataques de retransmisión (OTP Relay), hombre en el medio (MITM) o suplantación por servidores falsos en mDNS, el material físico de emparejamiento vincula criptográficamente la identidad del Edge antes del intercambio del secreto:
+
+### 3.1 Estructura del Payload de Emparejamiento Físico (QR / Token)
+El Edge Server genera y despliega en su pantalla física un payload firmado/estructurado conteniendo:
+```json
+{
+  "branchId": "uuid-de-sucursal",
+  "edgeId": "edge-host-node-01",
+  "edgePublicKeyFingerprint": "SHA256:4a8b...f902",
+  "pairingId": "pair-uuid-v4",
+  "expiresAt": 1756789000,
+  "pairingSecret": "CSPRNG-256-BIT-SECRET"
+}
+```
+
+### 3.2 Flujo Secuencial de Enrolamiento Seguro
 
 ```mermaid
 sequenceDiagram
     autonumber
     participant Station as Nueva Terminal / Comandero
     participant Admin as Gerente de Sucursal (Físico)
-    participant Edge as Edge Server Host (Local)
-    participant Cloud as Cloud Control Plane
+    participant Edge as Edge Server Host Legítimo (Local)
+    participant Rogue as Rogue Edge Falso en LAN (mDNS)
 
-    Admin->>Edge: Solicitar Generación de Token de Enrolamiento (One-Time Pairing)
-    Edge->>Edge: Genera Pairing Secret (OTP 8 dígitos / QR) con expiración de 10 min
-    Edge-->>Admin: Muestra QR / Código en pantalla física del Edge Host
+    Admin->>Edge: Solicitar Enrolamiento de Terminal en Consola Local
+    Edge->>Edge: Genera Payload Vinculado (Fingerprint TLS + Secret + Expiración 10 min)
+    Edge-->>Admin: Despliega QR y Código en Pantalla Física del Edge
     
-    Station->>Station: Descubre candidatos Edge vía mDNS en LAN
-    Station->>Admin: Solicita ingreso de Pairing Code / Escaneo de QR
-    Admin->>Station: Ingresa código OTP / Escanea QR
+    Admin->>Station: Escanea QR / Ingresa Pairing Payload
+    Station->>Station: Descubre candidatos en LAN vía mDNS (Rogue y Legítimo)
     
-    Station->>Edge: Handshake de Enrolamiento (Pairing Code + Station Identity Request)
-    Edge->>Edge: Valida OTP no expirado y emite Certificado/Fingerprint local + Station Token
-    Edge-->>Station: Retorna Certificado Local + Station Token firmado
-    Station->>Station: Almacena Fingerprint en almacenamiento seguro local (Pinning)
+    Note over Station,Rogue: Intento de Interceptación por Rogue Edge
+    Station->>Rogue: Establece conexión TLS inicial y solicita Certificado
+    Rogue-->>Station: Presenta Certificado TLS de Rogue
+    Station->>Station: Compara Fingerprint del Certificado vs `edgePublicKeyFingerprint` del QR
+    Station--xRogue: FINGERPRINT MISMATCH! Conexión abortada inmediatamente sin revelar `pairingSecret`
+    
+    Note over Station,Edge: Conexión con Edge Legítimo
+    Station->>Edge: Establece conexión TLS y solicita Certificado
+    Edge-->>Station: Presenta Certificado TLS de Edge Legítimo
+    Station->>Station: Compara Fingerprint vs QR $\rightarrow$ MATCH CONFIRMADO
+    
+    Station->>Edge: Handshake de Enrolamiento (Presenta `pairingId`, `pairingSecret` y `stationPublicKey`)
+    Edge->>Edge: Valida secreto no expirado, consume `pairingId` atómicamente y emite Station Token
+    Edge-->>Station: Retorna Station Token firmado + confirmación
+    Station->>Station: Fija permanentemente el Certificado TLS (Certificate Pinning)
     Edge->>Edge: Registra evento de auditoría `TerminalEnrolada`
-    Edge-->>Cloud: Sincroniza nuevo `station_id` autorizado en próximo Outbox sync
 ```
 
-### Invariantes del Enrolamiento:
-1. **Unicidad y Expiración:** El secreto de emparejamiento es de un solo uso con vigencia máxima de 10 minutos (`SECURITY POLICY DEFAULT`).
-2. **Re-enrolamiento y Des-enrolamiento:** Una estación revocada o robada se inhabilita en Cloud (`is_authorized = false`), provocando su rechazo local inmediato tras la siguiente sincronización.
-3. **Resistencia a Rogue Edge:** Un Edge no autorizado en la LAN no puede emparejarse sin la confirmación física del código OTP en la consola del Edge legítimo.
+### Invariantes Criptográficos:
+1. **No Divulgación Previa:** La terminal **nunca envía ni expone el `pairingSecret`** a ningún candidato cuyo certificado TLS no coincida exactamente con el `edgePublicKeyFingerprint` obtenido físicamente.
+2. **Resistencia a Relay / MITM:** Un Rogue Edge no puede retransmitir el secreto ni actuar como proxy, ya que no posee la llave privada correspondiente al certificado cuyo fingerprint fue escaneado.
+3. **Consumo Atómico y Expiración:** El `pairingSecret` tiene una vigencia máxima de 10 minutos (`SECURITY POLICY DEFAULT`) y se invalida inmediatamente tras el primer uso exitoso.
 
 ---
 
 ## 4. Threat Modeling (STRIDE Methodology)
 
 Formalizado en [`THREAT_MODEL.md`](file:///Volumes/SSD_ORICO/BRAIN/TRIDENTPOSREST/eeaaf/TRIDENTPOS/THREAT_MODEL.md):
-- **Spoofing:** Falsificación de PIN, terminales no autorizadas en LAN, Edge falso en mDNS, webhooks falsos de delivery.
+- **Spoofing:** Falsificación de PIN, terminales no autorizadas en LAN, Rogue Edge en mDNS (mitigado por vinculación de fingerprint en QR), webhooks falsos de delivery.
 - **Tampering:** Modificación no autorizada de SQLite, alteración de precios, manipulación de Outbox o folios, manipulación del reloj del sistema operativo.
 - **Repudiation:** Negación de cancelaciones post-cocina, descuentos o faltantes de caja.
 - **Information Disclosure:** Fuga cross-tenant, extracción de base de datos SQLite en hardware robado, exposición de secretos en logs.
@@ -156,10 +180,10 @@ Formalizado en [`THREAT_MODEL.md`](file:///Volumes/SSD_ORICO/BRAIN/TRIDENTPOSRES
 
 ## 6. Authorization, Policy Points and Multi-Tenant Isolation
 
-### 6.1 Policy Invariant para Operaciones Protegidas (SR-01)
-> **POLÍTICA DE AUTORIZACIÓN NEUTRAL:** Para operaciones sensibles sujetas a decisiones pendientes del Product Owner (como la cancelación post-cocina `OQ-SSOT-01`), la arquitectura de seguridad establece el invariante:
-> *Toda cancelación post-cocina DEBE ser autenticada, autorizada bajo la política configurada aprobada por el Product Owner (`POST_KITCHEN_CANCELLATION_POLICY`), justificada con código de motivo y auditada de forma inmutable.*
-> La arquitectura de seguridad no selecciona roles específicos (Gerente, Supervisor, etc.) mientras la decisión de negocio permanezca como `PENDING PO DECISION`.
+### 6.1 Invariante de Seguridad para Operaciones Protegidas (Neutralidad PO)
+> **POLÍTICA DE AUTORIZACIÓN NEUTRAL:** Para cualquier operación funcional sujeta a decisiones del Product Owner (`OQ-SSOT-01` a `07`, `OQ-ARCH-01` a `02`), la arquitectura de seguridad establece el invariante:
+> *Si el Product Owner autoriza la capacidad, toda ejecución DEBE ser autenticada, autorizada bajo la política configurada aprobada por el Product Owner, justificada con código de motivo y auditada de forma inmutable.*
+> La arquitectura de seguridad no asume la disponibilidad, roles específicos, comportamiento offline ni workflows de ninguna capacidad que permanezca como `PENDING PO DECISION`.
 
 ### 6.2 Aislamiento Multi-Tenant (Default Deny)
 - **PostgreSQL RLS:** Políticas en todas las tablas que aplican `WHERE organization_id = current_setting('app.current_organization_id')::uuid`.
@@ -175,7 +199,7 @@ Formalizado en [`THREAT_MODEL.md`](file:///Volumes/SSD_ORICO/BRAIN/TRIDENTPOSRES
 
 ---
 
-## 8. Peripheral and Payment Security Boundary (SR-08)
+## 8. Peripheral and Payment Security Boundary
 
 - **Objetivo de Seguridad en Pagos:** Los procesos de la aplicación TRIDENTPOS se mantendrán fuera del flujo de datos de tarjetas (`Cardholder Data Path`) siempre que la integración con la terminal bancaria lo soporte. Queda prohibido persistir PAN completo, CVV o datos de banda magnética. El alcance final de cumplimiento PCI depende de la integración técnica con la pasarela/PIN Pad y requiere validación formal de cumplimiento.
 - **Impresoras ESC/POS:** Acceso exclusivo desde el proceso del Edge Host. Firewall local bloquea el tráfico directo desde terminales móviles o comensales hacia los puertos de impresión (TCP 9100).
@@ -191,12 +215,12 @@ Formalizado en [`THREAT_MODEL.md`](file:///Volumes/SSD_ORICO/BRAIN/TRIDENTPOSRES
 
 ---
 
-## 10. Layered Tamper-Evident Audit & Clock Protection (SR-04, SR-12)
+## 10. Layered Tamper-Evident Audit & Clock Protection
 
 - **Auditoría Local:** Encadenamiento criptográfico (Hash Chaining SHA-256) en `local_audit_trail` para detectar alteraciones accidentales, borrados parciales o desórdenes cronológicos.
-- **Anclaje Externo (Cloud Checkpoint):** Puntos de control periódicos y confirmaciones de sincronización (`Cloud Sync ACK`) firmadas para detectar reescrituras globales de la base de datos local.
-- **Riesgo Residual Documentado:** Un atacante con acceso total de escritura a SQLite antes de un anclaje externo podría potencialmente reescribir la historia no anclada; este riesgo se mitiga mediante anclajes frecuentes al cierre de cada transacción y turno.
-- **Protección de Manipulación del Reloj (Clock Rollback):** Los temporizadores de sesión local y expiración de tokens utilizan contadores monotónicos del proceso (`process.hrtime()` / monotonic clocks). La detección de retrasos significativos en el reloj del sistema operativo dispara una alerta de auditoría y no extiende la vigencia de credenciales offline.
+- **Anclaje Remoto (Cloud Checkpoint):** Puntos de control periódicos y confirmaciones de sincronización (`Cloud Sync ACK`) firmadas para detectar reescrituras globales de la base de datos local.
+- **Declaración de Riesgo Residual:** La reescritura total de SQLite previa al anclaje remoto constituye un riesgo residual documentado; su aceptación formal o mitigación adicional corresponde a la autoridad autorizada de gestión de riesgos bajo gobernanza EAAF.
+- **Protección de Manipulación del Reloj (Clock Rollback):** Los temporizadores de sesión local y expiración de tokens utilizan contadores monotónicos del proceso (`process.hrtime.bigint()`). La detección de desfases mayores a 5 minutos respecto a `lastKnownCloudTime` dispara una alerta y bloquea la emisión de tokens.
 
 ---
 
