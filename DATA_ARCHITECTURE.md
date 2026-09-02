@@ -1,13 +1,13 @@
 # DATA ARCHITECTURE — ERP RESTAURANTES / TRIDENTPOS
 
 **Document ID:** `ARCH-DAT-001`  
-**Version:** `1.0 DRAFT`  
-**Status:** `READY FOR INDEPENDENT REVIEW`  
+**Version:** `1.0 APPROVED / FROZEN`  
+**Status:** `APPROVED / FROZEN — 2026-09-01`  
 **Date:** 2026-09-01  
 **Framework:** `EAAF v1.2.0 @ 7e036f43240b3dc28ccb996e350263598275b2cd`  
 **Author Agent:** `03_Data_Architect`  
 **Approved Solution Baseline:** `e35205906055a8425ab875d05789652b3c3497b7` (Tag `solution-architecture-v1.3-approved`)  
-**Target Gate:** `DATA_ARCHITECTURE_GATE`  
+**Target Gate:** `DATA_ARCHITECTURE_GATE (PASS)`  
 
 ---
 
@@ -256,4 +256,4 @@ Data Architecture preserva de forma estricta la neutralidad sobre las 9 decision
 
 ---
 
-DOCUMENT STATUS: READY FOR INDEPENDENT REVIEW
+DOCUMENT STATUS: APPROVED / FROZEN — 2026-09-01

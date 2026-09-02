@@ -1,13 +1,13 @@
 # PROJECT BLUEPRINT — ERP RESTAURANTES / TRIDENTPOS
 
 **Document ID:** `ARCH-BLU-001`  
-**Version:** `1.3 APPROVED / FROZEN`  
+**Version:** `1.4 APPROVED / FROZEN`  
 **Status:** `APPROVED / FROZEN — 2026-09-01`  
 **Framework Version:** `1.2.0`  
 **Framework Ref:** `codex/eaaf-v1.2-governance`  
 **Framework Commit:** `7e036f43240b3dc28ccb996e350263598275b2cd`  
-**Active Lifecycle Phase:** `DATA ARCHITECTURE — PREPARATION`  
-**Next Gate:** `DATA_ARCHITECTURE_GATE`  
+**Active Lifecycle Phase:** `SECURITY ARCHITECTURE — PREPARATION`  
+**Next Gate:** `SECURITY_GATE`  
 
 ```yaml
 framework_governance:
@@ -179,13 +179,15 @@ graph TD
 
 ## 11. Gate Evidence
  
-- **Last Gate Evaluated:** `SOLUTION_ARCHITECTURE_GATE`
-- **Gate Result:** `PASS — RECOMMENDED FOR PRODUCT OWNER APPROVAL`
-- **Reviewed Architecture SHA:** `9c0961c2c466375f9a219da06c988335b77d2733`
-- **Gate Evidence SHA:** `eefd3d8bdd7c68812ecfe23e56939ade163c1257`
-- **Product Owner Decision:** `APPROVED`
-- **Solution Architecture Baseline:** `FROZEN`
-- **Next Gate:** `DATA_ARCHITECTURE_GATE`
-- **Gate Authority:** `Independent Data Architect`
+- **Solution Architecture Gate:** `PASS — RECOMMENDED FOR PRODUCT OWNER APPROVAL`
+  - *Reviewed Architecture SHA:* `9c0961c2c466375f9a219da06c988335b77d2733`
+  - *Gate Evidence SHA:* `eefd3d8bdd7c68812ecfe23e56939ade163c1257`
+  - *Solution Architecture Baseline:* `APPROVED / FROZEN` (Record: `PRODUCT_OWNER_ARCHITECTURE_APPROVAL.md`)
+- **Data Architecture Gate:** `PASS — RECOMMENDED FOR PRODUCT OWNER APPROVAL`
+  - *Reviewed Data Architecture SHA:* `7d8b9ceaf6faf056c75ecd3f79774a33f37d0655`
+  - *Canonical Gate Evidence SHA:* `a2ef88c00bb218b56e27100dadd1857472572165`
+  - *Data Architecture Baseline:* `APPROVED / FROZEN` (Record: `PRODUCT_OWNER_DATA_ARCHITECTURE_APPROVAL.md`)
+- **Next Gate:** `SECURITY_GATE`
+- **Gate Authority:** `Independent Security Architect`
  
 DOCUMENT STATUS: APPROVED / FROZEN — 2026-09-01

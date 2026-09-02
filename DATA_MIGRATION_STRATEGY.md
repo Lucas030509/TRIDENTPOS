@@ -1,8 +1,8 @@
 # DATA MIGRATION & COMPATIBILITY STRATEGY — ERP RESTAURANTES
 
 **Document ID:** `ARCH-MIG-001`  
-**Version:** `1.0 DRAFT`  
-**Status:** `READY FOR INDEPENDENT REVIEW`  
+**Version:** `1.0 APPROVED / FROZEN`  
+**Status:** `APPROVED / FROZEN — 2026-09-01`  
 **Date:** 2026-09-01  
 **Framework:** `EAAF v1.2.0 @ 7e036f43240b3dc28ccb996e350263598275b2cd`  
 **Author Agent:** `03_Data_Architect`  
@@ -68,4 +68,4 @@ Para evitar que una versión más reciente de Cloud rechace o corrompa datos de 
 
 ---
 
-DOCUMENT STATUS: READY FOR INDEPENDENT REVIEW
+DOCUMENT STATUS: APPROVED / FROZEN — 2026-09-01

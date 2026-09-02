@@ -9,14 +9,19 @@
   "eaaf_ref": "codex/eaaf-v1.2-governance",
   "eaaf_commit": "7e036f43240b3dc28ccb996e350263598275b2cd",
   "adoption_status": "GOVERNED",
-  "active_lifecycle_phase": "DATA ARCHITECTURE — PREPARATION",
+  "active_lifecycle_phase": "SECURITY ARCHITECTURE — PREPARATION",
   "solution_architecture_gate": "PASS",
-  "product_owner_approval": "APPROVED",
   "solution_architecture_baseline": "FROZEN",
-  "reviewed_architecture_commit": "9c0961c2c466375f9a219da06c988335b77d2733",
-  "gate_evidence_commit": "eefd3d8bdd7c68812ecfe23e56939ade163c1257",
-  "next_gate": "DATA_ARCHITECTURE_GATE",
-  "gate_reviewer_authority": "Independent Data Architect",
+  "reviewed_solution_architecture_commit": "9c0961c2c466375f9a219da06c988335b77d2733",
+  "solution_gate_evidence_commit": "eefd3d8bdd7c68812ecfe23e56939ade163c1257",
+  "data_architecture_gate": "PASS",
+  "data_architecture_baseline": "FROZEN",
+  "reviewed_data_architecture_commit": "7d8b9ceaf6faf056c75ecd3f79774a33f37d0655",
+  "data_gate_evidence_commit": "a2ef88c00bb218b56e27100dadd1857472572165",
+  "product_owner_approval": "APPROVED",
+  "next_gate": "SECURITY_GATE",
+  "next_author_agent": "08_Security_Architect",
+  "gate_reviewer_authority": "Independent Security Architect",
   "ssot_functional_artifacts": [
     "RESTAURANT_SOFTWARE_RECONSTRUCTION_SPEC.md",
     "FUNCTIONAL_ARCHITECTURE.md",
@@ -34,6 +39,17 @@
     "TECH_STACK_DECISIONS.md",
     "ARCHITECTURE_RISKS.md"
   ],
+  "data_architecture_artifacts": [
+    "DATA_ARCHITECTURE.md",
+    "DATA_MODEL.md",
+    "DATA_DICTIONARY.md",
+    "DATA_AUTHORITY_MATRIX.md",
+    "DATA_MIGRATION_STRATEGY.md",
+    "DATA_BACKUP_RESTORE.md",
+    "DATA_ARCHITECTURE_RISKS.md",
+    "DATA_ARCHITECTURE_EVIDENCE.md",
+    "HANDOFF_DATA_ARCHITECTURE_GATE.md"
+  ],
   "adr_suite": [
     "ADR/ADR-001-modular-monolith-bounded-contexts.md",
     "ADR/ADR-002-cloud-branch-data-authority-by-topology.md",
@@ -46,6 +62,6 @@
   ],
   "pending_po_decisions": 9,
   "governance_notes": [
-    "PARTIAL — AGENT 06 V2.0 NOT YET INSTALLED in upstream EAAF ref. Not blocking Data Architecture phase."
+    "PARTIAL — AGENT 06 V2.0 NOT YET INSTALLED in upstream EAAF ref. Not blocking Security Architecture phase."
   ]
 }
