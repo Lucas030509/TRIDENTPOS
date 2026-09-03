@@ -27,9 +27,14 @@
   "reviewed_implementation_readiness_commit": "95c867f5f2e5883425a78ea699375c4eb93ad0e9",
   "implementation_readiness_gate_evidence_commit": "ee3348e4f604d9b1ea5c37e14257482079a48ddd",
   "product_owner_approval": "APPROVED",
-  "implementation_authorized": "FALSE / PENDING REPOSITORY CONTROL ACTIVATION",
-  "next_action": "INDEPENDENT GOVERNANCE REVIEW OF IMPLEMENTATION ACTIVATION BOOTSTRAP AMENDMENT",
-  "next_author_agent": "Independent Solution Architect",
+  "implementation_authorized": "FALSE / PENDING STAGE A REPOSITORY ACTIVATION",
+  "bootstrap_governance_change": "APPROVED",
+  "bootstrap_change_request": "ACR-2026-002",
+  "bootstrap_adr": "ADR-009",
+  "bootstrap_governance_review": "PASS",
+  "bootstrap_governance_review_evidence_commit": "3ddd3a55ccf25fafd7a759928f0473185071d41d",
+  "next_action": "ENABLE AND VERIFY STAGE A MAIN BRANCH PROTECTION",
+  "next_author_agent": "Repo Admin / 10_DevOps_Platform_Architect / 18_DevOps_Engineer",
   "ssot_functional_artifacts": [
     "RESTAURANT_SOFTWARE_RECONSTRUCTION_SPEC.md",
     "FUNCTIONAL_ARCHITECTURE.md",
@@ -81,6 +86,8 @@
     "PRODUCT_OWNER_IMPLEMENTATION_READINESS_APPROVAL.md",
     "IMPLEMENTATION_ACTIVATION_BOOTSTRAP_AMENDMENT.md",
     "ARCHITECTURE_CHANGE_REQUEST_IMPLEMENTATION_ACTIVATION_BOOTSTRAP.md",
+    "IMPLEMENTATION_ACTIVATION_BOOTSTRAP_GOVERNANCE_REVIEW.md",
+    "PRODUCT_OWNER_IMPLEMENTATION_ACTIVATION_BOOTSTRAP_APPROVAL.md",
     "HANDOFF_IMPLEMENTATION.md"
   ],
   "adr_suite": [

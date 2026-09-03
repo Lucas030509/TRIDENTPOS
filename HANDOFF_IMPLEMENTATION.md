@@ -1,12 +1,13 @@
 # HANDOFF — TO IMPLEMENTATION PHASE (BUILDERS)
 
 > [!CAUTION]
-> **GOVERNANCE STATUS: GATE PASS + PO APPROVED — IMPLEMENTATION NOT ACTIVE UNTIL MAIN BRANCH PROTECTION VERIFIED**  
+> **GOVERNANCE STATUS: IMPLEMENTATION ACTIVATION PROTOCOL APPROVED — IMPLEMENTATION STILL BLOCKED UNTIL STAGE A REMOTE VERIFICATION**  
 > 1. `IMPLEMENTATION_READINESS_GATE`: **PASS** (Evaluated by Independent Solution Architect at `ee3348e...`).
-> 2. Product Owner Decision: **APPROVED & FROZEN** (`PRODUCT_OWNER_IMPLEMENTATION_READINESS_APPROVAL.md`).
-> 3. Repository Control: **PENDING REMOTE ACTIVATION** (GitHub `main` branch protection).
+> 2. Product Owner Implementation Readiness: **APPROVED & FROZEN** (`PRODUCT_OWNER_IMPLEMENTATION_READINESS_APPROVAL.md`).
+> 3. Bootstrap Governance Protocol (`ACR-2026-002` / `ADR-009`): **APPROVED & FROZEN** (`PRODUCT_OWNER_IMPLEMENTATION_ACTIVATION_BOOTSTRAP_APPROVAL.md`).
+> 4. Stage A Repository Control: **PENDING REMOTE VERIFICATION** on GitHub `main`.
 > 
-> Builders and development agents remain **STRICTLY PROHIBITED** from writing implementation code, applying migrations, or executing `WP-001` until remote branch protection on `main` is enabled and independently verified.
+> Builders and development agents remain **STRICTLY PROHIBITED** from writing implementation code, applying migrations, or executing `WP-001` until Stage A remote branch protection on `main` is enabled and independently verified on remote.
 
 ---
 
@@ -100,4 +101,4 @@ Builders must immediately **STOP** and trigger an architectural escalation if:
 
 ---
 
-**DOCUMENT STATUS: APPROVED BASELINE — NOT ACTIVE UNTIL MAIN BRANCH PROTECTION VERIFIED**
+**DOCUMENT STATUS: APPROVED BASELINE — NOT ACTIVE UNTIL STAGE A REMOTE BRANCH PROTECTION VERIFIED**
