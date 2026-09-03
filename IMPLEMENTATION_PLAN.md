@@ -42,7 +42,7 @@ All work packages in this plan derive authority from the following frozen baseli
 ### 3.1 Authorized Builder & Reviewer Roles
 Under EAAF v1.2.0, architecture agents design and plan; implementation agents code; separate reviewer agents verify.
 * **Builder Agents (Implementation Layer):**
-  - `13_Backend_Developer`: Cloud microservices/modular monolith, REST/tRPC APIs, event bus, sync gateway.
+  - `13_Backend_Developer`: Cloud modular monolith Bounded Context services, REST/tRPC APIs, event bus, sync gateway.
   - `14_Mobile_Developer`: React Native mobile waiter handheld terminal (Comandero Móvil).
   - `15_Web_Frontend_Developer`: Next.js corporate backoffice web portal, KDS browser client.
   - `16_Native_Edge_Developer`: Electron desktop runtime, local Fastify daemon, WebSocket server, printer drivers.
@@ -68,7 +68,7 @@ Under EAAF v1.2.0, architecture agents design and plan; implementation agents co
       3. Require branches to be up to date before merging.
       4. Prohibit force pushes and direct commits to `main`.
 * **Tag & Provenance Disposition:**
-  - Architecture freeze tags (`security-architecture-v1.0-approved`) are git-annotated tags. Downstream software release artifacts (`WP-028` in Wave 9) require cryptographic signing (Cosign / Sigstore / GPG), signed commits in CI, and SLSA Level 3 provenance generation.
+  - Architecture freeze tags (`security-architecture-v1.0-approved`) are git-annotated tags. Downstream software release artifacts (`WP-028` in Wave 9) target cryptographic signing (Cosign / Sigstore / GPG), signed commits in CI, and SLSA Level 3 provenance generation (classified as `IMPLEMENTATION / RELEASE ENGINEERING TARGET — VALIDATION REQUIRED`).
 * **Branch Strategy:**
   - `main`: Protected production-ready code. Contains only approved, gate-passed merges.
   - `feature/wp-XXX-<slug>`: Dedicated branch created for each Work Package, branched from current `main`.
@@ -85,7 +85,7 @@ A Work Package is marked **DONE** only when all of the following verifiable cond
 2. **Architecture Compliance:** Zero violation of frozen Bounded Context boundaries, Data Authority matrices, or Security controls.
 3. **Automated Testing:** Unit test line coverage satisfies target on business logic, plus 100% pass on required integration/contract tests.
 4. **Security & Data Debt:** Explicit downstream test obligations assigned to the WP are implemented and pass.
-5. **Rollback Verification:** Rollback mechanism (migration down-step, feature flag, or container revert) is documented and proven functional in testing.
+5. **Rollback Verification:** Rollback mechanism is documented and verified. For Cloud PostgreSQL schema changes, strictly follow `DATA_MIGRATION_STRATEGY.md` (Expand-Transition-Contract): pre-contract compatibility rollback, application rollback while expanded schema remains compatible, forward-fix, and controlled contract only after the compatibility window (universal destructive down-migrations are prohibited in production). For Edge SQLite: pre-migration consistent backup, atomic transaction with automatic rollback on error, and restore from pre-migration snapshot when necessary. For software: container/package revert or feature flag kill switch.
 6. **Evidence Generation:** Verification evidence artifact generated adhering to EAAF standard (Expected vs. Actual, execution logs, commit SHA, timestamp).
 7. **Dual Independent Review:** Formal review conducted and signed off by both the assigned Specialist Reviewer and `11_Code_Reviewer` (Builder $\ne$ Reviewer).
 
@@ -151,13 +151,13 @@ Foundational infrastructure and CI/CD pipelines required before application code
 * **Specialist Reviewer:** `01_Solution_Architect`
 * **Code Reviewer:** `11_Code_Reviewer`
 * **Prerequisites:** `main` branch protection enabled on GitHub.
-* **Dependencies:** Node.js 20 LTS (`IMPLEMENTATION VERSION TO PIN`), pnpm workspace, Turborepo, TypeScript 5.4.
-* **Inputs:** `PROJECT_BLUEPRINT.md`
-* **Outputs:** Turborepo configuration, root `package.json`, `pnpm-workspace.yaml`, shared `tsconfig.json`, ESLint / Prettier shared configs.
-* **Acceptance Criteria:** Monorepo builds cleanly with `pnpm build`; workspace package dependency graph validated; circular dependencies prevented by lint rules.
+* **Dependencies:** Node.js 20 LTS (`IMPLEMENTATION VERSION TO PIN`), npm workspaces, Turborepo, TypeScript 5.4.
+* **Inputs:** `PROJECT_BLUEPRINT.md`, `SUPPLY_CHAIN_SECURITY.md`
+* **Outputs:** Turborepo configuration, root `package.json` with npm workspaces, committed `package-lock.json`, shared `tsconfig.json`, ESLint / Prettier shared configs.
+* **Acceptance Criteria:** Monorepo builds cleanly with `npm run build`; clean installation verified via `npm ci`; workspace package dependency graph validated; circular dependencies prevented by lint rules.
 * **Tests:** Workspace dependency lint test, turbo cache validation test.
 * **Security Debt:** None
-* **Evidence Required:** `pnpm turbo build` clean log, dependency tree graph output.
+* **Evidence Required:** `npm ci` and `npm run build` clean execution logs, dependency tree graph output.
 * **Rollback:** Revert repository commit.
 * **Feature Flag:** NO
 * **Migration Impact:** None
@@ -203,12 +203,12 @@ Foundational infrastructure and CI/CD pipelines required before application code
 * **Prerequisites:** `WP-001`
 * **Dependencies:** PostgreSQL 16 in Supabase (`FROZEN ARCHITECTURE`), ORM Tooling (`IMPLEMENTATION TOOLING DECISION — MUST BE SELECTED BEFORE WP-003 START` by `17_Database_Engineer` and `03_Data_Architect`).
 * **Inputs:** `DATA_MODEL.md`, `DATA_MIGRATION_STRATEGY.md`
-* **Outputs:** Database connection harness, migration tool configuration supporting Expand-Migrate-Contract pattern, baseline schema directory.
-* **Acceptance Criteria:** Migration engine runs forward and backward cleanly; tracks migration checksums; validates transactionality of migrations.
-* **Tests:** Migration apply and rollback automated integration test against PostgreSQL 16 container.
+* **Outputs:** Database connection harness, migration tool configuration supporting Expand-Transition-Contract pattern, baseline schema directory.
+* **Acceptance Criteria:** Migration engine runs forward and backward cleanly in non-production test environments; tracks migration checksums; validates transactionality of migrations.
+* **Tests:** Migration apply and non-production down-step automated integration test against PostgreSQL 16 container.
 * **Security Debt:** None
-* **Evidence Required:** Clean migration runner output log showing up/down execution.
-* **Rollback:** Migration down execution.
+* **Evidence Required:** Clean migration runner output log showing up and non-production down-step execution.
+* **Rollback:** Non-production down-step test script or forward-fix (in production, schema evolution adheres strictly to `DATA_MIGRATION_STRATEGY.md`: Expand-Transition-Contract without destructive down migrations).
 * **Feature Flag:** NO
 * **Migration Impact:** None (Baseline engine)
 * **Risk:** Low
@@ -238,7 +238,7 @@ Foundational domain models, Multi-Tenant RLS isolation, IAM, and audit logging.
 * **Tests:** Automated penetration tests verifying tenant breakout attempt fails; RLS bypass attempt fails without bypassrls role.
 * **Security Debt:** `SEC-VAL-01` (Multi-Tenant Isolation & RLS bypass verification).
 * **Evidence Required:** RLS bypass negative test execution report with zero leaked cross-tenant rows.
-* **Rollback:** Drop migration with schema restore.
+* **Rollback:** Restore from pre-migration backup snapshot or non-production down-step (in production, follow Expand-Transition-Contract).
 * **Feature Flag:** NO
 * **Migration Impact:** Expand
 * **Risk:** Medium (Security critical)
@@ -343,7 +343,7 @@ Edge host runtime scaffolding, embedded persistence, local LAN communication, an
 * **Tests:** Concurrency stress test; simulated crash/power-cut recovery test verifying zero corrupted pages.
 * **Security Debt:** `DAT-04` (SQLite target-hardware power-loss durability validation).
 * **Evidence Required:** Pragma status query output and power-loss recovery benchmark test log.
-* **Rollback:** Delete/restore test SQLite database.
+* **Rollback:** Restore from pre-migration snapshot or transaction rollback on failure.
 * **Feature Flag:** NO
 * **Migration Impact:** None (Local embedded)
 * **Risk:** High (Local transactional authority)
@@ -408,8 +408,8 @@ Reliable synchronization between Cloud and Edge, transactional outbox, idempoten
 
 #### `WP-011`: Folio Lease Allocation & Fencing Protocol Engine
 * **Bounded Context:** Billing / TRIDENTPOS
-* **Frozen Requirements:** `DATA_MODEL.md` Sec. 4; `SYNC_AND_OFFLINE_ARCHITECTURE.md` Sec. 3; `ADR-002`
-* **ADRs:** `ADR-002`, `ADR-006`
+* **Frozen Requirements:** `SYNC_AND_OFFLINE_ARCHITECTURE.md` Sec. 1, 3; `DATA_ARCHITECTURE.md` (Folio Lease / Fencing invariant); `DATA_MODEL.md` Sec. 4; `ADR-002`, `ADR-008`
+* **ADRs:** `ADR-002`, `ADR-006`, `ADR-008`
 * **Data Objects:** Cloud `folio_leases`, SQLite `local_folio_leases`
 * **APIs / Contracts:** `POST /api/v1/sync/leases/request`, `POST /api/v1/sync/leases/heartbeat`
 * **Builder Agent:** `13_Backend_Developer`
@@ -417,13 +417,13 @@ Reliable synchronization between Cloud and Edge, transactional outbox, idempoten
 * **Code Reviewer:** `11_Code_Reviewer`
 * **Prerequisites:** `WP-004`, `WP-008`
 * **Dependencies:** PostgreSQL 16 in Supabase, SQLite.
-* **Inputs:** `DATA_MODEL.md` Sec. 4, `SYNC_AND_OFFLINE_ARCHITECTURE.md`
-* **Outputs:** Cloud lease manager allocating disjoint folio ranges with monotonic `epochId` and `fencingToken`; local Edge lease consumer updating high-water mark; zombie Edge rejection logic.
-* **Acceptance Criteria:** Prevents duplicate fiscal folio generation across multiple branches; reclaims expired leases; rejects synchronization payloads from zombie Edge instances with outdated fencing tokens.
-* **Tests:** Zombie Edge simulation test (outdated lease rejected); concurrent lease request test (zero overlapping ranges); lease exhaustion contingency test.
-* **Security Debt:** `SEC-VAL-04` (Lease fencing and zombie Edge simulation).
-* **Evidence Required:** Fencing token rejection test output and zero-overlap range audit log.
-* **Rollback:** Revoke lease in Cloud table.
+* **Inputs:** `DATA_MODEL.md` Sec. 4, `SYNC_AND_OFFLINE_ARCHITECTURE.md` Sec. 1, 3, `DATA_ARCHITECTURE.md`, `ADR-008`
+* **Outputs:** Cloud lease manager allocating disjoint folio ranges with monotonic `epochId` and `fencingToken`; local Edge lease consumer updating high-water mark; zombie Edge rejection logic returning HTTP 403 LEASE_REVOKED.
+* **Acceptance Criteria:** Prevents duplicate fiscal folio generation across multiple branches; manages lease expiry states without range recycling (a potentially consumed / abandoned folio range is NEVER reassigned or recycled; new allocations remain strictly monotonic beyond abandoned ranges); rejects synchronization payloads from zombie Edge instances with outdated fencing tokens with HTTP 403 LEASE_REVOKED.
+* **Tests:** Zombie Edge simulation test (outdated lease rejected with HTTP 403 LEASE_REVOKED); concurrent lease request test (zero overlapping ranges); lease exhaustion contingency test.
+* **Security Debt:** `SEC-VAL-04` (Lease fencing and zombie Edge simulation returning HTTP 403 LEASE_REVOKED).
+* **Evidence Required:** Fencing token rejection test output (HTTP 403 LEASE_REVOKED) and zero-overlap range audit log.
+* **Rollback:** Revoke lease in Cloud table (without range recycling).
 * **Feature Flag:** NO
 * **Migration Impact:** Expand
 * **Risk:** High (Fiscal integrity)
@@ -469,7 +469,7 @@ Reliable synchronization between Cloud and Edge, transactional outbox, idempoten
 * **Dependencies:** `ws` (WebSockets), TLS 1.3, SQLite, PostgreSQL 16 in Supabase.
 * **Inputs:** `SYNC_AND_OFFLINE_ARCHITECTURE.md`
 * **Outputs:** Edge sync client and Cloud WebSocket Gateway; automatic reconnection loop with exponential backoff; delta-pull protocol for catalog updates; outbox flushing pipeline upon WAN restoration.
-* **Acceptance Criteria:** Automatically detects WAN drop and recovery; drains local outbox upon reconnect; pulls catalog deltas; guarantees designated offline branch operations continue without network connectivity.
+* **Acceptance Criteria:** Automatically detects WAN drop and recovery; drains local outbox upon reconnect; pulls catalog deltas; offline-capable branch workflows designated by the frozen Solution Architecture are designed to continue using Edge-local authority during WAN loss, subject to topology, cached data, entitlements, folio lease availability and applicable offline policies. [IMPLEMENTATION / FAILURE-MODE VALIDATION REQUIRED]
 * **Tests:** Chaos network partition test (disconnect WAN while generating orders, restore WAN, verify complete eventual consistency without dropped orders).
 * **Security Debt:** `SEC-VAL-09` (WAN failure mode and offline continuity validation on designated workflows).
 * **Evidence Required:** Network partition chaos simulation report showing zero lost transactions after reconnection.
@@ -501,7 +501,7 @@ Dining room, counter orders, kitchen display (KDS), cash drawer, Cortes X/Z, and
 * **Outputs:** Local dining room aggregate service enforcing `expectedVersion` on `cuentas` and `mesas`; returns HTTP 409 Conflict on version mismatch; persists orders with Transactional Outbox records; defines `CancellationPolicy` and `BillSplitProrationStrategy` interfaces.
 * **Acceptance Criteria:** Prevents concurrent waiters from overwriting orders on shared table; detects conflict and provides current aggregate snapshot; orders saved locally under target latency (`< 5 ms`).
 * **Tests:** OCC race condition test (two concurrent clients submitting mutations with identical `expectedVersion`, exactly one succeeds, second receives 409); local latency benchmark.
-* **Security Debt:** `SEC-VAL-08` (Local latency benchmarking).
+* **Security Debt:** None. (Local order latency benchmarking is classified as `PERFORMANCE / IMPLEMENTATION ENGINEERING VALIDATION`, not `SEC-VAL-08`).
 * **Evidence Required:** OCC conflict test output log and latency benchmark results.
 * **Rollback:** Void order partition.
 * **Feature Flag:** NO
@@ -736,11 +736,11 @@ Customer profiles, points/rewards engine, and delivery aggregator webhooks (Uber
 * **Specialist Reviewer:** `08_Security_Architect`
 * **Code Reviewer:** `11_Code_Reviewer`
 * **Prerequisites:** `WP-014`
-* **Dependencies:** Node `crypto` (HMAC SHA-256 webhook signatures), Transactional Outbox, Aggregator APIs (`PROVIDER CONTRACT PENDING`).
+* **Dependencies:** Cryptographic libraries, Transactional Outbox, Aggregator APIs (`PROVIDER CONTRACT PENDING`).
 * **Inputs:** `SECURITY_ARCHITECTURE.md` Sec. 6, `FUNCTIONAL_ARCHITECTURE.md`
-* **Outputs:** Ingestion webhook endpoints verifying provider-specific HMAC signatures and timestamps; maps external aggregator order schema to internal `OrderAggregate`; auto-accept rules; routes comanda directly to target branch Edge Host via Sync Gateway.
-* **Acceptance Criteria:** Rejects unsigned or replay webhook payloads; maps catalog external product IDs to internal insumos/platos; injects comanda into KDS.
-* **Tests:** Webhook signature forgery test (must fail); replay attack test (timestamp $> 300\text{ s}$ rejected); simulated aggregator order injection test.
+* **Outputs:** Ingestion webhook endpoints implementing provider-specific cryptographic signature verification; connector contracts defining algorithm, signature header/location, public key or shared secret model, timestamp semantics, replay tolerance, event ID deduplication, key rotation, and failure behavior; maps external aggregator order schema to internal `OrderAggregate`; auto-accept rules; routes comanda directly to target branch Edge Host via Sync Gateway.
+* **Acceptance Criteria:** Rejects invalid signature or replay webhook payloads according to provider contract; maps catalog external product IDs to internal insumos/platos; injects comanda into KDS.
+* **Tests:** Webhook signature verification test per provider contract (forged signature rejected); replay attack test using provider-defined replay window (or `SECURITY POLICY DEFAULT` where authorized); simulated aggregator order injection test.
 * **Security Debt:** `SEC-VAL-10` (Provider webhook signature and timestamp contract verification).
 * **Evidence Required:** Webhook signature verification test report and order transformation output.
 * **Rollback:** Disable external delivery channel integration toggle.
@@ -873,7 +873,7 @@ Disaster recovery verification, hardware performance benchmarks, chaos tests, an
 * **Prerequisites:** `WP-027`
 * **Dependencies:** Code signing certificates (Windows Authenticode / macOS Developer ID), electron-builder.
 * **Inputs:** `SUPPLY_CHAIN_SECURITY.md`, `ADR-003`
-* **Outputs:** Signed production release packages for Windows, Linux, and macOS; Argon2id and SQLite benchmarks verified on representative low-end hardware ($\le 2\text{ GB}$ RAM); SLSA Level 3 provenance attestation and SBOM.
+* **Outputs:** Signed production release packages for Windows, Linux, and macOS; Argon2id and SQLite benchmarks verified on representative low-end hardware ($\le 2\text{ GB}$ RAM); SLSA Level 3 provenance attestation and SBOM (classified as `IMPLEMENTATION / RELEASE ENGINEERING TARGET — VALIDATION REQUIRED`).
 * **Acceptance Criteria:** Release binaries cryptographically signed; auto-update updates client seamlessly; benchmark proves Electron + SQLite + Argon2id operates stably within memory target on low-end test hardware.
 * **Tests:** Code signature verification test (`signtool verify` / `codesign -v`); memory usage stress benchmark on constrained test VM.
 * **Security Debt:** `SEC-VAL-08` (Argon2id benchmark on $\le 2\text{ GB}$ hardware), `RSK-11` (Node/Electron footprint validation), `RSK-08` (SSD write barrier / power loss verification).
@@ -1041,13 +1041,13 @@ Every one of the 11 cataloged Security Validation Debts is mapped to concrete Wo
 | **`SEC-VAL-01`** | Multi-Tenant Isolation (RLS bypass & tenant breakout) | `WP-004` | `17_Database_Engineer` | Automated SQL penetration test executing cross-tenant SELECT/UPDATE queries without session context. | `EVIDENCE_SEC_VAL_01_RLS_BREAKOUT.md` |
 | **`SEC-VAL-02`** | Offline IAM Brute Force & Rate Limiting | `WP-010` | `16_Native_Edge_Developer` | Automated attack script submitting 100 rapid invalid PINs to verify lockout after 5 attempts. | `EVIDENCE_SEC_VAL_02_PIN_LOCKOUT.md` |
 | **`SEC-VAL-03`** | Trust Bootstrap & Rogue Edge Resistance | `WP-009` | `16_Native_Edge_Developer` | LAN spoofing test simulating rogue mDNS server presenting mismatched certificate fingerprint. | `EVIDENCE_SEC_VAL_03_ROGUE_EDGE.md` |
-| **`SEC-VAL-04`** | Lease Fencing & Zombie Edge Rejection | `WP-011` | `13_Backend_Developer` | Chaos simulation sending sync batch with outdated `fencingToken` and verifying 409 rejection. | `EVIDENCE_SEC_VAL_04_ZOMBIE_EDGE.md` |
+| **`SEC-VAL-04`** | Lease Fencing & Zombie Edge Rejection | `WP-011` | `13_Backend_Developer` | Chaos simulation sending sync batch with outdated `fencingToken` and verifying HTTP 403 LEASE_REVOKED rejection. | `EVIDENCE_SEC_VAL_04_ZOMBIE_EDGE.md` |
 | **`SEC-VAL-05`** | Secrets & Vault Key Redaction | `WP-002`, `WP-005` | `18_DevOps_Engineer` | CI/CD Gitleaks/TruffleHog scanner and automated log redaction regex verification. | `EVIDENCE_SEC_VAL_05_SECRET_SCAN.md` |
 | **`SEC-VAL-06`** | Tamper-Evident Audit & SQLite Hash Chain | `WP-006` | `13_Backend_Developer` | Direct database alteration simulation verifying hash-chain breakage detection during sync. | `EVIDENCE_SEC_VAL_06_AUDIT_INTEGRITY.md` |
 | **`SEC-VAL-07`** | Electron Security & IPC Allowlist Hardening | `WP-007` | `16_Native_Edge_Developer` | Automated SAST scan and renderer XSS exploit test attempting to access Node `child_process`. | `EVIDENCE_SEC_VAL_07_ELECTRON_HARDENING.md` |
 | **`SEC-VAL-08`** | Hardware Benchmark (Argon2id on $\le 2\text{ GB}$ RAM) | `WP-010`, `WP-028` | `16_Native_Edge_Developer` | Performance benchmark on physical or VM hardware throttled to 2 GB RAM and 2 vCPUs. | `EVIDENCE_SEC_VAL_08_HARDWARE_BENCHMARK.md` |
 | **`SEC-VAL-09`** | WAN Failure Mode & Offline Continuity | `WP-013`, `WP-027` | `13_Backend_Developer` | Continuous order entry during simulated 30-minute WAN outage followed by reconnect sync. | `EVIDENCE_SEC_VAL_09_OFFLINE_CONTINUITY.md` |
-| **`SEC-VAL-10`** | Provider Contracts & Webhook Signatures | `WP-021`, `WP-023` | `13_Backend_Developer` | Mock webhook test submitting forged signatures and stale timestamps ($> 300\text{ s}$). | `EVIDENCE_SEC_VAL_10_WEBHOOK_SIGNATURES.md` |
+| **`SEC-VAL-10`** | Provider Contracts & Webhook Signatures | `WP-021`, `WP-023` | `13_Backend_Developer` | Mock webhook test submitting forged signatures and stale timestamps beyond provider-defined replay window (or `SECURITY POLICY DEFAULT`). | `EVIDENCE_SEC_VAL_10_WEBHOOK_SIGNATURES.md` |
 | **`SEC-VAL-11` (Policy)** | Legal & Privacy Retention Policy Review | Governance | `Product Owner` / Authorized Legal Counsel | Formal legal review of provisional customer data retention and pseudonymization policies. (`OWNER/PROVIDER REQUIRED BEFORE SEC-VAL-11 CAN CLOSE`). | `EVIDENCE_SEC_VAL_11_LEGAL_REVIEW.md` |
 | **`SEC-VAL-11` (Tech)** | Legal & Privacy Retention Technical Enforcement | `WP-022` | `13_Backend_Developer` | Data lifecycle automated tests verifying customer PII purge and pseudonymization routines conform to approved policy. | `EVIDENCE_SEC_VAL_11_TECH_ENFORCEMENT.md` |
 
@@ -1078,7 +1078,7 @@ Every one of the 11 cataloged Security Validation Debts is mapped to concrete Wo
 * **`better-sqlite3`:** `IMPLEMENTATION VERSION TO PIN`
 * **ORM Tooling (Drizzle vs. Prisma):** `IMPLEMENTATION TOOLING DECISION — MUST BE SELECTED BEFORE WP-003 START`.
   - Decision Owner: `17_Database_Engineer` in consultation with `03_Data_Architect`.
-  - Selection Criteria: (1) Minimal query latency overhead; (2) Native support for PostgreSQL 16 RLS session variables (`SET LOCAL app.current_organization_id`); (3) Migration safety supporting zero-downtime Expand-Migrate-Contract workflows; (4) Type-safety in TypeScript monorepo; (5) Supavisor connection pooling compatibility.
+  - Selection Criteria: (1) Minimal query latency overhead; (2) Native support for PostgreSQL 16 RLS session variables (`SET LOCAL app.current_organization_id`); (3) Migration safety supporting zero-downtime Expand-Transition-Contract workflows; (4) Type-safety in TypeScript monorepo; (5) Supavisor connection pooling compatibility.
 * **PAC CFDI Web Services (Finkok / Solución Factible / Edicom):** `PROVIDER CONTRACT PENDING`
 * **Delivery Aggregators (Uber Eats, Rappi, Didi Food APIs):** `PROVIDER CONTRACT PENDING`
 * **Payment Terminals (Clip, Mercado Pago, Banorte POS SDK):** `PO/COMMERCIAL DECISION PENDING` & `VALIDATION REQUIRED`

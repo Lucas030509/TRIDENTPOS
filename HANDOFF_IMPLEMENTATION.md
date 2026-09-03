@@ -28,7 +28,9 @@ Before any work package implementation begins:
    - Mandatory pull requests with at least 1 approved review.
    - Mandatory green CI checks (build, lint, typecheck, unit tests, secret scan).
    - Prohibition of direct commits and force-pushes to `main`.
-4. **Tooling Decision:** ORM selection (`Drizzle` vs. `Prisma`) must be formally recorded by `17_Database_Engineer` and `03_Data_Architect` prior to starting `WP-003`.
+4. **Supply Chain Contract:** Monorepo package management adheres strictly to `npm workspaces`, committed `package-lock.json`, and `npm ci` in all CI/build environments per `SUPPLY_CHAIN_SECURITY.md`.
+5. **Tooling Decision:** ORM selection (`Drizzle` vs. `Prisma`) must be formally recorded by `17_Database_Engineer` and `03_Data_Architect` prior to starting `WP-003`.
+6. **Migration Governance:** Database schema evolution adheres strictly to `DATA_MIGRATION_STRATEGY.md` (Expand-Transition-Contract). Universal destructive down-migrations in production are prohibited.
 
 ---
 
@@ -77,6 +79,8 @@ Builders are **STRICTLY FORBIDDEN** from making arbitrary assumptions or selecti
 ## 5. Security Validation Debts & External Authority
 
 - The 11 cataloged Security Validation Debts (`SEC-VAL-01` to `SEC-VAL-11`) are hard contractual requirements.
+- For `SEC-VAL-04` (Folio Leases): Rejection of zombie Edges must return `HTTP 403 LEASE_REVOKED` and allocated ranges must never be recycled.
+- For `SEC-VAL-10` (Webhooks): Verification logic must be provider-contract-driven with provider-defined replay windows without universal HMAC assumptions.
 - For `SEC-VAL-11` (Legal & Privacy Retention): Technical implementation is built by `13_Backend_Developer`, but final validation is an external governance dependency requiring formal review from Product Owner / Authorized Legal Counsel. `OWNER/PROVIDER REQUIRED BEFORE SEC-VAL-11 CAN CLOSE`.
 
 ---
