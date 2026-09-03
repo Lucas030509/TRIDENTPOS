@@ -80,6 +80,7 @@
     "IMPLEMENTATION_READINESS_GATE_EVIDENCE.md",
     "PRODUCT_OWNER_IMPLEMENTATION_READINESS_APPROVAL.md",
     "IMPLEMENTATION_ACTIVATION_BOOTSTRAP_AMENDMENT.md",
+    "ARCHITECTURE_CHANGE_REQUEST_IMPLEMENTATION_ACTIVATION_BOOTSTRAP.md",
     "HANDOFF_IMPLEMENTATION.md"
   ],
   "adr_suite": [
@@ -90,7 +91,8 @@
     "ADR/ADR-005-local-lan-communication-protocol.md",
     "ADR/ADR-006-outbox-and-idempotent-sync.md",
     "ADR/ADR-007-durable-cloud-integration-events.md",
-    "ADR/ADR-008-disaster-recovery-strategy.md"
+    "ADR/ADR-008-disaster-recovery-strategy.md",
+    "ADR/ADR-009-implementation-activation-bootstrap-protocol.md"
   ],
   "pending_po_decisions": 9,
   "governance_notes": [

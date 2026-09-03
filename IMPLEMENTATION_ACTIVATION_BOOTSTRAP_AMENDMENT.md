@@ -9,6 +9,10 @@
 **Repository:** [TRIDENTPOS](https://github.com/Lucas030509/TRIDENTPOS.git)  
 **Branch:** `governance/implementation-activation-bootstrap`  
 **Base Commit (Approved Main):** `e4ad2042be37d29250745f4c9af5de5a901fa5bb`  
+**Change Request:** `ACR-2026-002`  
+**Governing ADR:** `ADR/ADR-009-implementation-activation-bootstrap-protocol.md`  
+**Change Workflow:** `workflows/ARCHITECTURE_CHANGE.md`  
+**Independent Review:** `PENDING`  
 **Date:** `2026-09-03`  
 **Author Maximum Permitted Status:** `READY FOR INDEPENDENT GOVERNANCE REVIEW`  
 
