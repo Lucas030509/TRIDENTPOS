@@ -72,6 +72,7 @@
   "implementation_readiness_artifacts": [
     "IMPLEMENTATION_PLAN.md",
     "IMPLEMENTATION_READINESS_EVIDENCE.md",
+    "IMPLEMENTATION_READINESS_REMEDIATION_EVIDENCE.md",
     "HANDOFF_IMPLEMENTATION.md"
   ],
   "adr_suite": [

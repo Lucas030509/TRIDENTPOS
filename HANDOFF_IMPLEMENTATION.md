@@ -2,12 +2,15 @@
 
 > [!CAUTION]
 > **GOVERNANCE STATUS: NOT ACTIVE UNTIL IMPLEMENTATION_READINESS_GATE PASS**  
-> Builders and development agents are **STRICTLY PROHIBITED** from writing implementation code, applying migrations, or executing build work until the `IMPLEMENTATION_READINESS_GATE` has been formally evaluated by an `Independent Solution Architect` and awarded **`PASS`**, followed by official Product Owner approval.
+> Builders and development agents are **STRICTLY PROHIBITED** from writing implementation code, applying migrations, or executing build work until:
+> 1. The `IMPLEMENTATION_READINESS_GATE` has been formally evaluated by an `Independent Solution Architect` and awarded **`PASS`**.
+> 2. Official Product Owner approval (`PRODUCT_OWNER_IMPLEMENTATION_READINESS_APPROVAL`) is recorded and frozen.
+> 3. GitHub `main` branch protection is enabled and verified on remote.
 
 ---
 
 **Project:** `ERP RESTAURANTES / TRIDENTPOS`  
-**From Authority:** `01_Solution_Architect — IMPLEMENTATION READINESS AUTHOR`  
+**From Authority:** `01_Solution_Architect — IMPLEMENTATION READINESS REMEDIATION AUTHOR`  
 **To Target:** EAAF Implementation Layer (`13_Backend_Developer`, `14_Mobile_Developer`, `15_Web_Frontend_Developer`, `16_Native_Edge_Developer`, `17_Database_Engineer`, `18_DevOps_Engineer`)  
 **Governing Framework:** `EAAF v1.2.0 @ 7e036f43240b3dc28ccb996e350263598275b2cd`  
 **Frozen Architecture Baseline Main SHA:** `6c31b64c435d50177e192fc6c5b7e83e18ffd87f`  
@@ -16,12 +19,16 @@
 
 ---
 
-## 1. Governance Context & Prerequisites for Activation
+## 1. Activation Preconditions (Mandatory Gates Before Code Implementation)
 
 Before any work package implementation begins:
-1. **Gate Verdict:** `IMPLEMENTATION_READINESS_GATE` must be **PASS**.
-2. **Product Owner Decision:** Formal `PRODUCT_OWNER_IMPLEMENTATION_READINESS_APPROVAL` recorded and frozen.
-3. **Repository Control:** GitHub `main` branch protection must be enabled with mandatory PR reviews and CI status checks.
+1. **Gate Verdict:** `IMPLEMENTATION_READINESS_GATE` evaluated as **`PASS`** by Independent Solution Architect.
+2. **Product Owner Decision:** Formal PO Approval recorded and frozen.
+3. **Repository Control Activation Precondition:** GitHub `main` branch protection must be enabled on remote, enforcing:
+   - Mandatory pull requests with at least 1 approved review.
+   - Mandatory green CI checks (build, lint, typecheck, unit tests, secret scan).
+   - Prohibition of direct commits and force-pushes to `main`.
+4. **Tooling Decision:** ORM selection (`Drizzle` vs. `Prisma`) must be formally recorded by `17_Database_Engineer` and `03_Data_Architect` prior to starting `WP-003`.
 
 ---
 
@@ -42,31 +49,35 @@ Builders must execute work packages in strict wave dependency sequence according
 
 ---
 
-## 3. Branching, PR and Review Rules
+## 3. Branching, PR and Dual Review Rules
 
 * **Branch Per Work Package:** Every WP must be implemented on its own dedicated branch: `feature/wp-XXX-<slug>`.
 * **Builder $\ne$ Reviewer:** The author/builder of a PR cannot approve their own pull request.
-* **Review Requirements:**
-  - Database schema changes require `03_Data_Architect` approval.
-  - Security-sensitive code (auth, crypto, RLS, IPC) requires `08_Security_Architect` approval.
-  - Architecture contracts and context boundaries require `01_Solution_Architect` approval.
-  - DevOps pipelines require `10_DevOps_Platform_Architect` approval.
-  - All code requires `11_Code_Reviewer` verification.
-* **Evidence Delivery:** Every PR must include its verifiable evidence markdown artifact under `evidence/` documenting Expected vs. Actual, test run output, and remaining risk.
+* **Dual Review Requirements:** Every code-producing PR must receive approved reviews from BOTH:
+  1. **Primary Specialist Reviewer:**
+     - Database changes: `03_Data_Architect` (and `08_Security_Architect` for RLS).
+     - Security/Crypto/Auth/IPC changes: `08_Security_Architect`.
+     - Context boundary/Architecture contracts: `01_Solution_Architect`.
+     - DevOps pipelines/Packaging: `10_DevOps_Platform_Architect`.
+     - Testing/Chaos: `09_QA_Test_Architect`.
+  2. **Mandatory Code Reviewer:** `11_Code_Reviewer` on 100% of code-producing PRs.
+* **Evidence Delivery:** Every PR must include its verifiable evidence markdown artifact under `evidence/` documenting Expected vs. Actual, test run output, commit SHA, and remaining risk.
 
 ---
 
 ## 4. Protected Product Owner Decisions (Strict Invariants)
 
-Builders are **STRICTLY FORBIDDEN** from making arbitrary assumptions regarding the 9 protected questions:
+Builders are **STRICTLY FORBIDDEN** from making arbitrary assumptions or selecting default values regarding the 9 protected questions:
 - `OQ-SSOT-01` through `OQ-SSOT-07` and `OQ-ARCH-01` through `OQ-ARCH-02`.
-- All code touching these areas must use the parameterized interfaces defined in `IMPLEMENTATION_PLAN.md` Section 10.
+- All code touching these areas must strictly use the neutral, parameterized interfaces defined in `IMPLEMENTATION_PLAN.md` Section 10.
+- Any work package marked `PO Decision Required Before WP Completion` cannot be merged until the Product Owner records a formal business decision.
 
 ---
 
-## 5. Security Validation Debts to Deliver
+## 5. Security Validation Debts & External Authority
 
-The 11 cataloged Security Validation Debts (`SEC-VAL-01` to `SEC-VAL-11`) are hard contractual requirements. A work package covering a debt cannot be merged without its corresponding validation test evidence.
+- The 11 cataloged Security Validation Debts (`SEC-VAL-01` to `SEC-VAL-11`) are hard contractual requirements.
+- For `SEC-VAL-11` (Legal & Privacy Retention): Technical implementation is built by `13_Backend_Developer`, but final validation is an external governance dependency requiring formal review from Product Owner / Authorized Legal Counsel. `OWNER/PROVIDER REQUIRED BEFORE SEC-VAL-11 CAN CLOSE`.
 
 ---
 

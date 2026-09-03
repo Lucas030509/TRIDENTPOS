@@ -1,10 +1,10 @@
 # IMPLEMENTATION PLAN — ERP RESTAURANTES / TRIDENTPOS
 
 **Document ID:** `PLAN-IMP-001`  
-**Version:** `1.0 DRAFT`  
+**Version:** `1.1 REMEDIATED DRAFT (R1)`  
 **Status:** `READY FOR INDEPENDENT IMPLEMENTATION READINESS REVIEW`  
 **Date:** `2026-09-03`  
-**Author Agent:** `01_Solution_Architect — IMPLEMENTATION READINESS AUTHOR`  
+**Author Agent:** `01_Solution_Architect — IMPLEMENTATION READINESS REMEDIATION AUTHOR`  
 **Target Gate:** `gates/IMPLEMENTATION_READINESS_GATE.md`  
 **Governing Framework:** `EAAF v1.2.0 @ 7e036f43240b3dc28ccb996e350263598275b2cd`  
 **Immutable Architecture Baseline Commit:** `6c31b64c435d50177e192fc6c5b7e83e18ffd87f`  
@@ -17,10 +17,10 @@ This Implementation Plan establishes the authoritative, atomic, and governed eng
 
 Every implementation activity is decomposed into discrete, immutable **Work Packages (WPs)** that:
 1. Map strictly to approved and frozen architectural baselines.
-2. Separate implementation responsibilities (**Builder Agent**) from verification responsibilities (**Independent Reviewer**).
+2. Separate implementation responsibilities (**Builder Agent**) from verification responsibilities (**Specialist Reviewer** and **Mandatory Code Reviewer**).
 3. Explicitly document inputs, outputs, data objects, API contracts, objective acceptance criteria, automated test suites, rollback mechanisms, and required verification evidence.
 4. Directly incorporate all 11 cataloged Security Validation Debts (`SEC-VAL-01`..`11`), Data Validation Debts (`DAT-04`, `DAT-08`), and Solution Residual Risks (`RSK-08`, `RSK-11`, `RSK-15`).
-5. Strictly isolate and parameterize the 9 Protected Product Owner Decisions (`OQ-SSOT-01`..`07`, `OQ-ARCH-01`..`02`), ensuring zero implementation blocking while preventing unauthorized assumption of business rules.
+5. Strictly isolate and parameterize the 9 Protected Product Owner Decisions (`OQ-SSOT-01`..`07`, `OQ-ARCH-01`..`02`), ensuring zero implementation blocking while preventing any unauthorized assumption or default selection of business rules.
 
 ---
 
@@ -48,24 +48,27 @@ Under EAAF v1.2.0, architecture agents design and plan; implementation agents co
   - `16_Native_Edge_Developer`: Electron desktop runtime, local Fastify daemon, WebSocket server, printer drivers.
   - `17_Database_Engineer`: PostgreSQL schemas, RLS policies, SQLite WAL configurations, migration scripts.
   - `18_DevOps_Engineer`: Monorepo tooling, CI/CD pipelines, container packaging, security scanning, secret management.
-* **Independent Reviewer Roles (Verification Layer):**
+* **Specialist Reviewer Roles (Verification Layer):**
   - `01_Solution_Architect`: Architecture alignment, context boundary checks, ADR conformance.
   - `03_Data_Architect`: Schema compliance, OCC invariants, data authority topology, migration safety.
   - `08_Security_Architect`: Cryptographic validation, RLS bypass reviews, auth bounds, secret handling.
   - `09_QA_Test_Architect`: Test pyramid compliance, chaos/failure-mode validation, E2E test integrity.
   - `10_DevOps_Platform_Architect`: Pipeline integrity, supply chain provenance, build determinism.
-  - `11_Code_Reviewer`: Code quality, style, defensive programming, type safety, error boundaries.
+* **Mandatory Code Reviewer:**
+  - `11_Code_Reviewer`: Code quality, style, defensive programming, type safety, error boundaries. Required on 100% of code-producing WPs.
 
 ### 3.2 Repository Governance & Branching Model
 * **Current Repository Disposition (Main Branch Protection):**
-  - *Observation:* GitHub reports `main` branch protection is currently disabled (HTTP 404).
-  - *Disposition:* **BLOCKING ENTRY TO IMPLEMENTATION (PRE-IMPLEMENTATION GATE REQUIREMENT)**. Before Wave 0 execution begins, branch protection on `main` must be enabled by the repository administrator / DevOps Platform Architect, enforcing:
-    1. Require a pull request before merging (minimum 1 approved review from designated reviewer).
-    2. Require status checks to pass before merging (CI build, lint, typecheck, unit tests, secret scan).
-    3. Require branches to be up to date before merging.
-    4. Prohibit force pushes and direct commits to `main`.
+  - *Observation:* GitHub reports `main` branch protection is currently disabled (`HTTP 404`).
+  - *Disposition:* **`IMPLEMENTATION ACTIVATION PRECONDITION AFTER GATE`**.
+    - The `IMPLEMENTATION_READINESS_GATE` evaluates the readiness, completeness, and rigor of this implementation plan.
+    - However, builders and development agents remain strictly prohibited from beginning Wave 0 / `WP-001` execution or merging code to `main` until branch protection on `main` is enabled and independently verified on remote by repository administration / DevOps Platform Architect, enforcing:
+      1. Require a pull request before merging (minimum 1 approved review from designated reviewer).
+      2. Require status checks to pass before merging (CI build, lint, typecheck, unit tests, secret scan).
+      3. Require branches to be up to date before merging.
+      4. Prohibit force pushes and direct commits to `main`.
 * **Tag & Provenance Disposition:**
-  - Architecture freeze tags (`security-architecture-v1.0-approved`) are git-annotated tags. Downstream software release artifacts (Wave 9) require cryptographic signing (Cosign / Sigstore / GPG), signed commits in CI, and SLSA Level 3 provenance generation.
+  - Architecture freeze tags (`security-architecture-v1.0-approved`) are git-annotated tags. Downstream software release artifacts (`WP-028` in Wave 9) require cryptographic signing (Cosign / Sigstore / GPG), signed commits in CI, and SLSA Level 3 provenance generation.
 * **Branch Strategy:**
   - `main`: Protected production-ready code. Contains only approved, gate-passed merges.
   - `feature/wp-XXX-<slug>`: Dedicated branch created for each Work Package, branched from current `main`.
@@ -74,23 +77,34 @@ Under EAAF v1.2.0, architecture agents design and plan; implementation agents co
 
 ---
 
-## 4. Definition of Done (DoD)
+## 4. Definition of Done (DoD) & Metrics Classification
 
 ### 4.1 Work Package Level DoD
 A Work Package is marked **DONE** only when all of the following verifiable conditions are met:
 1. **Source Code:** Implementation satisfies 100% of the Acceptance Criteria with zero compiler or type errors (strict TypeScript / lint clean).
 2. **Architecture Compliance:** Zero violation of frozen Bounded Context boundaries, Data Authority matrices, or Security controls.
-3. **Automated Testing:** Unit test line coverage $\ge 85\%$ on business logic, plus 100% pass on required integration/contract tests.
+3. **Automated Testing:** Unit test line coverage satisfies target on business logic, plus 100% pass on required integration/contract tests.
 4. **Security & Data Debt:** Explicit downstream test obligations assigned to the WP are implemented and pass.
 5. **Rollback Verification:** Rollback mechanism (migration down-step, feature flag, or container revert) is documented and proven functional in testing.
 6. **Evidence Generation:** Verification evidence artifact generated adhering to EAAF standard (Expected vs. Actual, execution logs, commit SHA, timestamp).
-7. **Independent Review:** Formal review conducted and signed off by the assigned Independent Reviewer (Builder $\ne$ Reviewer).
+7. **Dual Independent Review:** Formal review conducted and signed off by both the assigned Specialist Reviewer and `11_Code_Reviewer` (Builder $\ne$ Reviewer).
 
 ### 4.2 Wave Level DoD
 A Wave is marked **COMPLETED** only when:
 1. All constituent Work Packages are verified DONE with signed evidence.
 2. Cross-package integration tests pass without regression.
 3. Wave exit criteria verified by `01_Solution_Architect`.
+
+### 4.3 Classification of Engineering Metrics and Performance Targets
+To ensure complete governance integrity, all numeric metrics across this plan are explicitly classified:
+* **Line Coverage $\ge 85\%$:** `IMPLEMENTATION ENGINEERING TARGET — VALIDATION REQUIRED`. (Non-architectural quality guideline for CI validation).
+* **Floor Comanda Event Latency $< 5\text{ ms}$:** `FROZEN LATENCY TARGET — REQUIRES HARDWARE BENCHMARK`. (From `PROJECT_BLUEPRINT.md` Sec. 2).
+* **KDS LAN Broadcast Latency $< 100\text{ ms}$:** `IMPLEMENTATION ENGINEERING TARGET — VALIDATION REQUIRED`.
+* **UI Touch Response Latency $< 16\text{ ms}$ (60 FPS):** `IMPLEMENTATION ENGINEERING TARGET — VALIDATION REQUIRED`.
+* **Mobile Comanda Submission $< 200\text{ ms}$:** `IMPLEMENTATION ENGINEERING TARGET — VALIDATION REQUIRED`.
+* **Peak Electron RAM Footprint $< 350\text{ MB}$:** `PROVISIONAL ENGINEERING TARGET — VALIDATION REQUIRED`.
+* **Total POS Hardware Footprint on Low-End POS ($\le 2\text{ GB}$) $< 500\text{ MB}$:** `PROVISIONAL ENGINEERING TARGET — VALIDATION REQUIRED`.
+* **Target RPO 0 / RTO $< 3\text{ min}$ (Crash/UPS) and RTO $< 30\text{ min}$ (Hardware Loss):** `DESIGN OBJECTIVES REQUIRING DR VALIDATION`. (From `PROJECT_BLUEPRINT.md` Sec. 2 & `SYNC_AND_OFFLINE_ARCHITECTURE.md`).
 
 ---
 
@@ -134,9 +148,10 @@ Foundational infrastructure and CI/CD pipelines required before application code
 * **Data Objects:** None (Tooling)
 * **APIs / Contracts:** Monorepo package boundaries (`@trident/core`, `@trident/pos`, `@trident/sync`, `@trident/ui`, `@trident/edge`)
 * **Builder Agent:** `18_DevOps_Engineer`
-* **Independent Reviewer:** `01_Solution_Architect`
+* **Specialist Reviewer:** `01_Solution_Architect`
+* **Code Reviewer:** `11_Code_Reviewer`
 * **Prerequisites:** `main` branch protection enabled on GitHub.
-* **Dependencies:** Node.js 20 LTS, pnpm workspace, Turborepo, TypeScript 5.4.
+* **Dependencies:** Node.js 20 LTS (`IMPLEMENTATION VERSION TO PIN`), pnpm workspace, Turborepo, TypeScript 5.4.
 * **Inputs:** `PROJECT_BLUEPRINT.md`
 * **Outputs:** Turborepo configuration, root `package.json`, `pnpm-workspace.yaml`, shared `tsconfig.json`, ESLint / Prettier shared configs.
 * **Acceptance Criteria:** Monorepo builds cleanly with `pnpm build`; workspace package dependency graph validated; circular dependencies prevented by lint rules.
@@ -158,7 +173,8 @@ Foundational infrastructure and CI/CD pipelines required before application code
 * **Data Objects:** None (CI/CD)
 * **APIs / Contracts:** GitHub Actions workflows
 * **Builder Agent:** `18_DevOps_Engineer`
-* **Independent Reviewer:** `10_DevOps_Platform_Architect`
+* **Specialist Reviewer:** `10_DevOps_Platform_Architect`
+* **Code Reviewer:** `11_Code_Reviewer`
 * **Prerequisites:** `WP-001`
 * **Dependencies:** GitHub Actions, Trivy, TruffleHog / Gitleaks, ESLint, TypeScript.
 * **Inputs:** `SUPPLY_CHAIN_SECURITY.md`, `project-manifest.json`
@@ -180,15 +196,16 @@ Foundational infrastructure and CI/CD pipelines required before application code
 * **Frozen Requirements:** `DATA_ARCHITECTURE.md` Sec. 2, 4; `DATA_MIGRATION_STRATEGY.md`
 * **ADRs:** `ADR-001`, `ADR-002`
 * **Data Objects:** Migration tracking table (`_migrations`), extensions (`uuid-ossp`, `pgcrypto`)
-* **APIs / Contracts:** Drizzle ORM / Prisma migration CLI runner
+* **APIs / Contracts:** Database migration CLI runner (tooling to be selected before WP-003 start).
 * **Builder Agent:** `17_Database_Engineer`
-* **Independent Reviewer:** `03_Data_Architect`
+* **Specialist Reviewer:** `03_Data_Architect`
+* **Code Reviewer:** `11_Code_Reviewer`
 * **Prerequisites:** `WP-001`
-* **Dependencies:** PostgreSQL 15+ (Supabase compatible), migration toolchain.
+* **Dependencies:** PostgreSQL 16 in Supabase (`FROZEN ARCHITECTURE`), ORM Tooling (`IMPLEMENTATION TOOLING DECISION — MUST BE SELECTED BEFORE WP-003 START` by `17_Database_Engineer` and `03_Data_Architect`).
 * **Inputs:** `DATA_MODEL.md`, `DATA_MIGRATION_STRATEGY.md`
 * **Outputs:** Database connection harness, migration tool configuration supporting Expand-Migrate-Contract pattern, baseline schema directory.
 * **Acceptance Criteria:** Migration engine runs forward and backward cleanly; tracks migration checksums; validates transactionality of migrations.
-* **Tests:** Migration apply and rollback automated integration test against local PostgreSQL container.
+* **Tests:** Migration apply and rollback automated integration test against PostgreSQL 16 container.
 * **Security Debt:** None
 * **Evidence Required:** Clean migration runner output log showing up/down execution.
 * **Rollback:** Migration down execution.
@@ -211,9 +228,10 @@ Foundational domain models, Multi-Tenant RLS isolation, IAM, and audit logging.
 * **Data Objects:** `organizations`, `branches`, `organization_memberships`
 * **APIs / Contracts:** Tenant context session manager (`SET LOCAL app.current_organization_id`)
 * **Builder Agent:** `17_Database_Engineer`
-* **Independent Reviewer:** `08_Security_Architect`
+* **Specialist Reviewer:** `08_Security_Architect` & `03_Data_Architect`
+* **Code Reviewer:** `11_Code_Reviewer`
 * **Prerequisites:** `WP-003`
-* **Dependencies:** PostgreSQL RLS
+* **Dependencies:** PostgreSQL 16 RLS (`FROZEN ARCHITECTURE`).
 * **Inputs:** `DATA_MODEL.md` Sec. 1, `SECURITY_ARCHITECTURE.md` Sec. 4
 * **Outputs:** SQL migration creating `organizations`, `branches`, and foundational RLS helper function `current_app_org_id()`; composite unique keys `(organization_id, id)`.
 * **Acceptance Criteria:** RLS enabled on all tables with `FORCE ROW LEVEL SECURITY`; default deny active; cross-tenant query returns zero records when session variable is set to distinct organization.
@@ -235,7 +253,8 @@ Foundational domain models, Multi-Tenant RLS isolation, IAM, and audit logging.
 * **Data Objects:** `users`, `roles`, `permissions`, `role_permissions`, `user_roles`
 * **APIs / Contracts:** Auth token verification middleware, RBAC evaluation service
 * **Builder Agent:** `13_Backend_Developer`
-* **Independent Reviewer:** `08_Security_Architect`
+* **Specialist Reviewer:** `08_Security_Architect`
+* **Code Reviewer:** `11_Code_Reviewer`
 * **Prerequisites:** `WP-004`
 * **Dependencies:** Supabase Auth / JWT verification library, Argon2id / bcrypt.
 * **Inputs:** `IAM_SECURITY_MODEL.md`, `SECURITY_CONTROL_MATRIX.md`
@@ -259,9 +278,10 @@ Foundational domain models, Multi-Tenant RLS isolation, IAM, and audit logging.
 * **Data Objects:** `audit_log_events`, `security_telemetry_events`
 * **APIs / Contracts:** Structured audit logger interface (`logAuditEvent()`)
 * **Builder Agent:** `13_Backend_Developer`
-* **Independent Reviewer:** `08_Security_Architect`
+* **Specialist Reviewer:** `08_Security_Architect`
+* **Code Reviewer:** `11_Code_Reviewer`
 * **Prerequisites:** `WP-004`
-* **Dependencies:** PostgreSQL, cryptographic hashing library (SHA-256).
+* **Dependencies:** PostgreSQL 16, cryptographic hashing library (SHA-256).
 * **Inputs:** `SECURITY_LOGGING_AND_MONITORING.md`
 * **Outputs:** Append-only audit log table with hash-chaining column (`previous_record_hash`, `record_hash`); structured logger automatically redacting PII and credentials.
 * **Acceptance Criteria:** Audit table enforces append-only via DB trigger (rejects UPDATE / DELETE); each entry chains hash of preceding entry; PII / passwords automatically redacted from payload.
@@ -288,9 +308,10 @@ Edge host runtime scaffolding, embedded persistence, local LAN communication, an
 * **Data Objects:** Local configuration files (`edge-config.json`)
 * **APIs / Contracts:** IPC bridge interface (`preload.ts`)
 * **Builder Agent:** `16_Native_Edge_Developer`
-* **Independent Reviewer:** `08_Security_Architect`
+* **Specialist Reviewer:** `08_Security_Architect`
+* **Code Reviewer:** `11_Code_Reviewer`
 * **Prerequisites:** `WP-001`
-* **Dependencies:** Electron 30+, Node.js 20.
+* **Dependencies:** Electron 30+ (`IMPLEMENTATION VERSION TO PIN`), Node.js 20 LTS.
 * **Inputs:** `ADR-003`, `SECURITY_ARCHITECTURE.md` Sec. 8
 * **Outputs:** Electron main and preload processes configured with: `contextIsolation: true`, `nodeIntegration: false`, `sandbox: true`, strict CSP headers, IPC allowlist bridge.
 * **Acceptance Criteria:** Electron window initializes without Node.js exposed to renderer; IPC messages restricted to strictly allowlisted channels; external URL navigation intercepted and blocked.
@@ -312,13 +333,14 @@ Edge host runtime scaffolding, embedded persistence, local LAN communication, an
 * **Data Objects:** SQLite database file (`edge_pos.db`), WAL journal
 * **APIs / Contracts:** Local Database Service (`runInTransaction()`, `setSyncPragma()`)
 * **Builder Agent:** `16_Native_Edge_Developer`
-* **Independent Reviewer:** `03_Data_Architect`
+* **Specialist Reviewer:** `03_Data_Architect`
+* **Code Reviewer:** `11_Code_Reviewer`
 * **Prerequisites:** `WP-007`
-* **Dependencies:** `better-sqlite3` or official SQLite Node binding with WAL support.
+* **Dependencies:** `better-sqlite3` (`IMPLEMENTATION VERSION TO PIN`).
 * **Inputs:** `DATA_ARCHITECTURE.md` Sec. 3, `ADR-004`
 * **Outputs:** SQLite connection factory configured with `PRAGMA journal_mode = WAL;`, dual synchronous mode (`NORMAL` for floor ops, `FULL` for Corte Z / cash close), automated WAL checkpointing manager.
 * **Acceptance Criteria:** SQLite database opens with WAL mode verified; executes concurrent reads during active write transactions without SQLITE_BUSY lockouts; switches pragma dynamically for fiscal/cash close transactions.
-* **Tests:** Concurrency stress test (50 concurrent local read/write threads); simulated crash/power-cut recovery test verifying zero corrupted pages.
+* **Tests:** Concurrency stress test; simulated crash/power-cut recovery test verifying zero corrupted pages.
 * **Security Debt:** `DAT-04` (SQLite target-hardware power-loss durability validation).
 * **Evidence Required:** Pragma status query output and power-loss recovery benchmark test log.
 * **Rollback:** Delete/restore test SQLite database.
@@ -336,7 +358,8 @@ Edge host runtime scaffolding, embedded persistence, local LAN communication, an
 * **Data Objects:** `edge_hosts`, `station_credentials`, `enrollment_tokens`
 * **APIs / Contracts:** Mutual enrollment TLS handshake (`/api/v1/edge/enroll`)
 * **Builder Agent:** `16_Native_Edge_Developer`
-* **Independent Reviewer:** `08_Security_Architect`
+* **Specialist Reviewer:** `08_Security_Architect`
+* **Code Reviewer:** `11_Code_Reviewer`
 * **Prerequisites:** `WP-005`, `WP-007`
 * **Dependencies:** mDNS (Bonjour), Node `crypto` (TLS certificate generation, SHA-256 fingerprinting).
 * **Inputs:** `SECURITY_ARCHITECTURE.md` Sec. 3, `R2F-01`
@@ -360,12 +383,13 @@ Edge host runtime scaffolding, embedded persistence, local LAN communication, an
 * **Data Objects:** SQLite `CachedUsers`, `StationSessions`
 * **APIs / Contracts:** Local auth API (`POST /api/v1/auth/pin`)
 * **Builder Agent:** `16_Native_Edge_Developer`
-* **Independent Reviewer:** `08_Security_Architect`
+* **Specialist Reviewer:** `08_Security_Architect`
+* **Code Reviewer:** `11_Code_Reviewer`
 * **Prerequisites:** `WP-008`, `WP-009`
 * **Dependencies:** Argon2id native library, SQLite 3.
 * **Inputs:** `IAM_SECURITY_MODEL.md` Sec. 3
-* **Outputs:** SQLite tables for cached user PIN hashes; Argon2id verification routine; local lockout manager (lockout for 5 minutes after 5 consecutive failed attempts); session token generator bound to station ID.
-* **Acceptance Criteria:** PIN resolved locally under 15ms; lockout triggered upon 5th failure; clock rollback detected (rejects tokens if local clock moves backward before issuedAt); expired cache invalidation.
+* **Outputs:** SQLite tables for cached user PIN hashes; Argon2id verification routine; local lockout manager (lockout after consecutive failed attempts); session token generator bound to station ID.
+* **Acceptance Criteria:** PIN resolved locally; lockout triggered upon repeated failures; clock rollback detected (rejects tokens if local clock moves backward before issuedAt); expired cache invalidation.
 * **Tests:** Brute force PIN attack test (verifying lockout); clock tampering test; Argon2id performance benchmark on resource-constrained process.
 * **Security Debt:** `SEC-VAL-02` (Offline IAM brute force and lockout testing), `SEC-VAL-08` (Argon2id benchmark on $\le 2\text{ GB}$ RAM hardware).
 * **Evidence Required:** Argon2id benchmark execution times and lockout verification logs.
@@ -389,9 +413,10 @@ Reliable synchronization between Cloud and Edge, transactional outbox, idempoten
 * **Data Objects:** Cloud `folio_leases`, SQLite `local_folio_leases`
 * **APIs / Contracts:** `POST /api/v1/sync/leases/request`, `POST /api/v1/sync/leases/heartbeat`
 * **Builder Agent:** `13_Backend_Developer`
-* **Independent Reviewer:** `03_Data_Architect`
+* **Specialist Reviewer:** `03_Data_Architect`
+* **Code Reviewer:** `11_Code_Reviewer`
 * **Prerequisites:** `WP-004`, `WP-008`
-* **Dependencies:** PostgreSQL, SQLite.
+* **Dependencies:** PostgreSQL 16 in Supabase, SQLite.
 * **Inputs:** `DATA_MODEL.md` Sec. 4, `SYNC_AND_OFFLINE_ARCHITECTURE.md`
 * **Outputs:** Cloud lease manager allocating disjoint folio ranges with monotonic `epochId` and `fencingToken`; local Edge lease consumer updating high-water mark; zombie Edge rejection logic.
 * **Acceptance Criteria:** Prevents duplicate fiscal folio generation across multiple branches; reclaims expired leases; rejects synchronization payloads from zombie Edge instances with outdated fencing tokens.
@@ -413,13 +438,14 @@ Reliable synchronization between Cloud and Edge, transactional outbox, idempoten
 * **Data Objects:** Cloud `CloudIntegrationOutbox`, SQLite `OutboxQueue`, `IngestedIdempotencyLog`
 * **APIs / Contracts:** Sync payload contracts (`SyncBatchDTO`)
 * **Builder Agent:** `13_Backend_Developer`
-* **Independent Reviewer:** `01_Solution_Architect`
+* **Specialist Reviewer:** `01_Solution_Architect`
+* **Code Reviewer:** `11_Code_Reviewer`
 * **Prerequisites:** `WP-004`, `WP-008`
-* **Dependencies:** PostgreSQL, SQLite, fast JSON serializer.
+* **Dependencies:** PostgreSQL 16 in Supabase, SQLite, fast JSON serializer.
 * **Inputs:** `ADR-006`, `SYNC_AND_OFFLINE_ARCHITECTURE.md`
 * **Outputs:** Edge `OutboxQueue` table updated in the same local transaction as domain data; `IngestedIdempotencyLog` with composite key `(orgId, branchId, aggregateType, aggregateId, action, clientOpId)`; Cloud outbox dispatcher with DLQ.
-* **Acceptance Criteria:** Re-transmitting identical payload returns cached original response with zero duplicate state mutations; sequence monotonicity maintained per aggregate stream; failed messages routed to DLQ after 5 retries.
-* **Tests:** Idempotent retry simulation (duplicate batch sent 10 times, exactly 1 mutation executed); sequence gap detection test.
+* **Acceptance Criteria:** Re-transmitting identical payload returns cached original response with zero duplicate state mutations; sequence monotonicity maintained per aggregate stream; failed messages routed to DLQ after retries.
+* **Tests:** Idempotent retry simulation (duplicate batch sent multiple times, exactly 1 mutation executed); sequence gap detection test.
 * **Security Debt:** None
 * **Evidence Required:** Idempotency test suite log demonstrating deduplication.
 * **Rollback:** Clear Outbox message queue or re-queue DLQ.
@@ -437,13 +463,14 @@ Reliable synchronization between Cloud and Edge, transactional outbox, idempoten
 * **Data Objects:** `sync_checkpoints`, `sync_telemetry`
 * **APIs / Contracts:** WebSocket Sync Gateway (`WSS /api/v1/sync/stream`)
 * **Builder Agent:** `13_Backend_Developer`
-* **Independent Reviewer:** `01_Solution_Architect`
+* **Specialist Reviewer:** `01_Solution_Architect`
+* **Code Reviewer:** `11_Code_Reviewer`
 * **Prerequisites:** `WP-010`, `WP-011`, `WP-012`
-* **Dependencies:** `ws` (WebSockets), TLS 1.3, SQLite, PostgreSQL.
+* **Dependencies:** `ws` (WebSockets), TLS 1.3, SQLite, PostgreSQL 16 in Supabase.
 * **Inputs:** `SYNC_AND_OFFLINE_ARCHITECTURE.md`
 * **Outputs:** Edge sync client and Cloud WebSocket Gateway; automatic reconnection loop with exponential backoff; delta-pull protocol for catalog updates; outbox flushing pipeline upon WAN restoration.
 * **Acceptance Criteria:** Automatically detects WAN drop and recovery; drains local outbox upon reconnect; pulls catalog deltas; guarantees designated offline branch operations continue without network connectivity.
-* **Tests:** Chaos network partition test (disconnect WAN for 15 minutes while generating orders, restore WAN, verify complete eventual consistency without dropped orders).
+* **Tests:** Chaos network partition test (disconnect WAN while generating orders, restore WAN, verify complete eventual consistency without dropped orders).
 * **Security Debt:** `SEC-VAL-09` (WAN failure mode and offline continuity validation on designated workflows).
 * **Evidence Required:** Network partition chaos simulation report showing zero lost transactions after reconnection.
 * **Rollback:** Pause sync queue processing.
@@ -466,20 +493,21 @@ Dining room, counter orders, kitchen display (KDS), cash drawer, Cortes X/Z, and
 * **Data Objects:** SQLite & Cloud `zonas_mesas`, `mesas`, `cuentas`, `ordenes`, `orden_partidas`, `orden_modificadores`
 * **APIs / Contracts:** Fastify local POS REST API (`POST /cuentas`, `POST /ordenes/partidas`, `PUT /cuentas/:id/cerrar`)
 * **Builder Agent:** `16_Native_Edge_Developer`
-* **Independent Reviewer:** `03_Data_Architect`
+* **Specialist Reviewer:** `03_Data_Architect`
+* **Code Reviewer:** `11_Code_Reviewer`
 * **Prerequisites:** `WP-008`, `WP-010`, `WP-012`
 * **Dependencies:** SQLite 3 WAL, local Fastify daemon.
 * **Inputs:** `DATA_MODEL.md` Sec. 2, `DATA_AUTHORITY_MATRIX.md`
-* **Outputs:** Local dining room aggregate service enforcing `expectedVersion` on `cuentas` and `mesas`; returns HTTP 409 Conflict on version mismatch; persists orders with Transactional Outbox records.
-* **Acceptance Criteria:** Prevents concurrent waiters from overwriting orders on shared table; detects conflict and provides current aggregate snapshot; orders saved locally in $< 5\text{ ms}$.
+* **Outputs:** Local dining room aggregate service enforcing `expectedVersion` on `cuentas` and `mesas`; returns HTTP 409 Conflict on version mismatch; persists orders with Transactional Outbox records; defines `CancellationPolicy` and `BillSplitProrationStrategy` interfaces.
+* **Acceptance Criteria:** Prevents concurrent waiters from overwriting orders on shared table; detects conflict and provides current aggregate snapshot; orders saved locally under target latency (`< 5 ms`).
 * **Tests:** OCC race condition test (two concurrent clients submitting mutations with identical `expectedVersion`, exactly one succeeds, second receives 409); local latency benchmark.
 * **Security Debt:** `SEC-VAL-08` (Local latency benchmarking).
-* **Evidence Required:** OCC conflict test output log and latency benchmark results ($\le 5\text{ ms}$).
+* **Evidence Required:** OCC conflict test output log and latency benchmark results.
 * **Rollback:** Void order partition.
 * **Feature Flag:** NO
 * **Migration Impact:** Expand
 * **Risk:** Medium
-* **PO Dependency:** `OQ-SSOT-01` (Parameterized: cancellation permissions isolated via policy interface), `OQ-SSOT-02` (Parameterized: table transfer PIN verification check isolated).
+* **PO Dependency:** `OQ-SSOT-01` (Classification: B & E; parameterization hook created; concrete policy PENDING PO DECISION), `OQ-SSOT-02` (Classification: B & E; transfer rule hook created; concrete rule PENDING PO DECISION), `OQ-SSOT-06` (Classification: B & E; split proration interface created; concrete algorithm PENDING PO DECISION).
 * **Parallelizable:** NO
 * **Handoff Target:** `WP-015`, `WP-016`, `WP-017`
 
@@ -490,12 +518,13 @@ Dining room, counter orders, kitchen display (KDS), cash drawer, Cortes X/Z, and
 * **Data Objects:** SQLite `kds_estaciones`, `kds_tickets`, `kds_ticket_partidas`, `impresoras_red`
 * **APIs / Contracts:** Local WebSocket broadcast (`WS /kds/events`), ESC/POS raw socket printer service
 * **Builder Agent:** `16_Native_Edge_Developer`
-* **Independent Reviewer:** `01_Solution_Architect`
+* **Specialist Reviewer:** `01_Solution_Architect`
+* **Code Reviewer:** `11_Code_Reviewer`
 * **Prerequisites:** `WP-014`
 * **Dependencies:** Raw TCP socket (port 9100) for ESC/POS, WebSockets for KDS screens.
 * **Inputs:** `ADR-005`, `FUNCTIONAL_ARCHITECTURE.md` Sec. 3
 * **Outputs:** Local WebSocket pub/sub engine broadcasting new order events to connected KDS screens; ESC/POS network ticket formatter with queue and retry mechanism.
-* **Acceptance Criteria:** KDS displays new comanda ticket in $< 100\text{ ms}$ over LAN; handles printer offline state gracefully without crashing order flow; queues unprinted tickets.
+* **Acceptance Criteria:** KDS displays new comanda ticket within LAN target latency; handles printer offline state gracefully without crashing order flow; queues unprinted tickets.
 * **Tests:** LAN broadcast latency test; printer paper-out / network disconnect test verifying queue persistence in SQLite.
 * **Security Debt:** None
 * **Evidence Required:** KDS event timing log and printer failure recovery test log.
@@ -514,11 +543,12 @@ Dining room, counter orders, kitchen display (KDS), cash drawer, Cortes X/Z, and
 * **Data Objects:** `turnos_caja`, `movimientos_caja`, `cortes_caja`, `arqueos_ciegos`
 * **APIs / Contracts:** Cash shift management API (`POST /turnos/apertura`, `POST /turnos/corte-z`)
 * **Builder Agent:** `16_Native_Edge_Developer`
-* **Independent Reviewer:** `03_Data_Architect`
+* **Specialist Reviewer:** `03_Data_Architect`
+* **Code Reviewer:** `11_Code_Reviewer`
 * **Prerequisites:** `WP-014`
 * **Dependencies:** SQLite 3 (with `PRAGMA synchronous = FULL` for Corte Z), ESC/POS receipt printer.
 * **Inputs:** `DATA_MODEL.md` Sec. 2, `FUNCTIONAL_ARCHITECTURE.md`
-* **Outputs:** Cash shift management service enforcing OCC on `turnos_caja`; blind count (arqueo ciego) validation; Corte X (read-only partial) and Corte Z (fiscal reset and lock); triggers physical cash drawer pulse.
+* **Outputs:** Cash shift management service enforcing OCC on `turnos_caja`; blind count (arqueo ciego) validation; Corte X (read-only partial) and Corte Z (fiscal reset and lock); triggers physical cash drawer pulse; provides abstract `ShiftAssignmentStrategy` hook.
 * **Acceptance Criteria:** Blind count captures declared cash before displaying calculated total; Corte Z permanently freezes shift and triggers `PRAGMA synchronous = FULL` commit before emitting sync event; cash discrepancies recorded in audit log.
 * **Tests:** Blind count calculation test; double-close attempt test (blocked by OCC); crash simulation during Corte Z commit.
 * **Security Debt:** `DAT-04` (Corte Z durability validation).
@@ -527,7 +557,7 @@ Dining room, counter orders, kitchen display (KDS), cash drawer, Cortes X/Z, and
 * **Feature Flag:** NO
 * **Migration Impact:** Expand
 * **Risk:** Medium
-* **PO Dependency:** `OQ-ARCH-01` (Parameterized: multi-cashier shift model isolated behind policy interface).
+* **PO Dependency:** `OQ-ARCH-01` (Classification: D; PO BLOCKED AT BUSINESS-SEMANTIC COMPLETION. Generic shift and drawer ledger can be scaffolded, but concrete shift assignment behavior requires PO decision).
 * **Parallelizable:** YES (with `WP-015`)
 * **Handoff Target:** `WP-017`, `WP-018`
 
@@ -543,11 +573,12 @@ Stock management, recipes, automated depletion via KDS production, purchase orde
 * **Data Objects:** `insumos`, `unidades_medida`, `almacenes`, `recetas`, `receta_ingredientes`, `subrecetas`
 * **APIs / Contracts:** Recipe service (`calculateRecipeCost()`, `explodeIngredients()`)
 * **Builder Agent:** `13_Backend_Developer`
-* **Independent Reviewer:** `03_Data_Architect`
+* **Specialist Reviewer:** `03_Data_Architect`
+* **Code Reviewer:** `11_Code_Reviewer`
 * **Prerequisites:** `WP-004`
-* **Dependencies:** PostgreSQL (Cloud SoR), Drizzle ORM.
+* **Dependencies:** PostgreSQL 16 in Supabase (`FROZEN ARCHITECTURE`).
 * **Inputs:** `DATA_MODEL.md` Sec. 3
-* **Outputs:** Multi-warehouse inventory schema; hierarchical sub-recipe explosion engine supporting yield factors and waste percentages.
+* **Outputs:** Multi-warehouse inventory schema; hierarchical sub-recipe explosion engine supporting yield factors and waste percentages; defines `ModifierRecipeResolver` contract.
 * **Acceptance Criteria:** Correctly explodes nested sub-recipes to base raw materials; calculates theoretical unit cost based on weighted average purchase price.
 * **Tests:** Recursive recipe unit test; zero-division edge case test (zero cost insumo); cycle detection test in recipe graph.
 * **Security Debt:** None
@@ -556,7 +587,7 @@ Stock management, recipes, automated depletion via KDS production, purchase orde
 * **Feature Flag:** NO
 * **Migration Impact:** Expand
 * **Risk:** Medium
-* **PO Dependency:** `OQ-SSOT-07` (Parameterized: recipe priority for modifiers isolated behind modifier-resolution interface).
+* **PO Dependency:** `OQ-SSOT-07` (Classification: B & E; modifier recipe resolution contract created; concrete algorithm semantics PENDING PO DECISION).
 * **Parallelizable:** YES (with `WP-014`)
 * **Handoff Target:** `WP-018`, `WP-019`
 
@@ -567,9 +598,10 @@ Stock management, recipes, automated depletion via KDS production, purchase orde
 * **Data Objects:** `stock_actual`, `movimientos_inventario` (Kárdex), `mermas_inventario`
 * **APIs / Contracts:** Inventory event consumer (`onKdsOrderProduced()`, `registerWaste()`)
 * **Builder Agent:** `13_Backend_Developer`
-* **Independent Reviewer:** `03_Data_Architect`
+* **Specialist Reviewer:** `03_Data_Architect`
+* **Code Reviewer:** `11_Code_Reviewer`
 * **Prerequisites:** `WP-017`, `WP-015`
-* **Dependencies:** PostgreSQL, transactional event bus.
+* **Dependencies:** PostgreSQL 16 in Supabase, transactional event bus.
 * **Inputs:** `DATA_MODEL.md` Sec. 3
 * **Outputs:** Monotonic Kárdex event ledger; automated inventory deduction upon order production completion in KDS; physical waste registration with mandatory reason code and photo attachment link.
 * **Acceptance Criteria:** Kárdex balances never updated directly (only derived via append-only movements); stock balance matches sum of historical movements; negative stock triggers configurable operational alert.
@@ -591,11 +623,12 @@ Stock management, recipes, automated depletion via KDS production, purchase orde
 * **Data Objects:** `proveedores`, `ordenes_compra`, `orden_compra_partidas`, `recepciones_mercancia`, `recepcion_partidas`
 * **APIs / Contracts:** Procurement REST API (`POST /compras/ordenes`, `POST /compras/recepciones`)
 * **Builder Agent:** `13_Backend_Developer`
-* **Independent Reviewer:** `01_Solution_Architect`
+* **Specialist Reviewer:** `01_Solution_Architect`
+* **Code Reviewer:** `11_Code_Reviewer`
 * **Prerequisites:** `WP-017`
-* **Dependencies:** PostgreSQL Cloud.
+* **Dependencies:** PostgreSQL 16 in Supabase.
 * **Inputs:** `DATA_MODEL.md` Sec. 3
-* **Outputs:** Purchase order lifecycle (Draft $\rightarrow$ Sent $\rightarrow$ Partial $\rightarrow$ Received); physical receiving dock module validating delivered quantities and unit costs against PO; updates Kárdex and weighted average cost upon reception confirmation.
+* **Outputs:** Purchase order lifecycle (Draft $\rightarrow$ Sent $\rightarrow$ Partial $\rightarrow$ Received); physical receiving dock module validating delivered quantities and unit costs against PO; updates Kárdex and weighted average cost upon reception confirmation; provides `ReplenishmentSuggestionProvider` interface.
 * **Acceptance Criteria:** Partial receiving leaves PO in partial state; receiving automatically increments warehouse stock; unit cost variation exceeding threshold requires supervisor authorization.
 * **Tests:** Partial delivery test; price discrepancy authorization test; stock increment verification test.
 * **Security Debt:** None
@@ -604,7 +637,7 @@ Stock management, recipes, automated depletion via KDS production, purchase orde
 * **Feature Flag:** NO
 * **Migration Impact:** Expand
 * **Risk:** Low
-* **PO Dependency:** `OQ-SSOT-05` (Parameterized: automatic replenishment suggestion algorithm isolated behind suggestion provider interface).
+* **PO Dependency:** `OQ-SSOT-05` (Classification: B & E; suggestion provider interface created; concrete suggestion algorithm PENDING PO DECISION).
 * **Parallelizable:** YES (with `WP-018`)
 * **Handoff Target:** `WP-021`
 
@@ -620,12 +653,13 @@ Accounts payable/receivable, expenses, pre-accounting journal vouchers, and PAC 
 * **Data Objects:** `cuentas_por_pagar`, `cuentas_por_cobrar`, `pagos_programados`, `gastos_sucursal`
 * **APIs / Contracts:** Finance Service (`POST /finanzas/gastos`, `POST /cxc/cargos`)
 * **Builder Agent:** `13_Backend_Developer`
-* **Independent Reviewer:** `01_Solution_Architect`
+* **Specialist Reviewer:** `01_Solution_Architect`
+* **Code Reviewer:** `11_Code_Reviewer`
 * **Prerequisites:** `WP-016`, `WP-019`
-* **Dependencies:** PostgreSQL Cloud.
+* **Dependencies:** PostgreSQL 16 in Supabase.
 * **Inputs:** `DATA_MODEL.md` Sec. 4
-* **Outputs:** AP generated from verified purchase receptions; AR customer balance management; store petty cash expense module with receipt attachments; daily cash reconciliation against Corte Z sync events.
-* **Acceptance Criteria:** AP records balance due matching invoice; customer credit limit enforced; store expense reduces available cash in branch drawer; reconciliation flags variances $> \$0$.
+* **Outputs:** AP generated from verified purchase receptions; AR customer balance management; store petty cash expense module with receipt attachments; daily cash reconciliation against Corte Z sync events; provides `CreditLimitValidator` interface.
+* **Acceptance Criteria:** AP records balance due matching invoice; customer credit limit checked; store expense reduces available cash in branch drawer; reconciliation flags variances $> \$0$.
 * **Tests:** AP lifecycle test; AR credit limit boundary test; cash drawer reconciliation variance test.
 * **Security Debt:** None
 * **Evidence Required:** Finance ledger balance test report.
@@ -633,7 +667,7 @@ Accounts payable/receivable, expenses, pre-accounting journal vouchers, and PAC 
 * **Feature Flag:** NO
 * **Migration Impact:** Expand
 * **Risk:** Low
-* **PO Dependency:** `OQ-SSOT-03` (Parameterized: customer credit limit enforcement rule isolated behind credit policy interface).
+* **PO Dependency:** `OQ-SSOT-03` (Classification: B & E; credit validator interface created; concrete enforcement rule PENDING PO DECISION).
 * **Parallelizable:** YES (with `WP-021`)
 * **Handoff Target:** `WP-022`
 
@@ -644,11 +678,12 @@ Accounts payable/receivable, expenses, pre-accounting journal vouchers, and PAC 
 * **Data Objects:** `comprobantes_fiscales`, `emisor_fiscal_config`, `folios_fiscales`
 * **APIs / Contracts:** PAC Gateway interface (`PACConnector.timbrar()`, `PACConnector.cancelar()`)
 * **Builder Agent:** `13_Backend_Developer`
-* **Independent Reviewer:** `08_Security_Architect`
+* **Specialist Reviewer:** `08_Security_Architect`
+* **Code Reviewer:** `11_Code_Reviewer`
 * **Prerequisites:** `WP-011`, `WP-014`
-* **Dependencies:** PAC Web Services (SOAP / REST), XML XMLDSig signing, XSLT, OpenSSL.
+* **Dependencies:** PAC Web Services (`PROVIDER CONTRACT PENDING`), XML XMLDSig signing, XSLT, OpenSSL.
 * **Inputs:** `DATA_MODEL.md` Sec. 4, `SECRETS_AND_KEY_MANAGEMENT.md`
-* **Outputs:** XML CFDI 4.0 generation and validation engine; CSD (Certificado de Sello Digital) private key secure vault integration; PAC connector with circuit breaker; customer self-invoicing portal API.
+* **Outputs:** XML CFDI 4.0 generation and validation engine; CSD (Certificado de Sello Digital) private key secure vault integration; PAC connector with circuit breaker; customer self-invoicing portal API; batch candidate query infrastructure for period-end folios.
 * **Acceptance Criteria:** Generates schema-valid XML CFDI 4.0; seals XML with private key decrypted in-memory; sends to PAC and stores stamped UUID; handles PAC timeouts with queued retry without duplicating stamp request.
 * **Tests:** PAC mock timbrado test; invalid RFC rejection test; PAC timeout idempotent retry test.
 * **Security Debt:** `SEC-VAL-05` (CSD private key storage in secret vault), `SEC-VAL-10` (PAC contract validation).
@@ -657,7 +692,7 @@ Accounts payable/receivable, expenses, pre-accounting journal vouchers, and PAC 
 * **Feature Flag:** YES (Kill switch for direct fiscal stamping)
 * **Migration Impact:** Expand
 * **Risk:** High (Fiscal compliance)
-* **PO Dependency:** `OQ-ARCH-02` (Parameterized: unclaimed folio month-end global invoicing schema isolated behind batch policy interface).
+* **PO Dependency:** `OQ-ARCH-02` (Classification: C & E; candidate selection query created; automatic stamping trigger and period scheduling PENDING PO DECISION).
 * **Parallelizable:** NO
 * **Handoff Target:** `WP-022`
 
@@ -673,15 +708,16 @@ Customer profiles, points/rewards engine, and delivery aggregator webhooks (Uber
 * **Data Objects:** `clientes`, `direcciones_cliente`, `tarjetas_lealtad`, `movimientos_puntos`, `promociones`
 * **APIs / Contracts:** Loyalty API (`POST /lealtad/acumular`, `POST /lealtad/canjear`)
 * **Builder Agent:** `13_Backend_Developer`
-* **Independent Reviewer:** `01_Solution_Architect`
+* **Specialist Reviewer:** `01_Solution_Architect`
+* **Code Reviewer:** `11_Code_Reviewer`
 * **Prerequisites:** `WP-014`
-* **Dependencies:** PostgreSQL Cloud.
+* **Dependencies:** PostgreSQL 16 in Supabase.
 * **Inputs:** `DATA_MODEL.md` Sec. 5
-* **Outputs:** Customer database with RFC, delivery addresses, and preferences; loyalty points ledger with rule-based accrual and redemption; birthday promotions.
-* **Acceptance Criteria:** Points accrued atomically upon paid ticket sync; points redemption verified against current balance; customer phone number index optimized for fast POS caller-ID lookup.
-* **Tests:** Concurrent points redemption test (prevents double spend); points expiry automated calculation test.
-* **Security Debt:** `SEC-VAL-11` (Customer data retention and privacy policy compliance).
-* **Evidence Required:** Loyalty ledger consistency test execution output.
+* **Outputs:** Customer database with RFC, delivery addresses, and preferences; loyalty points ledger with rule-based accrual and redemption; birthday promotions; customer data lifecycle routines.
+* **Acceptance Criteria:** Points accrued atomically upon paid ticket sync; points redemption verified against current balance; customer phone number index optimized for fast POS caller-ID lookup; technical enforcement of retention rules.
+* **Tests:** Concurrent points redemption test (prevents double spend); points expiry automated calculation test; data purge test.
+* **Security Debt:** `SEC-VAL-11` (Separated: Policy validation by PO/Legal Counsel is an EXTERNAL/GOVERNANCE DEPENDENCY; technical enforcement implemented by builder).
+* **Evidence Required:** Loyalty ledger consistency test execution output and data retention purge execution log.
 * **Rollback:** Reversal entry in points ledger.
 * **Feature Flag:** YES (Loyalty program toggle)
 * **Migration Impact:** Expand
@@ -697,13 +733,14 @@ Customer profiles, points/rewards engine, and delivery aggregator webhooks (Uber
 * **Data Objects:** `integraciones_delivery`, `pedidos_externos`, `webhook_eventos`
 * **APIs / Contracts:** Webhook receivers (`POST /webhooks/ubereats`, `POST /webhooks/rappi`, `POST /webhooks/didifood`)
 * **Builder Agent:** `13_Backend_Developer`
-* **Independent Reviewer:** `08_Security_Architect`
+* **Specialist Reviewer:** `08_Security_Architect`
+* **Code Reviewer:** `11_Code_Reviewer`
 * **Prerequisites:** `WP-014`
-* **Dependencies:** Node `crypto` (HMAC SHA-256 webhook signatures), Transactional Outbox.
+* **Dependencies:** Node `crypto` (HMAC SHA-256 webhook signatures), Transactional Outbox, Aggregator APIs (`PROVIDER CONTRACT PENDING`).
 * **Inputs:** `SECURITY_ARCHITECTURE.md` Sec. 6, `FUNCTIONAL_ARCHITECTURE.md`
 * **Outputs:** Ingestion webhook endpoints verifying provider-specific HMAC signatures and timestamps; maps external aggregator order schema to internal `OrderAggregate`; auto-accept rules; routes comanda directly to target branch Edge Host via Sync Gateway.
-* **Acceptance Criteria:** Rejects unsigned or replay webhook payloads; maps catalog external product IDs to internal insumos/platos; injects comanda into KDS in $< 2\text{ seconds}$.
-* **Tests:** Webhook signature forgery test (must fail); replay attack test (timestamp $> 5\text{ min}$ rejected); simulated aggregator order injection test.
+* **Acceptance Criteria:** Rejects unsigned or replay webhook payloads; maps catalog external product IDs to internal insumos/platos; injects comanda into KDS.
+* **Tests:** Webhook signature forgery test (must fail); replay attack test (timestamp $> 300\text{ s}$ rejected); simulated aggregator order injection test.
 * **Security Debt:** `SEC-VAL-10` (Provider webhook signature and timestamp contract verification).
 * **Evidence Required:** Webhook signature verification test report and order transformation output.
 * **Rollback:** Disable external delivery channel integration toggle.
@@ -726,15 +763,16 @@ Web corporate backoffice, mobile waiter handheld, and desktop POS front-end.
 * **Data Objects:** None (Frontend web app)
 * **APIs / Contracts:** Cloud REST / tRPC backend API
 * **Builder Agent:** `15_Web_Frontend_Developer`
-* **Independent Reviewer:** `01_Solution_Architect`
+* **Specialist Reviewer:** `01_Solution_Architect`
+* **Code Reviewer:** `11_Code_Reviewer`
 * **Prerequisites:** `WP-005`, `WP-017`, `WP-019`, `WP-020`
-* **Dependencies:** Next.js 14 App Router, Tailwind CSS, TanStack Table, shadcn/ui.
+* **Dependencies:** Next.js 14 App Router (`IMPLEMENTATION VERSION TO PIN`), Tailwind CSS, TanStack Table, shadcn/ui.
 * **Inputs:** `PROJECT_BLUEPRINT.md`, UI Wireframes
 * **Outputs:** Web application for multi-tenant administration: Catalog & Recipe Builder, Warehouse Management, Purchase Orders, Finance & Cash Control, BI Dashboard, Organization & Branch Settings.
-* **Acceptance Criteria:** Fully responsive web interface; RBAC route guards preventing unauthorized navigation; optimistic UI updates with error rollback; renders data tables with $> 10,000$ rows smoothly via virtualization.
+* **Acceptance Criteria:** Fully responsive web interface; RBAC route guards preventing unauthorized navigation; optimistic UI updates with error rollback; renders large data tables smoothly.
 * **Tests:** Component unit tests (Jest/React Testing Library); Playwright E2E smoke tests covering login, recipe creation, and PO approval.
 * **Security Debt:** `SEC-VAL-07` (CSP headers and XSS prevention).
-* **Evidence Required:** Playwright E2E test execution video/log and Lighthouse performance score $> 90$.
+* **Evidence Required:** Playwright E2E test execution video/log and Lighthouse performance report.
 * **Rollback:** Revert Vercel deployment commit.
 * **Feature Flag:** NO
 * **Migration Impact:** None
@@ -750,12 +788,13 @@ Web corporate backoffice, mobile waiter handheld, and desktop POS front-end.
 * **Data Objects:** Local cache store (AsyncStorage / WatermelonDB)
 * **APIs / Contracts:** Edge Local REST & WebSocket API
 * **Builder Agent:** `14_Mobile_Developer`
-* **Independent Reviewer:** `01_Solution_Architect`
+* **Specialist Reviewer:** `01_Solution_Architect`
+* **Code Reviewer:** `11_Code_Reviewer`
 * **Prerequisites:** `WP-009`, `WP-010`, `WP-014`
-* **Dependencies:** React Native / Expo, fast local Wi-Fi LAN connection.
+* **Dependencies:** React Native / Expo (`IMPLEMENTATION VERSION TO PIN`), local Wi-Fi LAN connection.
 * **Inputs:** `FUNCTIONAL_ARCHITECTURE.md` Sec. 3
-* **Outputs:** Android / iOS tablet/phone app for floor waitstaff: Quick table map, item modifiers selector, comanda submission, split bill calculator, table transfer.
-* **Acceptance Criteria:** Floor order dispatch to Edge Host takes $< 200\text{ ms}$; table state synchronizes across all handhelds via LAN WebSocket; handles Wi-Fi dead zones gracefully with pending visual status.
+* **Outputs:** Android / iOS tablet/phone app for floor waitstaff: Quick table map, item modifiers selector, comanda submission, split bill calculator, table transfer; capability hooks for open PO decisions.
+* **Acceptance Criteria:** Floor order dispatch to Edge Host meets latency target; table state synchronizes across all handhelds via LAN WebSocket; handles Wi-Fi dead zones gracefully with pending visual status.
 * **Tests:** Mobile simulator test suite; Wi-Fi disconnection and reconnection test; OCC 409 conflict handling UI alert test.
 * **Security Debt:** `SEC-VAL-03` (Station certificate verification during QR enrollment).
 * **Evidence Required:** Mobile test run logs and OCC 409 conflict resolution screenshot.
@@ -763,7 +802,7 @@ Web corporate backoffice, mobile waiter handheld, and desktop POS front-end.
 * **Feature Flag:** NO
 * **Migration Impact:** None
 * **Risk:** Medium
-* **PO Dependency:** `OQ-SSOT-02` (Waiter transfer PIN requirement), `OQ-SSOT-04` (Parameterized: mobile total bill cancellation blocked/permitted per policy), `OQ-SSOT-06` (Parameterized: bill split discount/tip prorating formula).
+* **PO Dependency:** `OQ-SSOT-02` (Classification: B & E; hook implemented; concrete behavior PENDING PO DECISION), `OQ-SSOT-04` (Classification: C & E; mobile total void UI deferred until PO decision), `OQ-SSOT-06` (Classification: B & E; hook implemented; concrete proration algorithm PENDING PO DECISION).
 * **Parallelizable:** YES (with `WP-024`, `WP-026`)
 * **Handoff Target:** `WP-027`
 
@@ -774,20 +813,21 @@ Web corporate backoffice, mobile waiter handheld, and desktop POS front-end.
 * **Data Objects:** Local UI state store
 * **APIs / Contracts:** Local IPC Bridge (`window.electronAPI`)
 * **Builder Agent:** `16_Native_Edge_Developer`
-* **Independent Reviewer:** `01_Solution_Architect`
+* **Specialist Reviewer:** `01_Solution_Architect`
+* **Code Reviewer:** `11_Code_Reviewer`
 * **Prerequisites:** `WP-007`, `WP-014`, `WP-015`, `WP-016`
-* **Dependencies:** Electron, React, Tailwind CSS, ESC/POS printer bridge.
+* **Dependencies:** Electron 30+ (`IMPLEMENTATION VERSION TO PIN`), React, Tailwind CSS, ESC/POS printer bridge.
 * **Inputs:** `ADR-003`, `SOLUTION_ARCHITECTURE.md`
 * **Outputs:** High-performance touch-screen interface for cashier and kitchen: Fast numeric keypad PIN entry, split billing, cash drawer control, integrated credit card terminal trigger, real-time KDS kitchen order cards with color-coded timers.
-* **Acceptance Criteria:** UI responds to touch events in $< 16\text{ ms}$ (60 FPS); KDS ticket status transitions (Preparing $\rightarrow$ Ready $\rightarrow$ Served) update instantly across all screens; printer status indicator displayed.
-* **Tests:** Touch response latency test; KDS ticket state transition test; memory leak profiling test over 8-hour continuous simulated shift.
+* **Acceptance Criteria:** UI responds smoothly to touch events; KDS ticket status transitions update instantly across all screens; printer status indicator displayed.
+* **Tests:** Touch response latency test; KDS ticket state transition test; memory leak profiling test over continuous simulated shift.
 * **Security Debt:** `RSK-11` (Memory footprint benchmarking on POS hardware $\le 2\text{ GB}$ RAM).
-* **Evidence Required:** Memory profile snapshot showing $< 350\text{ MB}$ RAM consumption during peak load.
+* **Evidence Required:** Memory profile snapshot showing memory consumption during peak load.
 * **Rollback:** Sideload previous Electron installer version.
 * **Feature Flag:** NO
 * **Migration Impact:** None
 * **Risk:** Medium
-* **PO Dependency:** None
+* **PO Dependency:** `OQ-SSOT-01` (Classification: B & E; post-kitchen cancel UI hook implemented; concrete authorization rule PENDING PO DECISION), `OQ-ARCH-01` (Classification: D; shift UI hook implemented; concrete multi-cashier UI blocked until PO decision).
 * **Parallelizable:** YES (with `WP-024`, `WP-025`)
 * **Handoff Target:** `WP-027`
 
@@ -803,12 +843,13 @@ Disaster recovery verification, hardware performance benchmarks, chaos tests, an
 * **Data Objects:** Cross-context synthetic test dataset
 * **APIs / Contracts:** All system interfaces
 * **Builder Agent:** `18_DevOps_Engineer`
-* **Independent Reviewer:** `09_QA_Test_Architect`
+* **Specialist Reviewer:** `09_QA_Test_Architect`
+* **Code Reviewer:** `11_Code_Reviewer`
 * **Prerequisites:** All prior WPs (`WP-001` through `WP-026`)
 * **Dependencies:** Docker Compose test environment, chaos test harness (Toxiproxy / Chaos Mesh).
 * **Inputs:** `PROJECT_BLUEPRINT.md`, `SECURITY_RISKS.md`
 * **Outputs:** Automated cross-context E2E test suite executing full restaurant lifecycle: Table Opening $\rightarrow$ Order Entry $\rightarrow$ KDS Production $\rightarrow$ Inventory Depletion $\rightarrow$ Payment $\rightarrow$ Facturación $\rightarrow$ Corte Z $\rightarrow$ Cloud Sync $\rightarrow$ Financial Ledger Posting.
-* **Acceptance Criteria:** E2E suite passes 100% on clean environment; simulated WAN loss during order placement proves zero data loss; RPO target 0 and RTO target $< 3\text{ min}$ validated on simulated process crash.
+* **Acceptance Criteria:** E2E suite passes 100% on clean environment; simulated WAN loss during order placement proves zero data loss; RPO target 0 and RTO targets validated on simulated process crash.
 * **Tests:** Full E2E regression suite; chaos network partition test; process SIGKILL recovery test.
 * **Security Debt:** `SEC-VAL-09` (WAN failure mode validation), `DAT-08` (DR restore simulation), `RSK-15` (Empirical RTO/RPO DR drill).
 * **Evidence Required:** Comprehensive E2E test run report and chaos recovery audit trace.
@@ -816,7 +857,7 @@ Disaster recovery verification, hardware performance benchmarks, chaos tests, an
 * **Feature Flag:** NO
 * **Migration Impact:** None
 * **Risk:** Medium
-* **PO Dependency:** None
+* **PO Dependency:** None (All parameterized hooks tested with test-suite fixtures).
 * **Parallelizable:** NO
 * **Handoff Target:** `WP-028`
 
@@ -827,12 +868,13 @@ Disaster recovery verification, hardware performance benchmarks, chaos tests, an
 * **Data Objects:** Release binaries, SHA-256 checksums, signed installer manifests
 * **APIs / Contracts:** Auto-updater manifest endpoint
 * **Builder Agent:** `18_DevOps_Engineer`
-* **Independent Reviewer:** `10_DevOps_Platform_Architect`
+* **Specialist Reviewer:** `10_DevOps_Platform_Architect`
+* **Code Reviewer:** `11_Code_Reviewer`
 * **Prerequisites:** `WP-027`
 * **Dependencies:** Code signing certificates (Windows Authenticode / macOS Developer ID), electron-builder.
 * **Inputs:** `SUPPLY_CHAIN_SECURITY.md`, `ADR-003`
 * **Outputs:** Signed production release packages for Windows, Linux, and macOS; Argon2id and SQLite benchmarks verified on representative low-end hardware ($\le 2\text{ GB}$ RAM); SLSA Level 3 provenance attestation and SBOM.
-* **Acceptance Criteria:** Release binaries cryptographically signed; auto-update updates client seamlessly; benchmark proves Electron + SQLite + Argon2id operates stably within $< 500\text{ MB}$ total memory footprint on low-end test hardware.
+* **Acceptance Criteria:** Release binaries cryptographically signed; auto-update updates client seamlessly; benchmark proves Electron + SQLite + Argon2id operates stably within memory target on low-end test hardware.
 * **Tests:** Code signature verification test (`signtool verify` / `codesign -v`); memory usage stress benchmark on constrained test VM.
 * **Security Debt:** `SEC-VAL-08` (Argon2id benchmark on $\le 2\text{ GB}$ hardware), `RSK-11` (Node/Electron footprint validation), `RSK-08` (SSD write barrier / power loss verification).
 * **Evidence Required:** Signed binary verification output, memory benchmark report, and CycloneDX SBOM artifact.
@@ -864,38 +906,40 @@ Disaster recovery verification, hardware performance benchmarks, chaos tests, an
 
 ---
 
-## 8. Builder & Independent Reviewer Assignment Matrix
+## 8. Builder & Dual Independent Reviewer Assignment Matrix
 
-| Work Package | Title | Builder Agent | Independent Reviewer |
-|---|---|---|---|
-| `WP-001` | Monorepo Structure & Build Tooling | `18_DevOps_Engineer` | `01_Solution_Architect` |
-| `WP-002` | Automated CI/CD Pipelines & Security Scanning | `18_DevOps_Engineer` | `10_DevOps_Platform_Architect` |
-| `WP-003` | Cloud PostgreSQL Scaffolding & Migration Engine | `17_Database_Engineer` | `03_Data_Architect` |
-| `WP-004` | Organization & Branch Multi-Tenant RLS Foundation | `17_Database_Engineer` | `08_Security_Architect` |
-| `WP-005` | Cloud IAM & Administrative Authentication | `13_Backend_Developer` | `08_Security_Architect` |
-| `WP-006` | Tamper-Evident Security Logging & Cloud Audit Trail | `13_Backend_Developer` | `08_Security_Architect` |
-| `WP-007` | Edge Host Runtime & Electron Security Hardening | `16_Native_Edge_Developer` | `08_Security_Architect` |
-| `WP-008` | Edge Local Database (SQLite WAL) & Durability | `16_Native_Edge_Developer` | `03_Data_Architect` |
-| `WP-009` | Edge Enrollment & Trust Bootstrap Protocol | `16_Native_Edge_Developer` | `08_Security_Architect` |
-| `WP-010` | Edge Offline IAM & Floor PIN Authentication | `16_Native_Edge_Developer` | `08_Security_Architect` |
-| `WP-011` | Folio Lease Allocation & Fencing Engine | `13_Backend_Developer` | `03_Data_Architect` |
-| `WP-012` | Transactional Outbox & Ingested Idempotency | `13_Backend_Developer` | `01_Solution_Architect` |
-| `WP-013` | Bidirectional Sync Service & WAN Reconnection | `13_Backend_Developer` | `01_Solution_Architect` |
-| `WP-014` | Dining Room, Tables & Orders Engine with OCC | `16_Native_Edge_Developer` | `03_Data_Architect` |
-| `WP-015` | KDS LAN Event Dispatcher & Printer Service | `16_Native_Edge_Developer` | `01_Solution_Architect` |
-| `WP-016` | Cash Management, Shifts & Arqueo Ciego (Cortes X/Z)| `16_Native_Edge_Developer` | `03_Data_Architect` |
-| `WP-017` | Inventory Catalog, Warehouses & Recipe Explosion | `13_Backend_Developer` | `03_Data_Architect` |
-| `WP-018` | Real-Time Kárdex & KDS Depletion Service | `13_Backend_Developer` | `03_Data_Architect` |
-| `WP-019` | Procurement, Supplier Management & Receiving | `13_Backend_Developer` | `01_Solution_Architect` |
-| `WP-020` | Finance, AP/AR & Cash Reconciliation | `13_Backend_Developer` | `01_Solution_Architect` |
-| `WP-021` | Fiscal Invoicing Engine (PAC CFDI) | `13_Backend_Developer` | `08_Security_Architect` |
-| `WP-022` | CRM Customer Profiles & Loyalty Rewards | `13_Backend_Developer` | `01_Solution_Architect` |
-| `WP-023` | Delivery Hub & Aggregator Webhook Engine | `13_Backend_Developer` | `08_Security_Architect` |
-| `WP-024` | Corporate Backoffice Web Portal (Next.js) | `15_Web_Frontend_Developer` | `01_Solution_Architect` |
-| `WP-025` | Mobile Waiter Handheld Client (Comandero Móvil) | `14_Mobile_Developer` | `01_Solution_Architect` |
-| `WP-026` | Native Desktop POS & KDS Station UI | `16_Native_Edge_Developer` | `01_Solution_Architect` |
-| `WP-027` | Cross-Context E2E Integration & Chaos Testing | `18_DevOps_Engineer` | `09_QA_Test_Architect` |
-| `WP-028` | Hardware Benchmarking & Release Packaging | `18_DevOps_Engineer` | `10_DevOps_Platform_Architect` |
+To strictly enforce EAAF governance, every code-producing Work Package is assigned both a Specialist Reviewer and a Mandatory Code Reviewer (`11_Code_Reviewer`). The Builder Agent is never equal to either reviewer.
+
+| Work Package | Title | Builder Agent | Primary Specialist Reviewer | Mandatory Code Reviewer |
+|---|---|---|---|---|
+| `WP-001` | Monorepo Structure & Build Tooling | `18_DevOps_Engineer` | `01_Solution_Architect` | `11_Code_Reviewer` |
+| `WP-002` | Automated CI/CD Pipelines & Security Scanning | `18_DevOps_Engineer` | `10_DevOps_Platform_Architect` | `11_Code_Reviewer` |
+| `WP-003` | Cloud PostgreSQL Scaffolding & Migration Engine | `17_Database_Engineer` | `03_Data_Architect` | `11_Code_Reviewer` |
+| `WP-004` | Organization & Branch Multi-Tenant RLS Foundation | `17_Database_Engineer` | `08_Security_Architect` & `03_Data_Architect` | `11_Code_Reviewer` |
+| `WP-005` | Cloud IAM & Administrative Authentication | `13_Backend_Developer` | `08_Security_Architect` | `11_Code_Reviewer` |
+| `WP-006` | Tamper-Evident Security Logging & Cloud Audit Trail | `13_Backend_Developer` | `08_Security_Architect` | `11_Code_Reviewer` |
+| `WP-007` | Edge Host Runtime & Electron Security Hardening | `16_Native_Edge_Developer` | `08_Security_Architect` | `11_Code_Reviewer` |
+| `WP-008` | Edge Local Database (SQLite WAL) & Durability | `16_Native_Edge_Developer` | `03_Data_Architect` | `11_Code_Reviewer` |
+| `WP-009` | Edge Enrollment & Trust Bootstrap Protocol | `16_Native_Edge_Developer` | `08_Security_Architect` | `11_Code_Reviewer` |
+| `WP-010` | Edge Offline IAM & Floor PIN Authentication | `16_Native_Edge_Developer` | `08_Security_Architect` | `11_Code_Reviewer` |
+| `WP-011` | Folio Lease Allocation & Fencing Engine | `13_Backend_Developer` | `03_Data_Architect` | `11_Code_Reviewer` |
+| `WP-012` | Transactional Outbox & Ingested Idempotency | `13_Backend_Developer` | `01_Solution_Architect` | `11_Code_Reviewer` |
+| `WP-013` | Bidirectional Sync Service & WAN Reconnection | `13_Backend_Developer` | `01_Solution_Architect` | `11_Code_Reviewer` |
+| `WP-014` | Dining Room, Tables & Orders Engine with OCC | `16_Native_Edge_Developer` | `03_Data_Architect` | `11_Code_Reviewer` |
+| `WP-015` | KDS LAN Event Dispatcher & Printer Service | `16_Native_Edge_Developer` | `01_Solution_Architect` | `11_Code_Reviewer` |
+| `WP-016` | Cash Management, Shifts & Arqueo Ciego (Cortes X/Z)| `16_Native_Edge_Developer` | `03_Data_Architect` | `11_Code_Reviewer` |
+| `WP-017` | Inventory Catalog, Warehouses & Recipe Explosion | `13_Backend_Developer` | `03_Data_Architect` | `11_Code_Reviewer` |
+| `WP-018` | Real-Time Kárdex & KDS Depletion Service | `13_Backend_Developer` | `03_Data_Architect` | `11_Code_Reviewer` |
+| `WP-019` | Procurement, Supplier Management & Receiving | `13_Backend_Developer` | `01_Solution_Architect` | `11_Code_Reviewer` |
+| `WP-020` | Finance, AP/AR & Cash Reconciliation | `13_Backend_Developer` | `01_Solution_Architect` | `11_Code_Reviewer` |
+| `WP-021` | Fiscal Invoicing Engine (PAC CFDI) | `13_Backend_Developer` | `08_Security_Architect` | `11_Code_Reviewer` |
+| `WP-022` | CRM Customer Profiles & Loyalty Rewards | `13_Backend_Developer` | `01_Solution_Architect` | `11_Code_Reviewer` |
+| `WP-023` | Delivery Hub & Aggregator Webhook Engine | `13_Backend_Developer` | `08_Security_Architect` | `11_Code_Reviewer` |
+| `WP-024` | Corporate Backoffice Web Portal (Next.js) | `15_Web_Frontend_Developer` | `01_Solution_Architect` | `11_Code_Reviewer` |
+| `WP-025` | Mobile Waiter Handheld Client (Comandero Móvil) | `14_Mobile_Developer` | `01_Solution_Architect` | `11_Code_Reviewer` |
+| `WP-026` | Native Desktop POS & KDS Station UI | `16_Native_Edge_Developer` | `01_Solution_Architect` | `11_Code_Reviewer` |
+| `WP-027` | Cross-Context E2E Integration & Chaos Testing | `18_DevOps_Engineer` | `09_QA_Test_Architect` | `11_Code_Reviewer` |
+| `WP-028` | Hardware Benchmarking & Release Packaging | `18_DevOps_Engineer` | `10_DevOps_Platform_Architect` | `11_Code_Reviewer` |
 
 ---
 
@@ -965,27 +1009,34 @@ flowchart TD
 
 ## 10. Protected Product Owner Decisions Dependency Matrix
 
-All 9 business decisions remain strictly **`PENDING PO DECISION`**. No implementation work assumes or closes any decision. The table below details how work proceeds neutrally without blocking, and establishes the exact dependency milestone deadline when a formal PO decision is required:
+All 9 business decisions remain strictly **`PENDING PO DECISION`**. Zero business defaults, zero default booleans, and zero baseline algorithms are assumed by this implementation plan.
 
-| OQ ID | Title / Business Question | Affected Work Packages | Can Start Neutrally? | Neutral Parameterization Strategy | Hard Decision Milestone Deadline |
+The table below strictly classifies the dependency relationship for every open decision using EAAF governance codes:
+* **A:** Neutral Foundation Can Proceed
+* **B:** Parameterized Contract Can Proceed
+* **C:** Business Behavior Must Be Deferred
+* **D:** PO Decision Required Before WP Start
+* **E:** PO Decision Required Before WP Completion
+
+| OQ | Affected WP | Classification | Neutral Work Allowed | Forbidden Assumption | Decision Deadline |
 |---|---|---|---|---|---|
-| **`OQ-SSOT-01`** | Política y permisos de cancelación post-cocina | `WP-014`, `WP-024`, `WP-026` | **YES** | Define an extensible `CancellationPolicy` interface with default strict policy (requires Supervisor PIN + audit log). Support configurable flag `ALLOW_WAITER_CANCEL_POST_KDS`. | Before entry to `WP-027` (E2E testing). |
-| **`OQ-SSOT-02`** | Requerimiento de PIN de mesero receptor al transferir cuenta | `WP-014`, `WP-025` | **YES** | Parameterize transfer flow via `TransferValidationRule` setting: `REQUIRE_RECEIVER_PIN` (true/false). Default to `true` (defensive). | Before entry to `WP-025` completion. |
-| **`OQ-SSOT-03`** | Validación de límite de crédito para cargos CxC | `WP-020`, `WP-024` | **YES** | Implement `CreditLimitValidator` with configurable options: `STRICT_BLOCK`, `ALLOW_WITH_SUPERVISOR_OVERRIDE`, `WARN_ONLY`. | Before entry to `WP-020` completion. |
-| **`OQ-SSOT-04`** | Cancelación total de cuentas impresas desde móvil | `WP-014`, `WP-025` | **YES** | Restrict total printed cancellation to stationary POS by default. Expose capability flag `ALLOW_MOBILE_TOTAL_VOID = false` pending PO decision. | Before entry to `WP-025` completion. |
-| **`OQ-SSOT-05`** | Criterios de sugerencia automática de compras vs manual | `WP-019`, `WP-024` | **YES** | Provide extensible `ReplenishmentSuggestionProvider` interface (implementing Min/Max par levels as baseline). Manual purchase order flow remains 100% functional. | Before entry to `WP-019` completion. |
-| **`OQ-SSOT-06`** | Prorrateo financiero de descuentos y propinas al dividir cuentas | `WP-014`, `WP-025`, `WP-026` | **YES** | Implement pluggable `BillSplitProrationStrategy` supporting proportional pro-rata by item price vs equal split. | Before entry to `WP-014` completion. |
-| **`OQ-SSOT-07`** | Consolidación y prioridad de recetas en modificadores | `WP-017`, `WP-018` | **YES** | Implement modifier recipe resolver using additive ingredient explosion (each modifier explicitly adds/replaces specified raw insumo deltas). | Before entry to `WP-017` completion. |
-| **`OQ-ARCH-01`** | Modelo de turnos multi-cajero en terminal compartida | `WP-016`, `WP-026` | **YES** | Enforce single-cashier-per-drawer session as baseline. Structure shift model with `activeCashierUserId` bound to shift so multi-cashier sub-drawers can be enabled without schema migration. | Before entry to `WP-016` completion. |
-| **`OQ-ARCH-02`** | Esquema de facturación global automática fin de mes | `WP-021`, `WP-024` | **YES** | Implement batch query identifying unticketed folios at period close. Stamping execution gated by configurable cron setting `AUTO_GLOBAL_INVOICING_ENABLED = false`. | Before entry to `WP-021` completion. |
+| **`OQ-SSOT-01`** (Cancelación Post-Cocina) | `WP-014`, `WP-024`, `WP-026` | **B & E** | Generic `CancellationPolicy` interface, authorization check extension hook, audit event logging. | Assuming waiter is allowed or blocked; assuming supervisor/manager PIN is required; assuming any default boolean flag. | Before `WP-014` / `WP-026` post-kitchen cancellation behavior enters completion. |
+| **`OQ-SSOT-02`** (PIN Transferencia Cuenta) | `WP-014`, `WP-025` | **B & E** | `TransferValidationRule` contract abstraction with unresolved policy hook. | Assuming `REQUIRE_RECEIVER_PIN = true` or `false`. | Before `WP-014` / `WP-025` table transfer flow enters completion. |
+| **`OQ-SSOT-03`** (Límite Crédito CxC) | `WP-020`, `WP-024` | **B & E** | `CreditLimitValidator` policy interface and customer credit balance ledger calculation methods. | Assuming `STRICT_BLOCK`, `ALLOW_WITH_SUPERVISOR_OVERRIDE`, or `WARN_ONLY` as baseline policy. | Before `WP-020` customer charge execution enters completion. |
+| **`OQ-SSOT-04`** (Cancelación Total Móvil) | `WP-014`, `WP-025` | **C & E** | Local account state machine with void capability hook; stationary POS void flow. Mobile UI void screen deferred. | Assuming mobile total cancellation is prohibited or allowed (`ALLOW_MOBILE_TOTAL_VOID = false/true`). | Before `WP-025` mobile account settlement/void screen enters completion. |
+| **`OQ-SSOT-05`** (Algoritmo Abastecimiento) | `WP-019`, `WP-024` | **B & E** | `ReplenishmentSuggestionProvider` contract definition; manual purchase order creation workflows. | Assuming Min/Max par levels, reorder points, sales velocity, or forecasting as default algorithm. | Before `WP-019` automated purchase suggestion service enters completion. |
+| **`OQ-SSOT-06`** (Prorrateo Split Cuenta) | `WP-014`, `WP-025`, `WP-026` | **B & E** | `BillSplitProrationStrategy` pluggable interface, split ticket partition data structures. | Assuming proportional by item price, equal split, discount-first, or tip-first as project default. | Before `WP-014` bill splitting engine enters completion. |
+| **`OQ-SSOT-07`** (Recetas Modificadores) | `WP-017`, `WP-018` | **B & E** | `ModifierRecipeResolver` contract definition and raw recipe ingredient linkage. | Assuming "additive ingredient explosion", replacement priority, or modifier precedence semantics. | Before `WP-017` / `WP-018` recipe explosion and depletion engine enters completion. |
+| **`OQ-ARCH-01`** (Turnos Multi-Cajero) | `WP-016`, `WP-026` | **D** (PO Blocked at Business Completion) | Cash transaction ledger, cash drawer hardware triggers, blind count math. | Assuming single-cashier-per-drawer as baseline or multi-cashier sub-drawers without PO decision. | Before `WP-016` shift aggregate schema and state machine enter completion. |
+| **`OQ-ARCH-02`** (Facturación Global Fin de Mes) | `WP-021`, `WP-024` | **C & E** | Neutral database query identifying unclaimed fiscal tickets at month-end. | Assuming automatic cron stamping (`AUTO_GLOBAL_INVOICING_ENABLED = false/true`) or specific period cutoff. | Before `WP-021` batch invoicing runner enters completion. |
 
 ---
 
 ## 11. Security Validation Debt Mapping
 
-Every one of the 11 cataloged Security Validation Debts is mapped to concrete Work Packages, execution methodologies, and evidence requirements:
+Every one of the 11 cataloged Security Validation Debts is mapped to concrete Work Packages, execution methodologies, and evidence requirements. Notice that for `SEC-VAL-11`, governance policy validation and technical enforcement are strictly separated:
 
-| Debt ID | Security Validation Requirement | Assigned WP | Owning Agent | Execution Method | Required Evidence Artifact |
+| Debt ID | Security Validation Requirement | Assigned WP | Owning Agent / Authority | Execution Method | Required Evidence Artifact |
 |---|---|---|---|---|---|
 | **`SEC-VAL-01`** | Multi-Tenant Isolation (RLS bypass & tenant breakout) | `WP-004` | `17_Database_Engineer` | Automated SQL penetration test executing cross-tenant SELECT/UPDATE queries without session context. | `EVIDENCE_SEC_VAL_01_RLS_BREAKOUT.md` |
 | **`SEC-VAL-02`** | Offline IAM Brute Force & Rate Limiting | `WP-010` | `16_Native_Edge_Developer` | Automated attack script submitting 100 rapid invalid PINs to verify lockout after 5 attempts. | `EVIDENCE_SEC_VAL_02_PIN_LOCKOUT.md` |
@@ -997,7 +1048,8 @@ Every one of the 11 cataloged Security Validation Debts is mapped to concrete Wo
 | **`SEC-VAL-08`** | Hardware Benchmark (Argon2id on $\le 2\text{ GB}$ RAM) | `WP-010`, `WP-028` | `16_Native_Edge_Developer` | Performance benchmark on physical or VM hardware throttled to 2 GB RAM and 2 vCPUs. | `EVIDENCE_SEC_VAL_08_HARDWARE_BENCHMARK.md` |
 | **`SEC-VAL-09`** | WAN Failure Mode & Offline Continuity | `WP-013`, `WP-027` | `13_Backend_Developer` | Continuous order entry during simulated 30-minute WAN outage followed by reconnect sync. | `EVIDENCE_SEC_VAL_09_OFFLINE_CONTINUITY.md` |
 | **`SEC-VAL-10`** | Provider Contracts & Webhook Signatures | `WP-021`, `WP-023` | `13_Backend_Developer` | Mock webhook test submitting forged signatures and stale timestamps ($> 300\text{ s}$). | `EVIDENCE_SEC_VAL_10_WEBHOOK_SIGNATURES.md` |
-| **`SEC-VAL-11`** | Legal & Privacy Retention Compliance | `WP-022` | `13_Backend_Developer` | Data lifecycle audit verifying customer PII purge and pseudonymization routines. | `EVIDENCE_SEC_VAL_11_PRIVACY_RETENTION.md` |
+| **`SEC-VAL-11` (Policy)** | Legal & Privacy Retention Policy Review | Governance | `Product Owner` / Authorized Legal Counsel | Formal legal review of provisional customer data retention and pseudonymization policies. (`OWNER/PROVIDER REQUIRED BEFORE SEC-VAL-11 CAN CLOSE`). | `EVIDENCE_SEC_VAL_11_LEGAL_REVIEW.md` |
+| **`SEC-VAL-11` (Tech)** | Legal & Privacy Retention Technical Enforcement | `WP-022` | `13_Backend_Developer` | Data lifecycle automated tests verifying customer PII purge and pseudonymization routines conform to approved policy. | `EVIDENCE_SEC_VAL_11_TECH_ENFORCEMENT.md` |
 
 ---
 
@@ -1015,14 +1067,21 @@ Every one of the 11 cataloged Security Validation Debts is mapped to concrete Wo
 
 ## 13. External Dependencies & Target Hardware Matrix
 
-### 13.1 External Technical Dependencies
-* **Cloud Infrastructure (Confirmed):** Supabase Managed PostgreSQL 15+, Render Web Services & WebSocket Gateway, Vercel Edge Network.
-* **Database & ORM (Confirmed):** Drizzle ORM / Prisma, `better-sqlite3`.
-* **Runtime & Frameworks (Confirmed):** Node.js 20 LTS, Electron 30+, Next.js 14, React Native / Expo.
-* **External Third-Party APIs (Provider Contract Pending):**
-  - PAC CFDI Web Services (Finkok / Solución Factible / Edicom)
-  - Delivery Aggregators (Uber Eats API, Rappi Webhook API, Didi Food Open Platform)
-  - Payment Terminals (Clip / Mercado Pago / Banorte POS SDK via raw socket/Bluetooth)
+### 13.1 External Technical Dependencies Status
+* **PostgreSQL 16 in Supabase:** `FROZEN ARCHITECTURE` (Strict alignment with Data Architecture).
+* **Render Web Services & WebSocket Gateway:** `FROZEN ARCHITECTURE`
+* **Vercel Edge Network:** `FROZEN ARCHITECTURE`
+* **Node.js 20 LTS:** `IMPLEMENTATION VERSION TO PIN`
+* **Electron 30+:** `IMPLEMENTATION VERSION TO PIN`
+* **Next.js 14:** `IMPLEMENTATION VERSION TO PIN`
+* **React Native / Expo:** `IMPLEMENTATION VERSION TO PIN`
+* **`better-sqlite3`:** `IMPLEMENTATION VERSION TO PIN`
+* **ORM Tooling (Drizzle vs. Prisma):** `IMPLEMENTATION TOOLING DECISION — MUST BE SELECTED BEFORE WP-003 START`.
+  - Decision Owner: `17_Database_Engineer` in consultation with `03_Data_Architect`.
+  - Selection Criteria: (1) Minimal query latency overhead; (2) Native support for PostgreSQL 16 RLS session variables (`SET LOCAL app.current_organization_id`); (3) Migration safety supporting zero-downtime Expand-Migrate-Contract workflows; (4) Type-safety in TypeScript monorepo; (5) Supavisor connection pooling compatibility.
+* **PAC CFDI Web Services (Finkok / Solución Factible / Edicom):** `PROVIDER CONTRACT PENDING`
+* **Delivery Aggregators (Uber Eats, Rappi, Didi Food APIs):** `PROVIDER CONTRACT PENDING`
+* **Payment Terminals (Clip, Mercado Pago, Banorte POS SDK):** `PO/COMMERCIAL DECISION PENDING` & `VALIDATION REQUIRED`
 
 ### 13.2 Representative Validation Hardware Classes
 1. **Low-End POS Terminal (Class A):** Celeron / Atom quad-core, 2 GB DDR3 RAM, 64 GB eMMC / SATA SSD, Windows 10 IoT / Linux POS. (Primary target for `SEC-VAL-08` and `RSK-11`).
@@ -1035,8 +1094,8 @@ Every one of the 11 cataloged Security Validation Debts is mapped to concrete Wo
 
 ## 14. Implementation Plan Author Declaration & Status
 
-* **Author Agent:** `01_Solution_Architect — IMPLEMENTATION READINESS AUTHOR`
-* **Declaration:** This Implementation Plan strictly adheres to EAAF v1.2.0. Every work package maps to frozen architecture; builders and reviewers are segregated; no code has been implemented; no architecture decisions have been altered; all 9 PO decisions remain pending.
+* **Author Agent:** `01_Solution_Architect — IMPLEMENTATION READINESS REMEDIATION AUTHOR`
+* **Declaration:** This Implementation Plan strictly adheres to EAAF v1.2.0. Every work package maps to frozen architecture; builders and reviewers are segregated; no code has been implemented; no architecture decisions have been altered; all 9 PO decisions remain pending without assumed defaults.
 * **Author Maximum Status:**
 
 # `READY FOR INDEPENDENT IMPLEMENTATION READINESS REVIEW`
