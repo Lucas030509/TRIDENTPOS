@@ -9,7 +9,7 @@
   "eaaf_ref": "codex/eaaf-v1.2-governance",
   "eaaf_commit": "7e036f43240b3dc28ccb996e350263598275b2cd",
   "adoption_status": "GOVERNED",
-  "active_lifecycle_phase": "SECURITY ARCHITECTURE — PREPARATION",
+  "active_lifecycle_phase": "IMPLEMENTATION READINESS — PREPARATION",
   "solution_architecture_gate": "PASS",
   "solution_architecture_baseline": "FROZEN",
   "reviewed_solution_architecture_commit": "9c0961c2c466375f9a219da06c988335b77d2733",
@@ -18,10 +18,14 @@
   "data_architecture_baseline": "FROZEN",
   "reviewed_data_architecture_commit": "7d8b9ceaf6faf056c75ecd3f79774a33f37d0655",
   "data_gate_evidence_commit": "a2ef88c00bb218b56e27100dadd1857472572165",
+  "security_architecture_gate": "PASS",
+  "security_architecture_baseline": "FROZEN",
+  "reviewed_security_architecture_commit": "6b665b6a89fcfca29079424b57cbd9da3b3cce01",
+  "security_gate_evidence_commit": "c7fd1539823de2b93a52140d696156f2cafdca76",
   "product_owner_approval": "APPROVED",
-  "next_gate": "SECURITY_GATE",
-  "next_author_agent": "08_Security_Architect",
-  "gate_reviewer_authority": "Independent Security Architect",
+  "next_gate": "IMPLEMENTATION_READINESS_GATE",
+  "next_author_agent": "01_Solution_Architect",
+  "gate_reviewer_authority": "Independent Solution Architect",
   "ssot_functional_artifacts": [
     "RESTAURANT_SOFTWARE_RECONSTRUCTION_SPEC.md",
     "FUNCTIONAL_ARCHITECTURE.md",
@@ -50,6 +54,21 @@
     "DATA_ARCHITECTURE_EVIDENCE.md",
     "HANDOFF_DATA_ARCHITECTURE_GATE.md"
   ],
+  "security_architecture_artifacts": [
+    "SECURITY_ARCHITECTURE.md",
+    "THREAT_MODEL.md",
+    "SECURITY_CONTROL_MATRIX.md",
+    "IAM_SECURITY_MODEL.md",
+    "SECRETS_AND_KEY_MANAGEMENT.md",
+    "DATA_PROTECTION_AND_PRIVACY.md",
+    "SECURITY_LOGGING_AND_MONITORING.md",
+    "SUPPLY_CHAIN_SECURITY.md",
+    "SECURITY_INCIDENT_RESPONSE.md",
+    "SECURITY_RISKS.md",
+    "SECURITY_GATE_R3_EVIDENCE.md",
+    "PRODUCT_OWNER_SECURITY_ARCHITECTURE_APPROVAL.md",
+    "HANDOFF_IMPLEMENTATION_READINESS.md"
+  ],
   "adr_suite": [
     "ADR/ADR-001-modular-monolith-bounded-contexts.md",
     "ADR/ADR-002-cloud-branch-data-authority-by-topology.md",
@@ -62,6 +81,6 @@
   ],
   "pending_po_decisions": 9,
   "governance_notes": [
-    "PARTIAL — AGENT 06 V2.0 NOT YET INSTALLED in upstream EAAF ref. Not blocking Security Architecture phase."
+    "PARTIAL — AGENT 06 V2.0 NOT YET INSTALLED in upstream EAAF ref. Not blocking Implementation Readiness phase."
   ]
 }

@@ -2,7 +2,7 @@
 
 **Document ID:** `ARCH-SRSK-001`  
 **Version:** `1.2 REMEDIATED DRAFT (R2.1)`  
-**Status:** `READY FOR INDEPENDENT REVIEW`  
+**Status:** `APPROVED / FROZEN — 2026-09-03`  
 **Date:** 2026-09-02  
 **Framework:** `EAAF v1.2.0 @ 7e036f43240b3dc28ccb996e350263598275b2cd`  
 **Author Agent:** `08_Security_Architect — Remediation Author`  
@@ -33,4 +33,4 @@ En cumplimiento estricto de las reglas de normalización EAAF v1.2:
 
 ---
 
-DOCUMENT STATUS: READY FOR INDEPENDENT REVIEW
+DOCUMENT STATUS: APPROVED / FROZEN — 2026-09-03
