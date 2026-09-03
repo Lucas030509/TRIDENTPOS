@@ -76,7 +76,7 @@ To resolve this operational bootstrap deadlock while upholding 100% of EAAF code
 │                    STAGE B: FULL PRODUCTION PROTECTION                 │
 │ - Activated immediately after WP-002 merges.                           │
 │ - Remote main protection updated: Required status checks ENFORCED      │
-│   (build, lint, typecheck, unit tests, secret scan).                   │
+│   (build, lint, typecheck, unit tests, secret scan, sca-scan).         │
 │ - Mandatory precondition BEFORE WP-003 or any domain WP can merge.     │
 │ - STAGE A EXPIRES PERMANENTLY.                                         │
 └────────────────────────────────────────────────────────────────────────┘
@@ -87,14 +87,14 @@ To resolve this operational bootstrap deadlock while upholding 100% of EAAF code
 ## 3. Detailed Stage Specifications & Controls
 
 ### 3.1 Stage A — Pre-WP-001 Repository Protection
-Before any implementation branch is merged to `main`, repository administration must enable remote branch protection on `main` enforcing:
+Stage A remote `main` branch protection must be enabled and independently verified on remote **before `WP-001` implementation begins**. No builder may begin `WP-001`, write implementation code, execute WP changes, or open formal handoff execution until Stage A is verified on remote. Repository administration must enable remote branch protection on `main` enforcing:
 1. **Pull Request Required:** Direct uncontrolled commits to `main` are strictly prohibited.
 2. **Mandatory Peer Review:** Minimum of 1 approved review from designated reviewer prior to merge.
 3. **Builder Independence:** Builder cannot approve their own pull request (`Builder != Reviewer`).
 4. **No Force Pushes:** Force pushes (`git push --force`) are disabled.
 5. **No Deletions:** Deletion of `main` is disabled.
 6. **Status Checks Context:** Omitted during Stage A solely because no CI contexts exist in GitHub.
-7. **Verification:** Remote branch protection must be independently verified via GitHub API prior to merging `WP-001`.
+7. **Verification:** Remote branch protection must be independently verified via GitHub API before `WP-001` implementation begins.
 
 ### 3.2 WP-001 & WP-002 Temporary Compensating Controls
 Because remote automated status checks are absent during Stage A, the following rigorous compensating controls are legally binding on `WP-001` and `WP-002`:
@@ -128,8 +128,8 @@ Immediately upon `WP-002` merge to `main`:
 
 | Artifact | Section | Frozen Pre-Amendment Text | Governed Amended Text |
 |---|---|---|---|
-| `HANDOFF_IMPLEMENTATION.md` | Section 1 (Preconditions) | "Mandatory green CI checks (build, lint, typecheck, unit tests, secret scan)." | Amended to reference the two-stage protocol: Stage A enforces PR + reviews + no force-push; Stage B enforces full CI status checks immediately after `WP-002`. |
-| `IMPLEMENTATION_PLAN.md` | Section 3.2 (Repository Governance) | "2. Require status checks to pass before merging (CI build, lint, typecheck, unit tests, secret scan)." | Annotated with reference to `AMEND-GOV-IR-001` (Implementation Activation Bootstrap Protocol). |
+| `HANDOFF_IMPLEMENTATION.md` | Section 1 (Preconditions) | "Mandatory green CI checks (build, lint, typecheck, unit tests, secret scan)." | Amended to reference the two-stage protocol: Stage A enforces PR + reviews + no force-push before WP-001 implementation begins; Stage B enforces full CI status checks (build, lint, typecheck, unit-tests, secret-scan, sca-scan) immediately after `WP-002`. |
+| `IMPLEMENTATION_PLAN.md` | Section 3.2 (Repository Governance) | "2. Require status checks to pass before merging (CI build, lint, typecheck, unit tests, secret scan)." | Annotated with reference to `AMEND-GOV-IR-001` (Implementation Activation Bootstrap Protocol) enforcing Stage A before WP-001 implementation begins and Stage B (including sca-scan) post-`WP-002`. |
 | `project-manifest.json` | Metadata | `"next_action": "ENABLE AND VERIFY MAIN BRANCH PROTECTION"` | Updated to reflect Stage A activation. |
 
 ---

@@ -57,7 +57,7 @@ Strict literal enforcement creates an operational **circular bootstrap deadlock*
 Adopt the **Two-Stage Implementation Activation Bootstrap Protocol**:
 
 ### Stage A — Pre-WP-001 Repository Protection
-Before any implementation branch is merged to `main`, repository administration must enable remote branch protection on `main` enforcing:
+Stage A remote `main` branch protection must be enabled and independently verified on remote **before `WP-001` implementation begins** (no builder may begin `WP-001`, write implementation code, execute WP changes, or open formal handoff execution until Stage A is verified on remote). Repository administration must enable remote branch protection on `main` enforcing:
 1. Pull Request required before merge (direct commits to `main` prohibited).
 2. Minimum 1 approved review from designated reviewer prior to merge.
 3. Builder cannot approve their own pull request (`Builder != Reviewer`).

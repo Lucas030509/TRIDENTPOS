@@ -56,7 +56,7 @@ WP-002 strictly depends on WP-001
 
 Adopt **ADR-009: Two-Stage Implementation Activation Bootstrap Protocol**:
 * **Stage A (Pre-WP-001 Bootstrap):**
-  Enforce remote `main` branch protection with:
+  Stage A remote `main` branch protection must be enabled and independently verified on remote **before `WP-001` implementation begins** (no builder may begin `WP-001`, write implementation code, execute WP changes, or open formal handoff execution until Stage A is verified on remote). Enforces remote `main` branch protection with:
   1. Pull Request required before merging (direct commits prohibited).
   2. Minimum 1 approved review from designated reviewer prior to merge.
   3. Builder cannot approve their own pull request (`Builder != Reviewer`).
