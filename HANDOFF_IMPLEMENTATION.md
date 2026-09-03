@@ -25,10 +25,14 @@
 Before any work package implementation begins:
 1. **Gate Verdict:** `IMPLEMENTATION_READINESS_GATE` evaluated as **`PASS`** by Independent Solution Architect.
 2. **Product Owner Decision:** Formal PO Approval recorded and frozen.
-3. **Repository Control Activation Precondition:** GitHub `main` branch protection must be enabled on remote, enforcing:
-   - Mandatory pull requests with at least 1 approved review.
-   - Mandatory green CI checks (build, lint, typecheck, unit tests, secret scan).
-   - Prohibition of direct commits and force-pushes to `main`.
+3. **Repository Control Activation Precondition (`AMEND-GOV-IR-001` Implementation Activation Bootstrap Protocol):**
+   - **Stage A (Pre-WP-001 Bootstrap):** Remote `main` branch protection must be enabled prior to merging `WP-001`, enforcing:
+     * Mandatory pull requests before merging (direct commits to `main` prohibited).
+     * Minimum 1 approved review from designated reviewer (builder cannot self-approve).
+     * Prohibition of force pushes and branch deletions.
+     * Automated status check contexts omitted during Stage A because no CI workflows exist in repository prior to `WP-002`.
+     * Strict compensating controls for `WP-001`: local `npm ci`, local `npm run build`, dependency graph linting, evidence artifact with command output, dual review (`01_Solution_Architect` + `11_Code_Reviewer`).
+   - **Stage B (Post-WP-002 Full Protection):** Immediately after `WP-002` merges and establishes GitHub Actions workflow contexts, `main` branch protection must be updated to enforce mandatory passing CI status checks (`build`, `lint`, `typecheck`, `unit-tests`, `secret-scan`). Stage B is a hard precondition before `WP-003` or any subsequent domain WP can merge.
 4. **Supply Chain Contract:** Monorepo package management adheres strictly to `npm workspaces`, committed `package-lock.json`, and `npm ci` in all CI/build environments per `SUPPLY_CHAIN_SECURITY.md`.
 5. **Tooling Decision:** ORM selection (`Drizzle` vs. `Prisma`) must be formally recorded by `17_Database_Engineer` and `03_Data_Architect` prior to starting `WP-003`.
 6. **Migration Governance:** Database schema evolution adheres strictly to `DATA_MIGRATION_STRATEGY.md` (Expand-Transition-Contract). Universal destructive down-migrations in production are prohibited.

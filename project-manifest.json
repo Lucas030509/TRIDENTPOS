@@ -28,8 +28,8 @@
   "implementation_readiness_gate_evidence_commit": "ee3348e4f604d9b1ea5c37e14257482079a48ddd",
   "product_owner_approval": "APPROVED",
   "implementation_authorized": "FALSE / PENDING REPOSITORY CONTROL ACTIVATION",
-  "next_action": "ENABLE AND VERIFY MAIN BRANCH PROTECTION",
-  "next_author_agent": "18_DevOps_Engineer / Repo Admin",
+  "next_action": "INDEPENDENT GOVERNANCE REVIEW OF IMPLEMENTATION ACTIVATION BOOTSTRAP AMENDMENT",
+  "next_author_agent": "Independent Solution Architect",
   "ssot_functional_artifacts": [
     "RESTAURANT_SOFTWARE_RECONSTRUCTION_SPEC.md",
     "FUNCTIONAL_ARCHITECTURE.md",
@@ -79,6 +79,7 @@
     "IMPLEMENTATION_READINESS_REMEDIATION_EVIDENCE.md",
     "IMPLEMENTATION_READINESS_GATE_EVIDENCE.md",
     "PRODUCT_OWNER_IMPLEMENTATION_READINESS_APPROVAL.md",
+    "IMPLEMENTATION_ACTIVATION_BOOTSTRAP_AMENDMENT.md",
     "HANDOFF_IMPLEMENTATION.md"
   ],
   "adr_suite": [
