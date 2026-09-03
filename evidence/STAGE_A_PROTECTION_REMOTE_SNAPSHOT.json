@@ -1,0 +1,35 @@
+{
+  "repository": "Lucas030509/TRIDENTPOS",
+  "branch": "main",
+  "mechanism": "Classic Branch Protection",
+  "timestamp": "2026-09-03T18:58:47Z",
+  "protection_url": "https://api.github.com/repos/Lucas030509/TRIDENTPOS/branches/main/protection",
+  "enforce_admins": {
+    "enabled": true
+  },
+  "required_pull_request_reviews": {
+    "dismiss_stale_reviews": false,
+    "require_code_owner_reviews": false,
+    "require_last_push_approval": false,
+    "required_approving_review_count": 1
+  },
+  "allow_force_pushes": {
+    "enabled": false
+  },
+  "allow_deletions": {
+    "enabled": false
+  },
+  "required_status_checks": null,
+  "collaborators_count": 1,
+  "collaborators": [
+    {
+      "login": "Lucas030509",
+      "role_name": "admin",
+      "permissions": {
+        "admin": true,
+        "push": true,
+        "pull": true
+      }
+    }
+  ]
+}
