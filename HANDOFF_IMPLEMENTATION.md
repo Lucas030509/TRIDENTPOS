@@ -26,13 +26,14 @@
 Before any work package implementation begins:
 1. **Gate Verdict:** `IMPLEMENTATION_READINESS_GATE` evaluated as **`PASS`** by Independent Solution Architect.
 2. **Product Owner Decision:** Formal PO Approval recorded and frozen.
-3. **Repository Control Activation Precondition (`AMEND-GOV-IR-001` Implementation Activation Bootstrap Protocol):**
+3. **Repository Control Activation Precondition (`AMEND-GOV-IR-001` / `ADR-010` Solo Maintainer Model):**
    - **Stage A (Pre-WP-001 Bootstrap):** Stage A remote `main` branch protection must be enabled and independently verified on remote **before `WP-001` implementation begins** (no builder may begin `WP-001`, write implementation code, execute WP changes, or open formal handoff execution until Stage A is verified on remote), enforcing:
      * Mandatory pull requests before merging (direct commits to `main` prohibited).
-     * Minimum 1 approved review from designated reviewer (builder cannot self-approve).
+     * Admin enforcement (`enforce_admins = true`).
      * Prohibition of force pushes and branch deletions.
+     * Solo Maintainer Profile (`ADR-010`): GitHub required approving review count set to 0 while `active_human_maintainers = 1` (eliminates impossible human reviewer requirement; auto-upgrades to >= 1 when >= 2 maintainers exist).
      * Automated status check contexts omitted during Stage A because no CI workflows exist in repository prior to `WP-002`.
-     * Strict compensating controls for `WP-001`: local `npm ci`, local `npm run build`, dependency graph linting, evidence artifact with command output, dual review (`01_Solution_Architect` + `11_Code_Reviewer`).
+     * Strict compensating controls for `WP-001`: local `npm ci`, local `npm run build`, dependency graph linting, evidence artifact with command output, dual independent EAAF agent review (`01_Solution_Architect` + `11_Code_Reviewer`).
    - **Stage B (Post-WP-002 Full Protection):** Immediately after `WP-002` merges and establishes GitHub Actions workflow contexts, `main` branch protection must be updated to enforce mandatory passing CI status checks (`build`, `lint`, `typecheck`, `unit-tests`, `secret-scan`, `sca-scan`). Stage B is a hard precondition before `WP-003` or any subsequent domain WP can merge.
 4. **Supply Chain Contract:** Monorepo package management adheres strictly to `npm workspaces`, committed `package-lock.json`, and `npm ci` in all CI/build environments per `SUPPLY_CHAIN_SECURITY.md`.
 5. **Tooling Decision:** ORM selection (`Drizzle` vs. `Prisma`) must be formally recorded by `17_Database_Engineer` and `03_Data_Architect` prior to starting `WP-003`.
