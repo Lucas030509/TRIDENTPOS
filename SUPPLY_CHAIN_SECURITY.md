@@ -21,7 +21,7 @@ Para prevenir la introducción de dependencias maliciosas o vulnerabilidades con
 
 ## 2. Protocolo de Confianza para Actualizaciones de Electron (Secure Auto-Updates)
 
-Para garantizar que los instaladores y actualizaciones remotas distribuidas a los servidores de sucursal provienen exclusivamente de fuentes autorizadas:
+Para validar que los instaladores y actualizaciones remotas distribuidas a los servidores de sucursal provienen exclusivamente de fuentes autorizadas:
 
 ```mermaid
 sequenceDiagram

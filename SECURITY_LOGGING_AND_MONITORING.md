@@ -12,7 +12,7 @@
 
 ## 1. Diseño de Auditoría Tamper-Evident por Capas (R2F-03)
 
-Para garantizar la integridad de la bitácora de eventos sin incurrir en falsas afirmaciones de invulnerabilidad, la arquitectura implementa un **Diseño Tamper-Evident en Dos Capas**:
+Para proteger la integridad de la bitácora de eventos sin incurrir en falsas afirmaciones de invulnerabilidad, la arquitectura implementa un **Diseño Tamper-Evident en Dos Capas**:
 
 ```mermaid
 graph TD

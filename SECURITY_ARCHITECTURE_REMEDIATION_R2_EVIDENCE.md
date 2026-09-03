@@ -1,4 +1,4 @@
-# SECURITY ARCHITECTURE REMEDIATION R2 EVIDENCE (R2F-01 TO R2F-04)
+# SECURITY ARCHITECTURE REMEDIATION R2 EVIDENCE (R2F-01 TO R2F-05)
 
 **Framework:** `EAAF v1.2.0 @ 7e036f43240b3dc28ccb996e350263598275b2cd`  
 **Repository:** `https://github.com/Lucas030509/TRIDENTPOS.git`  
@@ -8,7 +8,7 @@
 **Security Remediation R1 Subject Commit:** `40aab91b9f3f7fe1dfbd6f7f7e20c28151954cfd`  
 **Canonical Security Gate R2 Remote Evidence Commit:** `12e256a3586ebe4644a116ce35914b1f1a3551dc` (Branch `review/security-gate-r2`)  
 **Author Agent:** `08_Security_Architect — Remediation Author`  
-**Date:** 2026-09-02  
+**Date:** 2026-09-03  
 
 ---
 
@@ -19,11 +19,11 @@
 > - The canonical remote Gate R2 evidence commit published and verified on `origin/review/security-gate-r2` is:
 >   `12e256a3586ebe4644a116ce35914b1f1a3551dc`
 > - The canonical remote commit directly descends from `40aab91b9f3f7fe1dfbd6f7f7e20c28151954cfd`, adds only `SECURITY_GATE_R2_EVIDENCE.md`, and records `SECURITY_GATE R2 = PASS`.
-> - The R2 PASS was not accepted for Product Owner freeze because post-review governance verification identified 4 specific findings (`R2F-01` to `R2F-04`), which are fully resolved in this remediation branch.
+> - The R2 PASS was not accepted for Product Owner freeze because post-review governance verification identified specific findings (`R2F-01` to `R2F-05`), which are fully resolved in this remediation branch.
 
 ---
 
-## 2. Remediation Matrix (R2F-01 to R2F-04)
+## 2. Remediation Matrix (R2F-01 to R2F-05)
 
 | Finding ID | Governance Subject | Status | Affected Artifacts | Specific Evidence & Remediation Summary |
 |---|---|---|---|---|
@@ -31,6 +31,7 @@
 | **R2F-02** | Complete Product Owner Neutrality Across All Matrix Columns | **RESOLVED** | `SECURITY_CONTROL_MATRIX.md` (Sec. 1), `SECURITY_ARCHITECTURE.md` (Sec. 6.1) | Normalized all columns (Authorization, Enforcement Point, Offline, Re-auth) for the 9 OQs to `PENDING PO DECISION` / `DEPENDS ON PO-APPROVED POLICY`. Specifically corrected `OQ-SSOT-04` (Cancelación Total Móvil). |
 | **R2F-03** | Removal of Unauthorized Risk Acceptance Claims | **RESOLVED** | `SECURITY_LOGGING_AND_MONITORING.md` (Sec. 1), `SECURITY_RISKS.md` (SEC-06) | Removed unauthorized 'aceptado' wording; replaced with `DOCUMENTED RESIDUAL RISK — FORMAL ACCEPTANCE NOT YET RECORDED (Decision pending authorized risk owner)`. |
 | **R2F-04** | Remote Evidence Traceability and Baseline Alignment | **RESOLVED** | `SECURITY_ARCHITECTURE_REMEDIATION_R2_EVIDENCE.md`, `HANDOFF_SECURITY_GATE.md` | Recorded canonical remote SHA `12e256a3586ebe4644a116ce35914b1f1a3551dc` and preserved immutable review history. |
+| **R2F-05** | Removal of Unsupported Offline Guarantees & False Absolutes | **RESOLVED** | `THREAT_MODEL.md` (THR-10, THR-11, Sec. 3), `SECURITY_LOGGING_AND_MONITORING.md`, `SUPPLY_CHAIN_SECURITY.md` | Removed unsupported claims of '100% offline capacity' and 'operación local garantizada'. Replaced with qualified bounded offline continuity control and validation dependencies. Classified 60s override token as `SECURITY POLICY DEFAULT`. |
 
 ---
 
@@ -56,6 +57,27 @@
 2. **OQ-SSOT-04:** Security does not assume mobile total cancellation is available offline or online (`PENDING PO DECISION`).
 3. **Risk Acceptance:** Zero author claims of organizational risk acceptance without named authority.
 4. **Traceability:** Canonical remote R2 SHA `12e256a3586ebe4644a116ce35914b1f1a3551dc` verified and recorded.
+5. **No Unsupported Offline Guarantees (R2F-05):** Zero claims of '100% offline capacity', 'zero loss', 'always available' or unconditional continuity. Offline capability strictly bounded to designated workflows.
+
+---
+
+## 5. R2F-05 — Unsupported Offline Guarantee Removal Evidence
+
+- **Artifact:** `THREAT_MODEL.md` (Row `THR-10`, Row `THR-11`, Section 3)
+- **Original Wording (`THR-10`):**
+  - Control: *"Cloud WAF + Rate limiting por IP/Tenant + Capacidad Offline 100% en Edge."*
+  - Requisito de Validación: *"Operación local garantizada de forma autónoma sin dependencia WAN."*
+  - Disposición: *"ARCHITECTURALLY RESOLVED — `PENETRATION VALIDATION REQUIRED`"*
+- **Corrected Wording (`THR-10`):**
+  - Control: *"Cloud WAF + Rate limiting por IP/Tenant + Offline-capable branch workflows explicitly designated by the frozen Solution Architecture can continue using Edge-local authority during WAN loss, subject to topology, cached data, entitlements, folio leases and applicable offline-policy constraints."*
+  - Requisito de Validación: *"Failure-mode and offline-continuity behavior requires implementation and QA validation on representative branch conditions."*
+  - Disposición: *"ARCHITECTURALLY RESOLVED — `IMPLEMENTATION / FAILURE-MODE VALIDATION REQUIRED`"*
+- **Explicit Scope Limitation Added (`THREAT_MODEL.md` Sec. 3):**
+  *"Offline capability refers only to workflows explicitly designated as Edge-authoritative/offline-capable in the frozen Solution Architecture. It does not imply that all ERP capabilities, Cloud administration, integrations, analytics, fiscal processes, catalog administration or unresolved Product Owner capabilities are available offline."*
+- **Classification of 60-second override token (`THR-11`):**
+  Classified explicitly as `SECURITY POLICY DEFAULT` while retaining its 60-second duration.
+- **Validation Dependency:**
+  Downstream failure-mode and chaos-engineering test execution in QA/Staging environments under simulated WAN outage conditions.
 
 ---
 
