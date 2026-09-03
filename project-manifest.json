@@ -9,7 +9,7 @@
   "eaaf_ref": "codex/eaaf-v1.2-governance",
   "eaaf_commit": "7e036f43240b3dc28ccb996e350263598275b2cd",
   "adoption_status": "GOVERNED",
-  "active_lifecycle_phase": "IMPLEMENTATION READINESS — PREPARATION",
+  "active_lifecycle_phase": "IMPLEMENTATION READINESS — AUTHORING",
   "solution_architecture_gate": "PASS",
   "solution_architecture_baseline": "FROZEN",
   "reviewed_solution_architecture_commit": "9c0961c2c466375f9a219da06c988335b77d2733",
@@ -68,6 +68,11 @@
     "SECURITY_GATE_R3_EVIDENCE.md",
     "PRODUCT_OWNER_SECURITY_ARCHITECTURE_APPROVAL.md",
     "HANDOFF_IMPLEMENTATION_READINESS.md"
+  ],
+  "implementation_readiness_artifacts": [
+    "IMPLEMENTATION_PLAN.md",
+    "IMPLEMENTATION_READINESS_EVIDENCE.md",
+    "HANDOFF_IMPLEMENTATION.md"
   ],
   "adr_suite": [
     "ADR/ADR-001-modular-monolith-bounded-contexts.md",
