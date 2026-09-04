@@ -29,6 +29,6 @@
     "pg-protocol": "1.7.1"
   },
   "devDependencies": {
-    "@types/pg": "^8.11.11"
+    "@types/pg": "8.11.11"
   }
 }
