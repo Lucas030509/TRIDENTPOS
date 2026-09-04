@@ -54,13 +54,14 @@ While `active_human_maintainers = 1`, remote `main` branch protection is configu
 6. **Status Checks (Stage A):** Omitted during `WP-001` and `WP-002`.
 7. **Status Checks (Stage B):** Enforced immediately after `WP-002` (`build`, `lint`, `typecheck`, `unit-tests`, `secret-scan`, `sca-scan`).
 
-### 3.3 Segregated EAAF Agent Review Lifecycle
+### 3.3 Segregated EAAF Agent Review Lifecycle & Sidecar Evidence
 During Solo Mode, GitHub human approval count is 0. However, every code-producing Work Package must obtain formal PASS evidence from BOTH of the following sequential agent activations:
-1. **Builder Activation:** Implements feature on dedicated branch (`feature/wp-xxx`).
-2. **Specialist Reviewer Activation:** Fresh session evaluating domain compliance (`01_Solution_Architect`, `03_Data_Architect`, `08_Security_Architect`, `10_DevOps_Platform_Architect`, `09_QA_Test_Architect`).
-3. **11_Code_Reviewer Activation:** Fresh session evaluating code quality, edge cases, and security.
+1. **Builder Activation:** Implements feature on dedicated branch (`feature/wp-xxx`), executes tests/builds, and commits builder execution evidence to freeze **Implementation Subject SHA `S`**.
+2. **Specialist Reviewer Activation:** Fresh session evaluating domain compliance (`01_Solution_Architect`, `03_Data_Architect`, `08_Security_Architect`, `10_DevOps_Platform_Architect`, `09_QA_Test_Architect`), committing evidence `ES` on a sidecar review branch referencing `S`.
+3. **11_Code_Reviewer Activation:** Fresh session evaluating code quality, edge cases, and security, committing evidence `EC` on a sidecar review branch referencing `S`.
 * Builder cannot review their own work in the same session.
-* Markdown review evidence containing exact pinned commit SHAs, Expected vs Actual results, findings, and formal PASS / PARTIAL / FAIL verdict must be committed before merging. These are internal EAAF agent verifications, NOT GitHub human approvals.
+* Reviewer evidence is strictly **sidecar evidence**; it must NOT be committed to the implementation feature branch after `S`.
+* **Hard SHA-Binding Invariant:** `SPECIALIST_REVIEW.subject_sha = CODE_REVIEW.subject_sha = IMPLEMENTATION_PR.head_sha = S` immediately before merge. Any post-review change to the PR head (code, documentation, rebase, merge-from-main) invalidates all review passes and mandates full re-review. Never allow $\text{PASS}(S) \rightarrow \text{MERGE}(S_2)$.
 
 ### 3.4 Automated CI as the Primary Gate (Stage B)
 Because human peer review is absent, Stage B automated CI status checks (`build`, `lint`, `typecheck`, `unit-tests`, `secret-scan`, `sca-scan`) serve as the uncompromising machine gate for every PR starting with `WP-003`.

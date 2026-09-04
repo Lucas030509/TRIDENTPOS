@@ -98,14 +98,32 @@ For as long as `active_human_maintainers = 1`:
 7. **Stage A Status Checks:** Omitted (until `WP-002` authors workflows).
 8. **Stage B Status Checks:** Enforced immediately post-`WP-002` (`build`, `lint`, `typecheck`, `unit-tests`, `secret-scan`, `sca-scan`).
 
-### 4.2 Segregated EAAF Agent Review Obligations
-GitHub branch protection enforces `required_approving_review_count = 0` on GitHub during Solo Mode because no second human exists. However, every code-producing Work Package must obtain formal PASS evidence from BOTH of the following segregated EAAF agent activations before merge:
-1. **Builder Activation:** Generates the implementation on a feature branch (`18_DevOps_Engineer`, `13_Backend_Developer`, etc.).
-2. **Specialist Reviewer Activation:** Fresh context evaluating domain architecture (`01_Solution_Architect`, `03_Data_Architect`, `10_DevOps_Platform_Architect`, `08_Security_Architect`).
-3. **Code Reviewer Activation:** Fresh context evaluating code quality and security (`11_Code_Reviewer`).
-* Builder cannot self-review inside the same activation.
-* All reviews must inspect an immutable, pinned commit SHA, evaluate Expected vs Actual results, document findings, and record an explicit `PASS` verdict.
-* These agent reviews are EAAF verification artifacts, NOT GitHub human approvals.
+### 4.2 Segregated EAAF Agent Review & Sidecar Evidence Architecture
+GitHub branch protection enforces `required_approving_review_count = 0` on GitHub during Solo Mode because no second human exists. To prevent false PASS and uncontrolled branch mutation, review execution is governed by a strict SHA-binding and sidecar evidence model:
+
+1. **Canonical Terminology:**
+   * **`B` (Implementation Base SHA):** The immutable base commit on `main` from which the feature branch was branched.
+   * **`S` (Implementation Subject SHA):** The final feature-branch HEAD commit after all implementation code, builder tests, builder execution logs, and builder documentation have been committed. `S` is frozen BEFORE reviewer activation begins.
+   * **`ES` (Specialist Review Evidence SHA):** Evidence-only commit produced by the assigned Specialist Reviewer Agent referencing `S` on a sidecar review branch (`review/wp-XXX-specialist-rN`).
+   * **`EC` (Code Review Evidence SHA):** Evidence-only commit produced by `11_Code_Reviewer` referencing `S` on a sidecar review branch (`review/wp-XXX-code-rN`).
+
+2. **Builder Evidence vs. Reviewer Sidecar Evidence:**
+   * Builder execution evidence (build, lint, automated test logs, rollback verification) is committed on the feature branch BEFORE `S` is frozen.
+   * Reviewer PASS evidence (`ES`, `EC`) MUST NOT be committed to the implementation feature branch after `S`. Reviewer evidence is strictly **SIDECAR EVIDENCE**.
+
+3. **Hard SHA-Binding Invariant:**
+   ```text
+   SPECIALIST_REVIEW.subject_sha = CODE_REVIEW.subject_sha = IMPLEMENTATION_PR.head_sha = S
+   ```
+   If `IMPLEMENTATION_PR.head_sha != S` at merge authorization time (for any reason, including code edits, documentation changes, evidence commits, rebase, or merge-from-main), all previous review verdicts are **INVALID** and full re-review is mandatory. Never allow $\text{PASS}(S) \rightarrow \text{MERGE}(S_2)$.
+
+4. **Pre-Merge Authorization Checklist:** Merge is authorized only when:
+   * PR head SHA equals reviewed subject `S`;
+   * Both `ES` and `EC` exist remotely, reference `S`, and award `PASS`;
+   * No subsequent commit exists on the implementation feature branch;
+   * Stage B automated CI status checks are green;
+   * Open blocking findings = 0;
+   * Governed merge record logs `S`, `ES`, `EC`, and merge commit `M`.
 
 ### 4.3 High-Risk Change Compensating Policy
 Work Packages involving critical domains are mapped canonically per `IMPLEMENTATION_PLAN.md`:

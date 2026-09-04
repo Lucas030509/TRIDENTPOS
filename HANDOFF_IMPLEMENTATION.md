@@ -60,9 +60,10 @@ Builders must execute work packages in strict wave dependency sequence according
 
 ## 3. Branching, PR and Dual EAAF Agent Review Rules
 
-* **Branch Per Work Package:** Every WP must be implemented on its own dedicated branch: `feature/wp-XXX-<slug>`.
+* **Branch Per Work Package:** Every WP must be implemented on its own dedicated branch: `feature/wp-XXX-<slug>` created from base commit `B`.
 * **Builder Agent $\ne$ Reviewer Agent:** The author/builder of an implementation cannot act as reviewer in the same session.
-* **GitHub Human Approval vs. EAAF Agent Evidence (Solo Mode):** Under Solo Maintainer Mode (`ADR-010`), GitHub `required_approving_review_count = 0` because exactly one human maintainer exists (no distinct human is available to provide human approval). However, human approval is NOT bypassed or faked. Instead, every code-producing WP must obtain PASS evidence from BOTH the assigned Specialist Reviewer Agent and `11_Code_Reviewer` Agent before merge:
+* **Builder Execution Evidence (Part of Frozen Subject `S`):** Before requesting review, the builder MUST execute and commit all builder execution evidence under `evidence/` on the feature branch (documenting `npm ci`, `npm run build`, automated test logs, lint checks, rollback verification, and remaining risk). The final commit containing all implementation code and builder evidence constitutes the **Implementation Subject SHA `S`**, which is frozen before reviewer activation.
+* **GitHub Human Approval vs. EAAF Agent Evidence (Solo Mode):** Under Solo Maintainer Mode (`ADR-010`), GitHub `required_approving_review_count = 0` because exactly one human maintainer exists. However, every code-producing WP must obtain PASS evidence from BOTH:
   1. **Primary Specialist Reviewer Agent:**
      - Database changes: `03_Data_Architect` (and `08_Security_Architect` for RLS).
      - Security/Crypto/Auth/IPC changes: `08_Security_Architect`.
@@ -70,8 +71,19 @@ Builders must execute work packages in strict wave dependency sequence according
      - DevOps pipelines/Packaging: `10_DevOps_Platform_Architect`.
      - Testing/Chaos: `09_QA_Test_Architect`.
   2. **Mandatory Code Reviewer Agent:** `11_Code_Reviewer` on 100% of code-producing WPs.
-* **Review Evidence Contract:** EAAF agent reviews must inspect an immutable pinned subject SHA, evaluate Expected vs Actual results, record findings, and produce explicit PASS / PARTIAL / FAIL evidence committed under `evidence/`. They are internal EAAF verification artifacts, NOT GitHub human approvals.
-* **Evidence Delivery:** Every PR must include its verifiable evidence markdown artifact under `evidence/` documenting Expected vs. Actual, test run output, commit SHA, and remaining risk.
+* **Sidecar Review Evidence (NO Mutation of `S`):** Reviewer PASS evidence (`ES`, `EC`) MUST NOT be committed to the implementation feature branch after `S`. Reviewers operate on dedicated sidecar review branches (`review/wp-XXX-specialist-rN`, `review/wp-XXX-code-rN`), inspecting immutable subject `S`.
+* **Hard SHA-Binding Invariant:**
+  ```text
+  SPECIALIST_REVIEW.subject_sha = CODE_REVIEW.subject_sha = IMPLEMENTATION_PR.head_sha = S
+  ```
+  If `IMPLEMENTATION_PR.head_sha != S` at merge authorization time (for any reason, including code edits, documentation changes, evidence commits, rebase, or merge-from-main), all previous reviews are **INVALID** and full re-review is mandatory. Never allow $\text{PASS}(S) \rightarrow \text{MERGE}(S_2)$.
+* **Pre-Merge Authorization Checklist:** Merge is authorized only when:
+  1. PR head SHA equals reviewed subject `S`;
+  2. Both `ES` and `EC` exist remotely, reference `S`, and award `PASS`;
+  3. No post-review commit exists on the feature branch;
+  4. Stage B automated CI checks are green;
+  5. Open blocking findings = 0;
+  6. Governing completion record logs `S`, `ES`, `EC`, and merge commit `M`.
 
 ---
 

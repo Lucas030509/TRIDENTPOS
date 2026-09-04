@@ -83,13 +83,93 @@ To compensate for the absence of a secondary human reviewer, EAAF enforces stric
 └───────────────────────────┘
 ```
 
-### Mandatory Execution Invariants:
-1. **Fresh Context:** Reviewer agents must operate in dedicated, fresh activations with independent prompt contexts.
-2. **Immutable Subject SHA:** Reviews must inspect a specific, pinned git commit SHA. Modifying files during review invalidates the review.
-3. **Structured Verdict & Evidence:** Reviews must contain actual command outputs, test execution logs, findings, and an explicit Expected vs Actual matrix resulting in an unambiguous verdict (`PASS`, `PARTIAL`, or `FAIL`).
-4. **Agent Evidence vs. GitHub Human Approval:** Every code-producing WP must obtain PASS evidence from BOTH the assigned Specialist Reviewer Agent and `11_Code_Reviewer` Agent before merge. These are internal EAAF verification artifacts, NOT GitHub human approvals (`required_approving_review_count = 0` on GitHub during Solo Mode).
+### 3.1 Canonical Terminology
+To eliminate ambiguity between implementation code commits and review evidence commits, the following terms are normative:
+* **`B` — Implementation Base SHA:** The immutable `main`/base commit from which the Work Package feature branch was created for the reviewed iteration.
+* **`S` — Implementation Subject SHA:** The final feature-branch HEAD commit after implementation changes, builder automated tests, builder-generated execution evidence, and builder-required documentation have all been committed. `S` is frozen BEFORE reviewer activation begins.
+* **`ES` — Specialist Review Evidence SHA:** The evidence-only commit produced by the assigned Specialist Reviewer Agent. `ES` references `S` and must NOT mutate the implementation feature branch.
+* **`EC` — Code Review Evidence SHA:** The evidence-only commit produced by `11_Code_Reviewer`. `EC` references the same `S` and must NOT mutate the implementation feature branch.
 
----
+### 3.2 Hard SHA-Binding Invariant
+Before merge authorization, the following identity is mandatory:
+```text
+SPECIALIST_REVIEW.subject_sha = CODE_REVIEW.subject_sha = IMPLEMENTATION_PR.head_sha = S
+```
+If `IMPLEMENTATION_PR.head_sha != S`, **ALL PREVIOUS REVIEW PASSES ARE INVALID**.
+The required consequence is: **`RE-REVIEW REQUIRED`**.
+This invalidation is absolute and applies regardless of why HEAD changed:
+* Code changes or bug fixes;
+* Documentation updates or typos;
+* Review evidence commits added to the feature branch;
+* Conflict resolution or merge-from-main;
+* Branch rebase;
+* Generated file or lockfile modifications;
+* Formatting or lint auto-fixes.
+Zero exceptions.
+
+### 3.3 Post-Review Mutation Rule
+After `S` is frozen and reviewer activation begins:
+* **NO commit may be added to the implementation feature branch without invalidating all existing PASS evidence for `S`.**
+* If an additional commit creates `S2`, then BOTH the Specialist Reviewer Agent and `11_Code_Reviewer` Agent must review `S2` before `S2` can be authorized for merge.
+* A review verdict `PASS(S)` never authorizes merging `S2`.
+
+### 3.4 Builder Execution Evidence vs. Reviewer Sidecar Evidence
+* **Builder Execution Evidence:** Includes outputs of `npm ci`, `npm run build`, automated test suite runs, lint checks, benchmarks, database migration dry-runs, monorepo workspace dependency graph validations, and rollback verifications. This evidence MAY and SHOULD be committed to the implementation feature branch BEFORE `S` is frozen (and is therefore part of `S`).
+* **Reviewer PASS Evidence:** Specialist Reviewer evidence (`ES`) and `11_Code_Reviewer` evidence (`EC`) MUST NOT be committed to the implementation feature branch after `S`. Reviewer evidence is strictly **SIDECAR EVIDENCE**.
+
+### 3.5 Sidecar Review Evidence Model
+For code-producing Work Packages, reviewer evidence is generated on separate review/evidence branches that do not modify the implementation feature branch:
+* Specialist Review Branch: `review/wp-XXX-specialist-rN`
+* Code Review Branch: `review/wp-XXX-code-rN`
+
+A reviewer evidence branch must:
+1. Originate from an appropriate repository baseline that does not silently merge implementation changes;
+2. Add only the reviewer evidence artifact (no implementation changes);
+3. Reference the exact implementation subject SHA `S`;
+4. Identify the reviewer agent and activation context;
+5. Record raw command outputs, test results, and Expected vs. Actual matrix;
+6. Document findings and issue an unambiguous verdict (`PASS`, `PARTIAL`, `FAIL`);
+7. Report the exact immutable evidence commit SHA (`ES` or `EC`).
+
+Reviewer evidence branches must never contain unreviewed implementation mutations. Governance-change reviews and code Work Package reviews may follow distinct ancestry patterns as governed (e.g., governance review branches created from author subject vs. implementation sidecars).
+
+### 3.6 Pre-Merge Authorization Check
+Immediately before merging an implementation PR, the following 10-point checklist must be satisfied:
+1. `IMPLEMENTATION_PR.head_sha == S`;
+2. Specialist Review evidence exists and explicitly references `S`;
+3. Specialist Review verdict = `PASS`;
+4. Code Reviewer evidence exists and explicitly references `S`;
+5. Code Reviewer verdict = `PASS`;
+6. `ES` and `EC` are immutable commits published to remote;
+7. No subsequent commit exists on the implementation feature branch;
+8. All applicable automated status checks (Stage B CI) are green (`PASS`);
+9. Open blocking findings = `0`;
+10. Applicable Product Owner question dependencies are satisfied or neutral contract interfaces are preserved.
+
+If any check fails: **`MERGE NOT AUTHORIZED`**.
+
+### 3.7 Merge Commit Clarification
+The required invariant is that `IMPLEMENTATION_PR.head_sha` immediately before merge equals `S`. If the GitHub merge strategy creates a merge commit `M` on `main`:
+* The governed Work Package record stores: `S` (subject), `ES` (specialist evidence), `EC` (code review evidence), and `M` (merged commit on `main`).
+* Verification confirms that `M` is the direct governed merge of PR head `S`.
+* No unreviewed commit may appear between `S` and `M`.
+
+### 3.8 Branch Synchronization & Up-to-Date Invariant
+If repository branch protection or merge conditions require updating the feature branch with `main` after review completion:
+* That update (rebase or merge-from-main) changes the implementation HEAD: $S \rightarrow S_2$.
+* Consequently, `PASS(S)` is rendered invalid.
+* Both reviews must be repeated against $S_2$.
+* Branch synchronization is **never** a review-neutral operation.
+
+### 3.9 Review Evidence Persistence & Traceability
+The review evidence commits `ES` and `EC` must remain remotely immutable and traceable at merge authorization. After implementation merge, they must be incorporated into canonical repository evidence and history through governed evidence PRs or approved EAAF evidence mechanisms. Never delete the sole remote evidence branch before canonicalization.
+The final Work Package completion record must document:
+```text
+Implementation Subject:  S  (<commit-sha>)
+Specialist Evidence:     ES (<commit-sha>)
+Code Review Evidence:    EC (<commit-sha>)
+Merged Result:           M  (<commit-sha>)
+```
 
 ## 4. High-Risk Change Policy
 
