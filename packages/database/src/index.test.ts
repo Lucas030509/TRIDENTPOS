@@ -3,22 +3,30 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import type pg from 'pg';
 import { getPool, closePool, checkConnection } from './connection.js';
 import { migrateUp, migrateDown, getMigrationStatus, DEFAULT_MIGRATIONS_DIR } from './runner.js';
 import { computeChecksum } from './checksum.js';
 import { loadMigrationFiles } from './parser.js';
+import { setTenantContext } from './tenant.js';
 
 describe('TRIDENTPOS WP-003 PostgreSQL Migration Engine Integration Suite', () => {
   const pool = getPool();
   const baselineId = '20260904160000';
+  const baselineSuiteDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wp003-baseline-suite-'));
+  fs.copyFileSync(
+    path.join(DEFAULT_MIGRATIONS_DIR, `${baselineId}_baseline_infrastructure.sql`),
+    path.join(baselineSuiteDir, `${baselineId}_baseline_infrastructure.sql`),
+  );
 
   before(async () => {
     const client = await pool.connect();
     try {
       await client.query(`
-        DROP TABLE IF EXISTS _migrations CASCADE;
+        DROP TABLE IF EXISTS test_composite_ref, branches, organizations, _migrations CASCADE;
         DROP EXTENSION IF EXISTS pgcrypto CASCADE;
         DROP EXTENSION IF EXISTS "uuid-ossp" CASCADE;
+        DROP FUNCTION IF EXISTS current_app_org_id() CASCADE;
       `);
     } finally {
       client.release();
@@ -26,7 +34,7 @@ describe('TRIDENTPOS WP-003 PostgreSQL Migration Engine Integration Suite', () =
   });
 
   after(async () => {
-    await closePool(pool);
+    fs.rmSync(baselineSuiteDir, { recursive: true, force: true });
   });
 
   it('WP003-T01: PostgreSQL 16 connectivity', async () => {
@@ -37,7 +45,7 @@ describe('TRIDENTPOS WP-003 PostgreSQL Migration Engine Integration Suite', () =
   });
 
   it('WP003-T02: required extension migration applies', async () => {
-    const result = await migrateUp(pool);
+    const result = await migrateUp(pool, { migrationsDir: baselineSuiteDir });
     assert.equal(result.alreadyUpToDate, false);
     assert.ok(result.applied.includes(`${baselineId}_baseline_infrastructure`));
 
@@ -73,7 +81,7 @@ describe('TRIDENTPOS WP-003 PostgreSQL Migration Engine Integration Suite', () =
   });
 
   it('WP003-T05: re-running migration is idempotent/no duplicate execution', async () => {
-    const secondRun = await migrateUp(pool);
+    const secondRun = await migrateUp(pool, { migrationsDir: baselineSuiteDir });
     assert.equal(secondRun.alreadyUpToDate, true);
     assert.equal(secondRun.applied.length, 0);
     const rows = await pool.query<{ count: string }>(`SELECT count(*) FROM _migrations;`);
@@ -222,23 +230,26 @@ describe('TRIDENTPOS WP-003 PostgreSQL Migration Engine Integration Suite', () =
       DROP EXTENSION IF EXISTS pgcrypto CASCADE;
       DROP EXTENSION IF EXISTS "uuid-ossp" CASCADE;
     `);
-    const result = await migrateUp(pool);
+    const result = await migrateUp(pool, { migrationsDir: baselineSuiteDir });
     assert.equal(result.alreadyUpToDate, false);
     assert.ok(result.applied.includes(`${baselineId}_baseline_infrastructure`));
-    const statuses = await getMigrationStatus(pool);
+    const statuses = await getMigrationStatus(pool, { migrationsDir: baselineSuiteDir });
     assert.equal(statuses.length, 1);
     assert.equal(statuses[0]?.applied, true);
     assert.equal(statuses[0]?.checksumMatches, true);
   });
 
   it('WP003-T13: up → down → up cycle works in test environment', async () => {
-    const downRes = await migrateDown(pool, { allowDestructiveDown: true });
+    const downRes = await migrateDown(pool, {
+      allowDestructiveDown: true,
+      migrationsDir: baselineSuiteDir,
+    });
     assert.equal(downRes.reverted, `${baselineId}_baseline_infrastructure`);
     const extAfterDown = await pool.query(
       `SELECT extname FROM pg_extension WHERE extname IN ('uuid-ossp', 'pgcrypto');`,
     );
     assert.equal(extAfterDown.rows.length, 0);
-    const upRes = await migrateUp(pool);
+    const upRes = await migrateUp(pool, { migrationsDir: baselineSuiteDir });
     assert.ok(upRes.applied.includes(`${baselineId}_baseline_infrastructure`));
   });
 
@@ -325,5 +336,647 @@ describe('TRIDENTPOS WP-003 PostgreSQL Migration Engine Integration Suite', () =
       await pool.query(`DROP TABLE IF EXISTS test_concurrent, ${testTable} CASCADE;`);
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('TRIDENTPOS WP-004 Organization & Branch Multi-Tenant RLS Foundation Suite', () => {
+  const pool = getPool();
+  const testRole = 'trident_test_app';
+  const baselineId = '20260904160000';
+  const wp004Id = '20260904170000';
+
+  const tenantAId = '11111111-1111-1111-1111-111111111111';
+  const tenantBId = '22222222-2222-2222-2222-222222222222';
+  const branchAId = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+  const branchBId = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
+
+  async function asTestRole<T>(fn: (client: pg.PoolClient) => Promise<T>): Promise<T> {
+    const client = await pool.connect();
+    try {
+      await client.query(`SET ROLE ${testRole};`);
+      return await fn(client);
+    } finally {
+      await client.query('ROLLBACK;').catch(() => {});
+      await client.query('RESET ROLE;').catch(() => {});
+      client.release();
+    }
+  }
+
+  async function seedTestData(): Promise<void> {
+    const client = await pool.connect();
+    try {
+      await client.query(`
+        INSERT INTO organizations (id, legal_name, trade_name, tax_id)
+        VALUES
+          ('${tenantAId}', 'Tenant A Legal Name', 'Tenant A Trade', 'TAX-ORG-A'),
+          ('${tenantBId}', 'Tenant B Legal Name', 'Tenant B Trade', 'TAX-ORG-B')
+        ON CONFLICT (id) DO NOTHING;
+
+        INSERT INTO branches (id, organization_id, code, name)
+        VALUES
+          ('${branchAId}', '${tenantAId}', 'BR-A1', 'Branch A Primary'),
+          ('${branchBId}', '${tenantBId}', 'BR-B1', 'Branch B Primary')
+        ON CONFLICT (id) DO NOTHING;
+      `);
+    } finally {
+      client.release();
+    }
+  }
+
+  before(async () => {
+    const client = await pool.connect();
+    try {
+      // Ensure clean state before running migrateUp on DEFAULT_MIGRATIONS_DIR
+      await client.query(`
+        DROP TABLE IF EXISTS test_composite_ref, branches, organizations CASCADE;
+        DELETE FROM _migrations WHERE id = '${wp004Id}';
+      `);
+      // Ensure test role exists with NOSUPERUSER and NOBYPASSRLS
+      await client.query(`
+        DO $$
+        BEGIN
+          IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${testRole}') THEN
+            CREATE ROLE ${testRole} NOSUPERUSER NOBYPASSRLS NOINHERIT;
+          ELSE
+            ALTER ROLE ${testRole} WITH NOSUPERUSER NOBYPASSRLS NOINHERIT;
+          END IF;
+        END
+        $$;
+      `);
+      // Apply zero-to-latest migrations up to WP-004 on real DEFAULT_MIGRATIONS_DIR
+      await migrateUp(pool);
+      // Grant permissions to test role
+      await client.query(`
+        GRANT USAGE ON SCHEMA public TO ${testRole};
+        GRANT ALL ON TABLE organizations TO ${testRole};
+        GRANT ALL ON TABLE branches TO ${testRole};
+        GRANT EXECUTE ON FUNCTION current_app_org_id() TO ${testRole};
+      `);
+      await seedTestData();
+    } finally {
+      client.release();
+    }
+  });
+
+  after(async () => {
+    const client = await pool.connect();
+    try {
+      await client
+        .query(
+          `
+        DROP TABLE IF EXISTS test_composite_ref, branches, organizations CASCADE;
+        DELETE FROM _migrations WHERE id = '${wp004Id}';
+        DROP ROLE IF EXISTS ${testRole};
+      `,
+        )
+        .catch(() => {});
+    } finally {
+      client.release();
+      await closePool(pool);
+    }
+  });
+
+  it('WP004-T01: WP-003 -> WP-004 migration applies', async () => {
+    const statuses = await getMigrationStatus(pool);
+    const appliedIds = statuses.filter((s) => s.applied).map((s) => s.id);
+    assert.ok(appliedIds.includes(baselineId), 'WP-003 baseline must be applied');
+    assert.ok(appliedIds.includes(wp004Id), 'WP-004 tenant RLS migration must be applied');
+  });
+
+  interface ColumnInfo {
+    column_name: string;
+    data_type: string;
+    is_nullable: string;
+  }
+
+  it('WP004-T02: organizations schema matches frozen Data Model', async () => {
+    const cols = await pool.query<ColumnInfo>(`
+      SELECT column_name, data_type, is_nullable
+      FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'organizations'
+      ORDER BY ordinal_position;
+    `);
+    const colMap = new Map<string, ColumnInfo>(
+      cols.rows.map((r: ColumnInfo) => [r.column_name, r]),
+    );
+    assert.ok(colMap.has('id'), 'id column must exist');
+    assert.equal(colMap.get('id')?.data_type, 'uuid');
+    assert.equal(colMap.get('id')?.is_nullable, 'NO');
+
+    assert.ok(colMap.has('legal_name'), 'legal_name column must exist');
+    assert.equal(colMap.get('legal_name')?.is_nullable, 'NO');
+
+    assert.ok(colMap.has('trade_name'), 'trade_name column must exist');
+    assert.equal(colMap.get('trade_name')?.is_nullable, 'NO');
+
+    assert.ok(colMap.has('tax_id'), 'tax_id column must exist');
+    assert.equal(colMap.get('tax_id')?.is_nullable, 'NO');
+
+    assert.ok(colMap.has('is_active'), 'is_active column must exist');
+    assert.equal(colMap.get('is_active')?.data_type, 'boolean');
+    assert.equal(colMap.get('is_active')?.is_nullable, 'NO');
+
+    assert.ok(colMap.has('created_at'), 'created_at column must exist');
+    assert.equal(colMap.get('created_at')?.is_nullable, 'NO');
+
+    assert.ok(colMap.has('updated_at'), 'updated_at column must exist');
+    assert.equal(colMap.get('updated_at')?.is_nullable, 'NO');
+
+    // Verify tax_id unique constraint
+    const uqCheck = await pool.query<{ conname: string }>(`
+      SELECT conname FROM pg_constraint
+      WHERE conrelid = 'organizations'::regclass AND contype = 'u';
+    `);
+    const constraints = uqCheck.rows.map((r: { conname: string }) => r.conname);
+    assert.ok(constraints.includes('uq_organizations_tax_id'));
+  });
+
+  it('WP004-T03: branches schema matches frozen Data Model', async () => {
+    const cols = await pool.query<ColumnInfo>(`
+      SELECT column_name, data_type, is_nullable
+      FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'branches'
+      ORDER BY ordinal_position;
+    `);
+    const colMap = new Map<string, ColumnInfo>(
+      cols.rows.map((r: ColumnInfo) => [r.column_name, r]),
+    );
+    assert.ok(colMap.has('id'), 'id column must exist');
+    assert.equal(colMap.get('id')?.data_type, 'uuid');
+
+    assert.ok(colMap.has('organization_id'), 'organization_id column must exist');
+    assert.equal(colMap.get('organization_id')?.data_type, 'uuid');
+    assert.equal(colMap.get('organization_id')?.is_nullable, 'NO');
+
+    assert.ok(colMap.has('code'), 'code column must exist');
+    assert.equal(colMap.get('code')?.is_nullable, 'NO');
+
+    assert.ok(colMap.has('name'), 'name column must exist');
+    assert.equal(colMap.get('name')?.is_nullable, 'NO');
+
+    assert.ok(colMap.has('timezone'), 'timezone column must exist');
+    assert.equal(colMap.get('timezone')?.is_nullable, 'NO');
+
+    assert.ok(colMap.has('address'), 'address column must exist');
+    assert.equal(colMap.get('address')?.data_type, 'jsonb');
+    assert.equal(colMap.get('address')?.is_nullable, 'NO');
+
+    assert.ok(colMap.has('is_active'), 'is_active column must exist');
+    assert.equal(colMap.get('is_active')?.data_type, 'boolean');
+
+    // Verify constraints: FK to organizations, unique (organization_id, code), composite (organization_id, id)
+    const conCheck = await pool.query<{ conname: string; contype: string }>(`
+      SELECT conname, contype FROM pg_constraint
+      WHERE conrelid = 'branches'::regclass;
+    `);
+    const conNames = conCheck.rows.map((r: { conname: string; contype: string }) => r.conname);
+    assert.ok(conNames.includes('uq_branches_org_code'), 'uq_branches_org_code must exist');
+    assert.ok(conNames.includes('uq_branches_org_id'), 'uq_branches_org_id must exist');
+  });
+
+  it('WP004-T04: current_app_org_id() returns Tenant A in Tenant A transaction', async () => {
+    await asTestRole(async (client) => {
+      await client.query('BEGIN;');
+      await setTenantContext(client, tenantAId);
+      const res = await client.query<{ current_app_org_id: string }>(
+        'SELECT current_app_org_id();',
+      );
+      assert.equal(res.rows[0]?.current_app_org_id, tenantAId);
+      await client.query('COMMIT;');
+    });
+  });
+
+  it('WP004-T05: current_app_org_id() returns Tenant B in Tenant B transaction', async () => {
+    await asTestRole(async (client) => {
+      await client.query('BEGIN;');
+      await setTenantContext(client, tenantBId);
+      const res = await client.query<{ current_app_org_id: string }>(
+        'SELECT current_app_org_id();',
+      );
+      assert.equal(res.rows[0]?.current_app_org_id, tenantBId);
+      await client.query('COMMIT;');
+    });
+  });
+
+  it('WP004-T06: no tenant context = default-deny reads', async () => {
+    await asTestRole(async (client) => {
+      const orgs = await client.query('SELECT * FROM organizations;');
+      assert.equal(orgs.rows.length, 0, 'No organizations visible without tenant context');
+
+      const branches = await client.query('SELECT * FROM branches;');
+      assert.equal(branches.rows.length, 0, 'No branches visible without tenant context');
+    });
+  });
+
+  it('WP004-T07: Tenant A cannot SELECT Tenant B organization', async () => {
+    await asTestRole(async (client) => {
+      await client.query('BEGIN;');
+      await setTenantContext(client, tenantAId);
+
+      // All orgs visible under Tenant A context must only be Tenant A
+      const orgs = await client.query<{ id: string }>('SELECT id FROM organizations;');
+      assert.equal(orgs.rows.length, 1);
+      assert.equal(orgs.rows[0]?.id, tenantAId);
+
+      // Explicit query for Tenant B returns zero rows
+      const targetB = await client.query('SELECT * FROM organizations WHERE id = $1;', [tenantBId]);
+      assert.equal(targetB.rows.length, 0);
+
+      await client.query('COMMIT;');
+    });
+  });
+
+  it('WP004-T08: Tenant A cannot SELECT Tenant B branch', async () => {
+    await asTestRole(async (client) => {
+      await client.query('BEGIN;');
+      await setTenantContext(client, tenantAId);
+
+      const branches = await client.query<{ id: string; organization_id: string }>(
+        'SELECT id, organization_id FROM branches;',
+      );
+      assert.equal(branches.rows.length, 1);
+      assert.equal(branches.rows[0]?.id, branchAId);
+      assert.equal(branches.rows[0]?.organization_id, tenantAId);
+
+      const targetB = await client.query('SELECT * FROM branches WHERE organization_id = $1;', [
+        tenantBId,
+      ]);
+      assert.equal(targetB.rows.length, 0);
+
+      const targetBranchB = await client.query('SELECT * FROM branches WHERE id = $1;', [
+        branchBId,
+      ]);
+      assert.equal(targetBranchB.rows.length, 0);
+
+      await client.query('COMMIT;');
+    });
+  });
+
+  it('WP004-T09: Tenant B cannot SELECT Tenant A data', async () => {
+    await asTestRole(async (client) => {
+      await client.query('BEGIN;');
+      await setTenantContext(client, tenantBId);
+
+      const orgs = await client.query<{ id: string }>('SELECT id FROM organizations;');
+      assert.equal(orgs.rows.length, 1);
+      assert.equal(orgs.rows[0]?.id, tenantBId);
+
+      const branches = await client.query<{ id: string }>(
+        'SELECT id FROM branches WHERE organization_id = $1;',
+        [tenantAId],
+      );
+      assert.equal(branches.rows.length, 0);
+
+      await client.query('COMMIT;');
+    });
+  });
+
+  it('WP004-T10: Tenant A cannot INSERT branch for Tenant B', async () => {
+    await asTestRole(async (client) => {
+      await client.query('BEGIN;');
+      await setTenantContext(client, tenantAId);
+
+      // Cross-tenant insert attempt must be rejected by WITH CHECK policy
+      await assert.rejects(
+        client.query(`
+          INSERT INTO branches (id, organization_id, code, name)
+          VALUES (gen_random_uuid(), '${tenantBId}', 'BR-ATTACK', 'Malicious Branch');
+        `),
+        /row-level security policy/,
+      );
+
+      await client.query('ROLLBACK;');
+    });
+  });
+
+  it('WP004-T11: Tenant A cannot UPDATE branch into Tenant B scope', async () => {
+    await asTestRole(async (client) => {
+      // Subtest 1: Attempt to transfer Tenant A branch to Tenant B fails WITH CHECK
+      await client.query('BEGIN;');
+      await setTenantContext(client, tenantAId);
+      await assert.rejects(
+        client.query(`UPDATE branches SET organization_id = $1 WHERE id = $2;`, [
+          tenantBId,
+          branchAId,
+        ]),
+        /row-level security policy/,
+      );
+      await client.query('ROLLBACK;');
+
+      // Subtest 2: Attempt to update Tenant B branch targets zero rows (invisible to A)
+      await client.query('BEGIN;');
+      await setTenantContext(client, tenantAId);
+      const res = await client.query(`UPDATE branches SET name = 'Attacked' WHERE id = $1;`, [
+        branchBId,
+      ]);
+      assert.equal(res.rowCount, 0);
+      await client.query('ROLLBACK;');
+    });
+  });
+
+  it('WP004-T12: Tenant A cannot DELETE Tenant B branch', async () => {
+    await asTestRole(async (client) => {
+      await client.query('BEGIN;');
+      await setTenantContext(client, tenantAId);
+
+      const res = await client.query(`DELETE FROM branches WHERE id = $1;`, [branchBId]);
+      assert.equal(res.rowCount, 0);
+
+      await client.query('COMMIT;');
+    });
+
+    // Verify Tenant B branch still exists intact
+    const check = await pool.query(`SELECT id FROM branches WHERE id = $1;`, [branchBId]);
+    assert.equal(check.rows.length, 1);
+  });
+
+  it('WP004-T13: normal test role is NOSUPERUSER', async () => {
+    const roleCheck = await pool.query<{ rolsuper: boolean }>(
+      `SELECT rolsuper FROM pg_roles WHERE rolname = $1;`,
+      [testRole],
+    );
+    assert.equal(roleCheck.rows.length, 1);
+    assert.equal(roleCheck.rows[0]?.rolsuper, false);
+  });
+
+  it('WP004-T14: normal test role is NOBYPASSRLS', async () => {
+    const roleCheck = await pool.query<{ rolbypassrls: boolean }>(
+      `SELECT rolbypassrls FROM pg_roles WHERE rolname = $1;`,
+      [testRole],
+    );
+    assert.equal(roleCheck.rows.length, 1);
+    assert.equal(roleCheck.rows[0]?.rolbypassrls, false);
+  });
+
+  it('WP004-T15: RLS enabled on organizations', async () => {
+    const res = await pool.query<{ relrowsecurity: boolean }>(
+      `SELECT relrowsecurity FROM pg_class WHERE relname = 'organizations';`,
+    );
+    assert.equal(res.rows[0]?.relrowsecurity, true);
+  });
+
+  it('WP004-T16: FORCE RLS enabled on organizations', async () => {
+    const res = await pool.query<{ relforcerowsecurity: boolean }>(
+      `SELECT relforcerowsecurity FROM pg_class WHERE relname = 'organizations';`,
+    );
+    assert.equal(res.rows[0]?.relforcerowsecurity, true);
+  });
+
+  it('WP004-T17: RLS enabled on branches', async () => {
+    const res = await pool.query<{ relrowsecurity: boolean }>(
+      `SELECT relrowsecurity FROM pg_class WHERE relname = 'branches';`,
+    );
+    assert.equal(res.rows[0]?.relrowsecurity, true);
+  });
+
+  it('WP004-T18: FORCE RLS enabled on branches', async () => {
+    const res = await pool.query<{ relforcerowsecurity: boolean }>(
+      `SELECT relforcerowsecurity FROM pg_class WHERE relname = 'branches';`,
+    );
+    assert.equal(res.rows[0]?.relforcerowsecurity, true);
+  });
+
+  it('WP004-T19: composite branch identity constraint exists and rejects invalid tenant-scoped references', async () => {
+    const client = await pool.connect();
+    try {
+      // Create a test table referencing composite (organization_id, id)
+      await client.query(`
+        DROP TABLE IF EXISTS test_composite_ref CASCADE;
+        CREATE TABLE test_composite_ref (
+          id SERIAL PRIMARY KEY,
+          org_id UUID NOT NULL,
+          branch_id UUID NOT NULL,
+          FOREIGN KEY (org_id, branch_id) REFERENCES branches (organization_id, id)
+        );
+      `);
+
+      // Valid reference for Tenant A branch
+      await client.query(`
+        INSERT INTO test_composite_ref (org_id, branch_id)
+        VALUES ('${tenantAId}', '${branchAId}');
+      `);
+
+      // Cross-tenant reference: Tenant A org_id paired with Tenant B branch_id must fail foreign key check
+      await assert.rejects(
+        client.query(`
+          INSERT INTO test_composite_ref (org_id, branch_id)
+          VALUES ('${tenantAId}', '${branchBId}');
+        `),
+        /foreign key constraint/,
+      );
+    } finally {
+      await client.query('DROP TABLE IF EXISTS test_composite_ref CASCADE;').catch(() => {});
+      client.release();
+    }
+  });
+
+  it('WP004-T20: SET LOCAL / set_config(..., true) disappears after transaction end', async () => {
+    await asTestRole(async (client) => {
+      await client.query('BEGIN;');
+      await setTenantContext(client, tenantAId);
+      const inTx = await client.query<{ current_app_org_id: string }>(
+        'SELECT current_app_org_id();',
+      );
+      assert.equal(inTx.rows[0]?.current_app_org_id, tenantAId);
+      await client.query('COMMIT;');
+
+      // Immediately after COMMIT on the same client, context is cleared
+      const postCommit = await client.query<{ current_app_org_id: string | null }>(
+        'SELECT current_app_org_id();',
+      );
+      assert.equal(postCommit.rows[0]?.current_app_org_id, null);
+    });
+  });
+
+  it('WP004-T21: reused pooled connection does NOT inherit prior tenant context', async () => {
+    const client = await pool.connect();
+    try {
+      await client.query(`SET ROLE ${testRole};`);
+
+      // Transaction 1: Tenant A
+      await client.query('BEGIN;');
+      await setTenantContext(client, tenantAId);
+      const resA = await client.query<{ id: string }>('SELECT id FROM organizations;');
+      assert.equal(resA.rows[0]?.id, tenantAId);
+      await client.query('COMMIT;');
+
+      // Between transactions on the exact same physical client connection:
+      // Without setting context, queries must return zero rows (default deny)
+      const resNone = await client.query('SELECT * FROM organizations;');
+      assert.equal(resNone.rows.length, 0);
+
+      // Transaction 2: Tenant B
+      await client.query('BEGIN;');
+      await setTenantContext(client, tenantBId);
+      const resB = await client.query<{ id: string }>('SELECT id FROM organizations;');
+      assert.equal(resB.rows[0]?.id, tenantBId);
+      await client.query('COMMIT;');
+    } finally {
+      await client.query('RESET ROLE;').catch(() => {});
+      client.release();
+    }
+  });
+
+  it('WP004-T22: malformed tenant context fails closed', async () => {
+    await asTestRole(async (client) => {
+      const malformedPayloads = [
+        'invalid-uuid-string',
+        "' OR 1=1 --",
+        '   ',
+        '00000000-0000-0000-0000-000000000000',
+      ];
+
+      for (const payload of malformedPayloads) {
+        await client.query('BEGIN;');
+        await setTenantContext(client, payload);
+
+        const orgRes = await client.query('SELECT * FROM organizations;');
+        assert.equal(
+          orgRes.rows.length,
+          0,
+          `Payload "${payload}" must produce zero rows in organizations`,
+        );
+
+        const branchRes = await client.query('SELECT * FROM branches;');
+        assert.equal(
+          branchRes.rows.length,
+          0,
+          `Payload "${payload}" must produce zero rows in branches`,
+        );
+
+        await client.query('ROLLBACK;');
+      }
+    });
+  });
+
+  it('WP004-T23: fresh DB migrates WP-003 + WP-004 zero-to-latest', async () => {
+    const client = await pool.connect();
+    try {
+      await client.query(`
+        DROP TABLE IF EXISTS branches, organizations, _migrations CASCADE;
+        DROP EXTENSION IF EXISTS pgcrypto, "uuid-ossp" CASCADE;
+        DROP FUNCTION IF EXISTS current_app_org_id() CASCADE;
+      `);
+    } finally {
+      client.release();
+    }
+
+    const res = await migrateUp(pool);
+    assert.equal(res.alreadyUpToDate, false);
+    assert.ok(res.applied.includes(`${baselineId}_baseline_infrastructure`));
+    assert.ok(res.applied.includes(`${wp004Id}_tenant_rls_foundation`));
+
+    const status = await getMigrationStatus(pool);
+    assert.equal(status.length, 2);
+    assert.ok(status.every((s) => s.applied && s.checksumMatches));
+
+    // Re-seed data for subsequent tests
+    await seedTestData();
+    const grantClient = await pool.connect();
+    try {
+      await grantClient.query(`
+        GRANT ALL ON TABLE organizations TO ${testRole};
+        GRANT ALL ON TABLE branches TO ${testRole};
+        GRANT EXECUTE ON FUNCTION current_app_org_id() TO ${testRole};
+      `);
+    } finally {
+      grantClient.release();
+    }
+  });
+
+  it('WP004-T24: non-production down returns to canonical WP-003 schema state', async () => {
+    const downResult = await migrateDown(pool, { allowDestructiveDown: true });
+    assert.equal(downResult.reverted, `${wp004Id}_tenant_rls_foundation`);
+
+    // Verify WP-004 tables and functions are dropped
+    const tablesCheck = await pool.query<{ table_name: string }>(`
+      SELECT table_name FROM information_schema.tables
+      WHERE table_schema = 'public' AND table_name IN ('organizations', 'branches');
+    `);
+    assert.equal(tablesCheck.rows.length, 0);
+
+    const fnCheck = await pool.query(`
+      SELECT proname FROM pg_proc WHERE proname = 'current_app_org_id';
+    `);
+    assert.equal(fnCheck.rows.length, 0);
+
+    // Verify WP-003 ledger remains intact
+    const ledger = await pool.query<{ id: string }>(`SELECT id FROM _migrations;`);
+    assert.deepEqual(
+      ledger.rows.map((r: { id: string }) => r.id),
+      [baselineId],
+    );
+  });
+
+  it('WP004-T25: up → down → up works', async () => {
+    // Re-apply WP-004
+    const upRes = await migrateUp(pool);
+    assert.ok(upRes.applied.includes(`${wp004Id}_tenant_rls_foundation`));
+
+    // Seed test data and verify functionality restored
+    await seedTestData();
+    const client = await pool.connect();
+    try {
+      await client.query(`
+        GRANT ALL ON TABLE organizations TO ${testRole};
+        GRANT ALL ON TABLE branches TO ${testRole};
+        GRANT EXECUTE ON FUNCTION current_app_org_id() TO ${testRole};
+      `);
+    } finally {
+      client.release();
+    }
+
+    await asTestRole(async (testClient) => {
+      await testClient.query('BEGIN;');
+      await setTenantContext(testClient, tenantAId);
+      const orgs = await testClient.query('SELECT * FROM organizations;');
+      assert.equal(orgs.rows.length, 1);
+      await testClient.query('COMMIT;');
+    });
+  });
+
+  it('WP004-T26: WP-003 migration checksum remains unchanged', async () => {
+    const ledger = await pool.query<{ checksum: string }>(
+      `SELECT checksum FROM _migrations WHERE id = $1;`,
+      [baselineId],
+    );
+    assert.equal(ledger.rows.length, 1);
+    const baselineFile = path.join(
+      DEFAULT_MIGRATIONS_DIR,
+      `${baselineId}_baseline_infrastructure.sql`,
+    );
+    const expectedChecksum = computeChecksum(fs.readFileSync(baselineFile, 'utf8'));
+    assert.equal(ledger.rows[0]?.checksum, expectedChecksum);
+  });
+
+  it('WP004-T27: organization_memberships DOES NOT EXIST', async () => {
+    const res = await pool.query(`
+      SELECT table_name FROM information_schema.tables
+      WHERE table_schema = 'public' AND table_name = 'organization_memberships';
+    `);
+    assert.equal(res.rows.length, 0, 'organization_memberships must not exist');
+  });
+
+  it('WP004-T28: WP-005 tables are NOT prematurely introduced by WP-004', async () => {
+    const wp005Tables = [
+      'users',
+      'roles',
+      'permissions',
+      'role_permissions',
+      'user_roles',
+      'user_branch_credentials',
+    ];
+    const res = await pool.query<{ table_name: string }>(
+      `
+      SELECT table_name FROM information_schema.tables
+      WHERE table_schema = 'public' AND table_name = ANY($1::text[]);
+    `,
+      [wp005Tables],
+    );
+    assert.equal(
+      res.rows.length,
+      0,
+      `No WP-005 tables may exist, found: ${res.rows.map((r: { table_name: string }) => r.table_name).join(', ')}`,
+    );
   });
 });
