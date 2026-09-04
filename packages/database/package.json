@@ -1,0 +1,34 @@
+{
+  "name": "@trident/database",
+  "version": "0.1.0",
+  "description": "TRIDENTPOS PostgreSQL Database Scaffolding & Migration Engine",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src/",
+    "test": "node --test dist/index.test.js",
+    "migrate": "node dist/cli.js up",
+    "migrate:down": "node dist/cli.js down",
+    "migrate:status": "node dist/cli.js status",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@trident/core": "*",
+    "dotenv": "^16.4.7",
+    "pg": "8.13.3",
+    "pg-protocol": "1.7.1"
+  },
+  "devDependencies": {
+    "@types/pg": "8.11.11"
+  }
+}

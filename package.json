@@ -17,6 +17,10 @@
     "typecheck": "turbo run typecheck",
     "lint": "turbo run lint",
     "test": "turbo run test",
+    "db:migrate": "npm run --workspace=@trident/database migrate",
+    "db:migrate:down": "npm run --workspace=@trident/database migrate:down",
+    "db:migrate:status": "npm run --workspace=@trident/database migrate:status",
+    "db:test": "npm run --workspace=@trident/database test",
     "graph:check": "node scripts/check-graph.mjs",
     "format:check": "prettier --check \"packages/**/*.{ts,js,json}\" \"scripts/**/*.{js,mjs}\" \"*.{json,cjs,mjs}\"",
     "format": "prettier --write \"packages/**/*.{ts,js,json}\" \"scripts/**/*.{js,mjs}\" \"*.{json,cjs,mjs}\"",
@@ -30,5 +34,8 @@
     "prettier": "^3.5.3",
     "turbo": "^2.4.4",
     "typescript": "~5.4.5"
+  },
+  "overrides": {
+    "pg-protocol": "1.7.1"
   }
 }
