@@ -1,6 +1,6 @@
 /**
  * @trident/core
- * Platform Core package scaffolding
+ * Platform Core package scaffolding & IAM domain contracts
  */
 
 export const CORE_PACKAGE_NAME = '@trident/core';
@@ -30,3 +30,8 @@ export function ok<T>(value: T): Result<T, never> {
 export function err<E>(error: E): Result<never, E> {
   return { ok: false, error };
 }
+
+export * from './principal.js';
+export * from './jwt.js';
+export * from './rbac.js';
+export * from './pin.js';
