@@ -99,6 +99,7 @@ function detectCycles(adj) {
 
 const ALLOWED_INTERNAL_DEPENDENCIES = {
   '@trident/core': [],
+  '@trident/database': ['@trident/core'],
   '@trident/pos': ['@trident/core'],
   '@trident/sync': ['@trident/core'],
   '@trident/ui': ['@trident/core'],
