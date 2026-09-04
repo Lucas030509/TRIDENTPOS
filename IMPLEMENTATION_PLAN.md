@@ -223,7 +223,8 @@ Foundational domain models, Multi-Tenant RLS isolation, IAM, and audit logging.
 * **Bounded Context:** Platform Core
 * **Frozen Requirements:** `DATA_MODEL.md` Sec. 1; `SECURITY_ARCHITECTURE.md` Sec. 4; `DATA_PROTECTION_AND_PRIVACY.md`
 * **ADRs:** `ADR-001`, `ADR-002`
-* **Data Objects:** `organizations`, `branches`, `organization_memberships`
+* **Data Objects:** `organizations`, `branches`
+* **Membership / IAM Boundary:** Organization membership and RBAC identity primitives are not created by WP-004. User and role entities remain governed by WP-005 according to the frozen Data Model. WP-004 establishes only tenant root, branch hierarchy, tenant context, relational tenant integrity, and RLS.
 * **APIs / Contracts:** Tenant context session manager (`SET LOCAL app.current_organization_id`)
 * **Builder Agent:** `17_Database_Engineer`
 * **Specialist Reviewer:** `08_Security_Architect` & `03_Data_Architect`
