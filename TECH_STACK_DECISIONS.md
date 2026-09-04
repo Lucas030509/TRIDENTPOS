@@ -1,9 +1,10 @@
 # TECH STACK DECISIONS & RUNTIME EVALUATION — ERP RESTAURANTES
 
 **Document ID:** `ARCH-STK-001`  
-**Version:** `1.3 NORMALIZED / REMEDIATED`  
-**Status:** `APPROVED / FROZEN`  
-**Date:** 2026-09-01  
+**Version:** `1.3 NORMALIZED / REMEDIATED (with Proposed ADR-011 Amendment)`  
+**Canonical Baseline:** `v1.3 APPROVED / FROZEN` (2026-09-01)  
+**ADR-011 Amendment Status:** `PROPOSED — PENDING ROLE-SEPARATED REVIEW / PRODUCT OWNER APPROVAL`  
+**Date:** 2026-09-04  
 **Baseline:** `EAAF v1.2.0 @ 7e036f43240b3dc28ccb996e350263598275b2cd`  
 **Supersedes:** `TECH_STACK_DECISIONS.md v1.1`  
 
@@ -54,4 +55,6 @@ Se evaluó la selección del runtime para el Edge Server en sucursal entre **Ele
 
 ---
 
-DOCUMENT STATUS: APPROVED / FROZEN — 2026-09-01
+DOCUMENT STATUS:
+- Canonical Baseline v1.3: APPROVED / FROZEN — 2026-09-01
+- ADR-011 Proposed Amendment: PROPOSED — PENDING ROLE-SEPARATED REVIEW & PRODUCT OWNER APPROVAL
