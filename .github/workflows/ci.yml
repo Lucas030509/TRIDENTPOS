@@ -1,0 +1,127 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository with full history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Frozen supply-chain requirement: secret and dependency scans must
+      # complete successfully before compilation begins.
+      - name: Pre-compile TruffleHog secret scan
+        uses: trufflesecurity/trufflehog@363923b901c911a9164f50b6c423f47c15372b1c # v3.97.4
+        with:
+          path: ./
+          version: '3.97.4'
+          extra_args: --results=verified,unverified
+
+      - name: Pre-compile Trivy dependency scan
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          trivy-config: 'trivy.yaml'
+          version: 'v0.74.0'
+          scanners: 'vuln'
+          severity: 'HIGH,CRITICAL'
+          exit-code: '1'
+          format: 'table'
+
+      - name: Setup Node.js runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24.20.0'
+          cache: 'npm'
+
+      - name: Deterministic dependency install
+        run: npm ci
+
+      - name: Check architecture graph dependency constraints
+        run: npm run graph:check
+
+      - name: Build monorepo packages
+        run: npm run build
+
+  lint:
+    name: lint
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24.20.0'
+          cache: 'npm'
+
+      - name: Deterministic dependency install
+        run: npm ci
+
+      - name: Verify formatting
+        run: npm run format:check
+
+      - name: Lint codebase
+        run: npm run lint
+
+  typecheck:
+    name: typecheck
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24.20.0'
+          cache: 'npm'
+
+      - name: Deterministic dependency install
+        run: npm ci
+
+      - name: Strict TypeScript typecheck
+        run: npm run typecheck
+
+  unit-tests:
+    name: unit-tests
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24.20.0'
+          cache: 'npm'
+
+      - name: Deterministic dependency install
+        run: npm ci
+
+      - name: Run unit test suites
+        run: npm run test
