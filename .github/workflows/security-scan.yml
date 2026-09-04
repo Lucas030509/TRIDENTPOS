@@ -42,6 +42,7 @@ jobs:
         with:
           scan-type: 'fs'
           scan-ref: '.'
+          trivy-config: 'trivy.yaml'
           version: 'v0.74.0'
           severity: 'HIGH,CRITICAL'
           exit-code: '1'
@@ -80,6 +81,7 @@ jobs:
         with:
           scan-type: 'fs'
           scan-ref: '.'
+          trivy-config: 'trivy.yaml'
           version: 'v0.74.0'
           format: 'cyclonedx'
           output: 'tridentpos-sbom.cdx.json'
