@@ -121,7 +121,9 @@ GitHub branch protection enforces `required_approving_review_count = 0` on GitHu
    * PR head SHA equals reviewed subject `S`;
    * Both `ES` and `EC` exist remotely, reference `S`, and award `PASS`;
    * No subsequent commit exists on the implementation feature branch;
-   * Stage B automated CI status checks are green;
+   * All automated checks applicable to the Work Package and current repository stage are PASS:
+     - **Stage A (`WP-001` and `WP-002`):** Required remote Stage B status contexts are not applicable / do not yet exist. Merge authorization relies on mandatory local execution evidence (`npm ci` where applicable, build, lint / graph validation where applicable, WP-specific tests), Specialist Reviewer Agent PASS, `11_Code_Reviewer` Agent PASS, SHA-binding (`S = ES = EC`), and zero blocking findings (testing is NOT waived);
+     - **Stage B (`WP-003` through `WP-028`):** All six required remote CI status contexts MUST PASS (`build`, `lint`, `typecheck`, `unit-tests`, `secret-scan`, `sca-scan`) with zero waivers;
    * Open blocking findings = 0;
    * Governed merge record logs `S`, `ES`, `EC`, and merge commit `M`.
 

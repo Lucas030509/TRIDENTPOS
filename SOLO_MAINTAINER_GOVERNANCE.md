@@ -142,7 +142,9 @@ Immediately before merging an implementation PR, the following 10-point checklis
 5. Code Reviewer verdict = `PASS`;
 6. `ES` and `EC` are immutable commits published to remote;
 7. No subsequent commit exists on the implementation feature branch;
-8. All applicable automated status checks (Stage B CI) are green (`PASS`);
+8. All automated checks applicable to the Work Package and current repository stage are PASS:
+   - **Stage A (`WP-001` and `WP-002`):** Required remote Stage B status contexts are not applicable / do not yet exist. Merge authorization relies on mandatory local execution evidence (`npm ci` where applicable, build, lint / graph validation where applicable, WP-specific tests), Specialist Reviewer Agent PASS, `11_Code_Reviewer` Agent PASS, SHA-binding (`S = ES = EC`), and zero blocking findings (testing is NOT waived);
+   - **Stage B (`WP-003` through `WP-028`):** All six required remote CI status contexts MUST PASS (`build`, `lint`, `typecheck`, `unit-tests`, `secret-scan`, `sca-scan`) with zero waivers;
 9. Open blocking findings = `0`;
 10. Applicable Product Owner question dependencies are satisfied or neutral contract interfaces are preserved.
 
