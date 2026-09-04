@@ -110,13 +110,116 @@ CREATE TABLE user_roles (
 CREATE TABLE stations (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     organization_id UUID NOT NULL REFERENCES organizations(id),
-    branch_id UUID NOT NULL REFERENCES branches(id),
+    branch_id UUID NOT NULL,
     code VARCHAR(50) NOT NULL,
     station_type VARCHAR(50) NOT NULL, -- POS, KDS, COMANDERO, DISPLAY
     public_key_fingerprint VARCHAR(255) NULL,
     is_authorized BOOLEAN NOT NULL DEFAULT TRUE,
-    CONSTRAINT uq_stations_org_branch_code UNIQUE (organization_id, branch_id, code)
+    CONSTRAINT uq_stations_org_branch_code UNIQUE (organization_id, branch_id, code),
+    CONSTRAINT uq_stations_org_branch_id UNIQUE (organization_id, branch_id, id),
+    CONSTRAINT uq_stations_org_id UNIQUE (organization_id, id),
+    CONSTRAINT fk_stations_branch FOREIGN KEY (organization_id, branch_id) REFERENCES branches(organization_id, id) ON DELETE CASCADE
 );
+
+-- Bitácora de Auditoría Tamper-Evident (Cloud Audit Trail)
+-- Modelo de Inmutabilidad: TAMPER-EVIDENT / APPEND-ONLY UNDER APPLICATION TRUST BOUNDARY
+-- Operaciones ordinarias UPDATE, DELETE y TRUNCATE estrictamente denegadas a nivel de trigger y permisos DML.
+CREATE TABLE audit_log_events (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    organization_id UUID NOT NULL REFERENCES organizations(id),
+    branch_id UUID NULL,
+    actor_id UUID NULL,
+    station_id UUID NULL,
+    event_type VARCHAR(100) NOT NULL,
+    severity VARCHAR(20) NOT NULL DEFAULT 'INFO', -- INFO, WARN, ERROR, CRITICAL
+    action VARCHAR(100) NOT NULL,
+    entity_name VARCHAR(100) NOT NULL,
+    entity_id VARCHAR(100) NULL,
+    client_timestamp TIMESTAMPTZ NULL,
+    server_timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    sequence_number BIGINT NOT NULL,
+    previous_record_hash VARCHAR(64) NOT NULL, -- SHA-256 hex; para sequence_number=1 se utiliza '0'x64 (genesis)
+    record_hash VARCHAR(64) NOT NULL, -- SHA-256 hex del payload canónico serializado (RFC 8785)
+    source VARCHAR(50) NOT NULL DEFAULT 'CLOUD', -- CLOUD, EDGE_POS, EDGE_KDS, SYSTEM
+    request_id VARCHAR(100) NULL,
+    metadata JSONB NOT NULL DEFAULT '{}', -- Metadatos sanitizados previamente (censura recursiva de credenciales y PII)
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_audit_log_events_org_id UNIQUE (organization_id, id),
+    CONSTRAINT uq_audit_log_events_seq UNIQUE NULLS NOT DISTINCT (organization_id, branch_id, sequence_number),
+    CONSTRAINT uq_audit_log_events_hash UNIQUE (organization_id, record_hash),
+    CONSTRAINT fk_audit_log_events_branch FOREIGN KEY (organization_id, branch_id) REFERENCES branches(organization_id, id) ON DELETE SET NULL,
+    CONSTRAINT fk_audit_log_events_actor FOREIGN KEY (organization_id, actor_id) REFERENCES users(organization_id, id) ON DELETE SET NULL,
+    CONSTRAINT fk_audit_log_events_station FOREIGN KEY (organization_id, branch_id, station_id) REFERENCES stations(organization_id, branch_id, id) ON DELETE SET NULL
+);
+
+-- Telemetría de Eventos de Seguridad y Detección de Incidentes (Cloud Security Telemetry)
+-- Modelo de Inmutabilidad: TAMPER-EVIDENT / APPEND-ONLY UNDER APPLICATION TRUST BOUNDARY
+CREATE TABLE security_telemetry_events (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    organization_id UUID NOT NULL REFERENCES organizations(id),
+    branch_id UUID NULL,
+    station_id UUID NULL,
+    actor_id UUID NULL,
+    rule_code VARCHAR(100) NOT NULL, -- PIN_BRUTE_FORCE, LEASE_REVOKED_ACCESS, DELIVERY_WEBHOOK_INVALID_SIGNATURE, RLS_VIOLATION_ATTEMPT, AUDIT_HASH_CHAIN_BREAK, CLOCK_ROLLBACK_DETECTED
+    severity VARCHAR(20) NOT NULL, -- LOW, MEDIUM, HIGH, CRITICAL
+    category VARCHAR(50) NOT NULL, -- AUTHENTICATION, AUTHORIZATION, INTEGRITY, NETWORK, TIMING
+    details JSONB NOT NULL DEFAULT '{}', -- Atributos estructurados de telemetría sanitizados y redactados previamente
+    action_taken VARCHAR(100) NOT NULL, -- Mitigación aplicada (e.g., STATION_TEMPORARY_BLOCK, REJECT_403_LEASE_REVOKED, etc.)
+    source VARCHAR(50) NOT NULL DEFAULT 'CLOUD', -- CLOUD, EDGE_POS, EDGE_SERVER, SYSTEM
+    request_id VARCHAR(100) NULL,
+    timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_sec_telemetry_org_id UNIQUE (organization_id, id),
+    CONSTRAINT fk_sec_telemetry_branch FOREIGN KEY (organization_id, branch_id) REFERENCES branches(organization_id, id) ON DELETE SET NULL,
+    CONSTRAINT fk_sec_telemetry_actor FOREIGN KEY (organization_id, actor_id) REFERENCES users(organization_id, id) ON DELETE SET NULL,
+    CONSTRAINT fk_sec_telemetry_station FOREIGN KEY (organization_id, branch_id, station_id) REFERENCES stations(organization_id, branch_id, id) ON DELETE SET NULL
+);
+
+-- Función y Triggers de Inmutabilidad (Append-Only Under Application Trust Boundary)
+CREATE OR REPLACE FUNCTION trg_audit_log_append_only()
+RETURNS TRIGGER AS $$
+BEGIN
+    RAISE EXCEPTION 'Audit trail is append-only: UPDATE and DELETE operations are strictly prohibited on %', TG_TABLE_NAME;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_audit_log_events_immutable
+BEFORE UPDATE OR DELETE ON audit_log_events
+FOR EACH ROW
+EXECUTE FUNCTION trg_audit_log_append_only();
+
+CREATE TRIGGER trg_security_telemetry_events_immutable
+BEFORE UPDATE OR DELETE ON security_telemetry_events
+FOR EACH ROW
+EXECUTE FUNCTION trg_audit_log_append_only();
+
+-- Políticas Mandatorias de Row Level Security (RLS)
+ALTER TABLE audit_log_events ENABLE ROW LEVEL SECURITY;
+ALTER TABLE audit_log_events FORCE ROW LEVEL SECURITY;
+
+CREATE POLICY audit_log_events_tenant_isolation ON audit_log_events
+    FOR ALL
+    USING (organization_id = current_app_org_id())
+    WITH CHECK (organization_id = current_app_org_id());
+
+ALTER TABLE security_telemetry_events ENABLE ROW LEVEL SECURITY;
+ALTER TABLE security_telemetry_events FORCE ROW LEVEL SECURITY;
+
+CREATE POLICY security_telemetry_events_tenant_isolation ON security_telemetry_events
+    FOR ALL
+    USING (organization_id = current_app_org_id())
+    WITH CHECK (organization_id = current_app_org_id());
+
+-- Índices de Rendimiento y Verificación de Cadena
+CREATE INDEX idx_audit_log_org_created_at ON audit_log_events (organization_id, created_at DESC);
+CREATE INDEX idx_audit_log_org_event_type ON audit_log_events (organization_id, event_type);
+CREATE INDEX idx_audit_log_org_entity ON audit_log_events (organization_id, entity_name, entity_id);
+CREATE INDEX idx_audit_log_org_actor ON audit_log_events (organization_id, actor_id);
+CREATE INDEX idx_audit_log_seq_hash ON audit_log_events (organization_id, branch_id, sequence_number, record_hash);
+
+CREATE INDEX idx_sec_telemetry_org_time ON security_telemetry_events (organization_id, timestamp DESC);
+CREATE INDEX idx_sec_telemetry_org_rule ON security_telemetry_events (organization_id, rule_code, severity);
+CREATE INDEX idx_sec_telemetry_org_branch_station ON security_telemetry_events (organization_id, branch_id, station_id);
 
 -- Catálogo Maestro: Categorías
 CREATE TABLE categories (
