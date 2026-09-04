@@ -24,8 +24,6 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      # Frozen supply-chain requirement: secret and dependency scans must
-      # complete successfully before compilation begins.
       - name: Pre-compile TruffleHog secret scan
         uses: trufflesecurity/trufflehog@363923b901c911a9164f50b6c423f47c15372b1c # v3.97.4
         with:
@@ -110,7 +108,7 @@ jobs:
     runs-on: ubuntu-24.04
     services:
       postgres:
-        image: postgres:16
+        image: postgres:16.15@sha256:f1c3376c26f2609ab9f29f71f824103fe2fcd8ee0346485cb6122a4f93df6f94
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -118,7 +116,7 @@ jobs:
         ports:
           - 5432:5432
         options: >-
-          --health-cmd pg_isready
+          --health-cmd "pg_isready -U postgres -d tridentpos_test"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
