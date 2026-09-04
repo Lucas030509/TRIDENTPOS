@@ -18,5 +18,9 @@
     "lint": "eslint src/",
     "test": "node --test dist/index.test.js",
     "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "argon2": "0.45.1",
+    "jose": "5.9.6"
   }
 }

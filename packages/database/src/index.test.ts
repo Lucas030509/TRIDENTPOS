@@ -4,11 +4,19 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import type pg from 'pg';
+import { SignJWT, generateKeyPair } from 'jose';
 import { getPool, closePool, checkConnection } from './connection.js';
 import { migrateUp, migrateDown, getMigrationStatus, DEFAULT_MIGRATIONS_DIR } from './runner.js';
 import { computeChecksum } from './checksum.js';
 import { loadMigrationFiles } from './parser.js';
 import { setTenantContext } from './tenant.js';
+import {
+  authenticateTenantPrincipal,
+  provisionBranchPinCredential,
+  rotateBranchPinCredential,
+  revokeBranchPinCredential,
+} from './iam.js';
+import { ARGON2ID_FROZEN_BASELINE } from '@trident/core';
 
 describe('TRIDENTPOS WP-003 PostgreSQL Migration Engine Integration Suite', () => {
   const pool = getPool();
@@ -23,7 +31,7 @@ describe('TRIDENTPOS WP-003 PostgreSQL Migration Engine Integration Suite', () =
     const client = await pool.connect();
     try {
       await client.query(`
-        DROP TABLE IF EXISTS test_composite_ref, branches, organizations, _migrations CASCADE;
+        DROP TABLE IF EXISTS user_branch_credentials, user_roles, roles, users, test_composite_ref, branches, organizations, _migrations CASCADE;
         DROP EXTENSION IF EXISTS pgcrypto CASCADE;
         DROP EXTENSION IF EXISTS "uuid-ossp" CASCADE;
         DROP FUNCTION IF EXISTS current_app_org_id() CASCADE;
@@ -350,14 +358,32 @@ describe('TRIDENTPOS WP-004 Organization & Branch Multi-Tenant RLS Foundation Su
   const branchAId = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
   const branchBId = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
 
+  const wp004SuiteDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wp004-suite-'));
+  fs.copyFileSync(
+    path.join(DEFAULT_MIGRATIONS_DIR, `${baselineId}_baseline_infrastructure.sql`),
+    path.join(wp004SuiteDir, `${baselineId}_baseline_infrastructure.sql`),
+  );
+  fs.copyFileSync(
+    path.join(DEFAULT_MIGRATIONS_DIR, `${wp004Id}_tenant_rls_foundation.sql`),
+    path.join(wp004SuiteDir, `${wp004Id}_tenant_rls_foundation.sql`),
+  );
+
   async function asTestRole<T>(fn: (client: pg.PoolClient) => Promise<T>): Promise<T> {
     const client = await pool.connect();
     try {
       await client.query(`SET ROLE ${testRole};`);
       return await fn(client);
     } finally {
-      await client.query('ROLLBACK;').catch(() => {});
-      await client.query('RESET ROLE;').catch(() => {});
+      try {
+        await client.query('ROLLBACK;');
+      } catch {
+        // Rollback safety
+      }
+      try {
+        await client.query('RESET ROLE;');
+      } catch {
+        // Reset role safety
+      }
       client.release();
     }
   }
@@ -386,10 +412,10 @@ describe('TRIDENTPOS WP-004 Organization & Branch Multi-Tenant RLS Foundation Su
   before(async () => {
     const client = await pool.connect();
     try {
-      // Ensure clean state before running migrateUp on DEFAULT_MIGRATIONS_DIR
+      // Ensure clean state before running migrateUp on wp004SuiteDir
       await client.query(`
-        DROP TABLE IF EXISTS test_composite_ref, branches, organizations CASCADE;
-        DELETE FROM _migrations WHERE id = '${wp004Id}';
+        DROP TABLE IF EXISTS user_branch_credentials, user_roles, roles, users, test_composite_ref, branches, organizations CASCADE;
+        DELETE FROM _migrations WHERE id IN ('${wp004Id}', '20260904180000');
       `);
       // Ensure test role exists with NOSUPERUSER and NOBYPASSRLS
       await client.query(`
@@ -403,8 +429,8 @@ describe('TRIDENTPOS WP-004 Organization & Branch Multi-Tenant RLS Foundation Su
         $$;
         CREATE ROLE ${testRole} NOSUPERUSER NOBYPASSRLS NOINHERIT;
       `);
-      // Apply zero-to-latest migrations up to WP-004 on real DEFAULT_MIGRATIONS_DIR
-      await migrateUp(pool);
+      // Apply zero-to-latest migrations up to WP-004 on isolated wp004SuiteDir
+      await migrateUp(pool, { migrationsDir: wp004SuiteDir });
       // Grant least-privilege permissions to test role (DML only, no TRUNCATE/REFERENCES/TRIGGER)
       await client.query(`
         GRANT USAGE ON SCHEMA public TO ${testRole};
@@ -429,12 +455,12 @@ describe('TRIDENTPOS WP-004 Organization & Branch Multi-Tenant RLS Foundation Su
       `);
     } finally {
       client.release();
-      await closePool(pool);
+      fs.rmSync(wp004SuiteDir, { recursive: true, force: true });
     }
   });
 
   it('WP004-T01: WP-003 -> WP-004 migration applies', async () => {
-    const statuses = await getMigrationStatus(pool);
+    const statuses = await getMigrationStatus(pool, { migrationsDir: wp004SuiteDir });
     const appliedIds = statuses.filter((s) => s.applied).map((s) => s.id);
     assert.ok(appliedIds.includes(baselineId), 'WP-003 baseline must be applied');
     assert.ok(appliedIds.includes(wp004Id), 'WP-004 tenant RLS migration must be applied');
@@ -762,7 +788,11 @@ describe('TRIDENTPOS WP-004 Organization & Branch Multi-Tenant RLS Foundation Su
         /foreign key constraint/,
       );
     } finally {
-      await client.query('DROP TABLE IF EXISTS test_composite_ref CASCADE;').catch(() => {});
+      try {
+        await client.query('DROP TABLE IF EXISTS test_composite_ref CASCADE;');
+      } catch {
+        // Cleanup safety
+      }
       client.release();
     }
   });
@@ -809,7 +839,11 @@ describe('TRIDENTPOS WP-004 Organization & Branch Multi-Tenant RLS Foundation Su
       assert.equal(resB.rows[0]?.id, tenantBId);
       await client.query('COMMIT;');
     } finally {
-      await client.query('RESET ROLE;').catch(() => {});
+      try {
+        await client.query('RESET ROLE;');
+      } catch {
+        // Reset role safety
+      }
       client.release();
     }
   });
@@ -850,7 +884,7 @@ describe('TRIDENTPOS WP-004 Organization & Branch Multi-Tenant RLS Foundation Su
     const client = await pool.connect();
     try {
       await client.query(`
-        DROP TABLE IF EXISTS branches, organizations, _migrations CASCADE;
+        DROP TABLE IF EXISTS user_branch_credentials, user_roles, roles, users, branches, organizations, _migrations CASCADE;
         DROP EXTENSION IF EXISTS pgcrypto, "uuid-ossp" CASCADE;
         DROP FUNCTION IF EXISTS current_app_org_id() CASCADE;
       `);
@@ -858,12 +892,12 @@ describe('TRIDENTPOS WP-004 Organization & Branch Multi-Tenant RLS Foundation Su
       client.release();
     }
 
-    const res = await migrateUp(pool);
+    const res = await migrateUp(pool, { migrationsDir: wp004SuiteDir });
     assert.equal(res.alreadyUpToDate, false);
     assert.ok(res.applied.includes(`${baselineId}_baseline_infrastructure`));
     assert.ok(res.applied.includes(`${wp004Id}_tenant_rls_foundation`));
 
-    const status = await getMigrationStatus(pool);
+    const status = await getMigrationStatus(pool, { migrationsDir: wp004SuiteDir });
     assert.equal(status.length, 2);
     assert.ok(status.every((s) => s.applied && s.checksumMatches));
 
@@ -883,7 +917,10 @@ describe('TRIDENTPOS WP-004 Organization & Branch Multi-Tenant RLS Foundation Su
   });
 
   it('WP004-T24: non-production down returns to canonical WP-003 schema state', async () => {
-    const downResult = await migrateDown(pool, { allowDestructiveDown: true });
+    const downResult = await migrateDown(pool, {
+      migrationsDir: wp004SuiteDir,
+      allowDestructiveDown: true,
+    });
     assert.equal(downResult.reverted, `${wp004Id}_tenant_rls_foundation`);
 
     // Verify WP-004 tables and functions are dropped
@@ -908,7 +945,7 @@ describe('TRIDENTPOS WP-004 Organization & Branch Multi-Tenant RLS Foundation Su
 
   it('WP004-T25: up → down → up works', async () => {
     // Re-apply WP-004
-    const upRes = await migrateUp(pool);
+    const upRes = await migrateUp(pool, { migrationsDir: wp004SuiteDir });
     assert.ok(upRes.applied.includes(`${wp004Id}_tenant_rls_foundation`));
 
     // Seed test data and verify functionality restored
@@ -1059,5 +1096,1049 @@ describe('TRIDENTPOS WP-004 Organization & Branch Multi-Tenant RLS Foundation Su
         return true;
       });
     });
+  });
+});
+
+describe('TRIDENTPOS WP-005 Cloud IAM & Administrative Authentication Suite', () => {
+  const pool = getPool();
+  const testRole = 'trident_test_app';
+  const baselineId = '20260904160000';
+  const wp004Id = '20260904170000';
+  const wp005Id = '20260904180000';
+
+  const tenantAId = '11111111-1111-1111-1111-111111111111';
+  const tenantBId = '22222222-2222-2222-2222-222222222222';
+  const branchA1Id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+  const branchA2Id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa02';
+  const branchB1Id = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
+
+  // Verified Supabase subject UUIDs (jwt.sub)
+  const userA1Id = '9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d'; // Active Admin Tenant A
+  const userA2Id = '9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6e'; // Inactive Tenant A
+  const userB1Id = '9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6f'; // Active Tenant B
+  const userB2Id = '9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb70'; // Active Tenant B (Same email as User A1)
+
+  const roleAdminAId = '33333333-3333-3333-3333-333333333331';
+  const roleWaiterAId = '33333333-3333-3333-3333-333333333332';
+  const roleInactiveAId = '33333333-3333-3333-3333-333333333333';
+  const roleAdminBId = '33333333-3333-3333-3333-333333333334';
+
+  const credA1Id = '44444444-4444-4444-4444-444444444441';
+  const credB1Id = '44444444-4444-4444-4444-444444444442';
+
+  const testIssuer = 'https://auth.tridentpos.test';
+  const testAudience = 'https://api.tridentpos.test';
+
+  let rsaPublicKey: Parameters<typeof authenticateTenantPrincipal>[2]['key'];
+  let rsaPrivateKey: Parameters<SignJWT['sign']>[0];
+  let roguePrivateKey: Parameters<SignJWT['sign']>[0];
+
+  async function asTestRole<T>(fn: (client: pg.PoolClient) => Promise<T>): Promise<T> {
+    const client = await pool.connect();
+    try {
+      await client.query(`SET ROLE ${testRole};`);
+      return await fn(client);
+    } finally {
+      try {
+        await client.query('ROLLBACK;');
+      } catch {
+        // Rollback safety
+      }
+      try {
+        await client.query('RESET ROLE;');
+      } catch {
+        // Reset role safety
+      }
+      client.release();
+    }
+  }
+
+  async function seedWp005Data(): Promise<void> {
+    const client = await pool.connect();
+    try {
+      // 1. Seed base tenant infrastructure (organizations & branches)
+      await client.query(`
+        INSERT INTO organizations (id, legal_name, trade_name, tax_id)
+        VALUES
+          ('${tenantAId}', 'Tenant A Legal Name', 'Tenant A Trade', 'TAX-ORG-A'),
+          ('${tenantBId}', 'Tenant B Legal Name', 'Tenant B Trade', 'TAX-ORG-B')
+        ON CONFLICT (id) DO NOTHING;
+
+        INSERT INTO branches (id, organization_id, code, name)
+        VALUES
+          ('${branchA1Id}', '${tenantAId}', 'BR-A1', 'Branch A Primary'),
+          ('${branchA2Id}', '${tenantAId}', 'BR-A2', 'Branch A Secondary'),
+          ('${branchB1Id}', '${tenantBId}', 'BR-B1', 'Branch B Primary')
+        ON CONFLICT (id) DO NOTHING;
+      `);
+
+      // 2. Seed Users
+      await client.query(`
+        INSERT INTO users (id, organization_id, email, full_name, is_active)
+        VALUES
+          ('${userA1Id}', '${tenantAId}', 'admin@tenant-a.com', 'Admin Tenant A', TRUE),
+          ('${userA2Id}', '${tenantAId}', 'inactive@tenant-a.com', 'Inactive Tenant A', FALSE),
+          ('${userB1Id}', '${tenantBId}', 'admin@tenant-b.com', 'Admin Tenant B', TRUE),
+          ('${userB2Id}', '${tenantBId}', 'admin@tenant-a.com', 'User B2 Matching Email', TRUE)
+        ON CONFLICT (id) DO NOTHING;
+      `);
+
+      // 3. Seed Roles
+      await client.query(`
+        INSERT INTO roles (id, organization_id, code, name, permissions, is_active)
+        VALUES
+          ('${roleAdminAId}', '${tenantAId}', 'ROLE_ADMIN', 'Administrator', '["comanda.iniciar", "comanda.enviar", "caja.cobrar", "corte.emitir_x"]', TRUE),
+          ('${roleWaiterAId}', '${tenantAId}', 'ROLE_WAITER', 'Mesero', '["comanda.iniciar"]', TRUE),
+          ('${roleInactiveAId}', '${tenantAId}', 'ROLE_INACTIVE', 'Inactive Role', '["comanda.iniciar", "corte.emitir_z"]', FALSE),
+          ('${roleAdminBId}', '${tenantBId}', 'ROLE_ADMIN_B', 'Admin B', '["catalogo.administrar"]', TRUE)
+        ON CONFLICT (id) DO NOTHING;
+      `);
+
+      // 4. Seed User Roles
+      await client.query(`
+        INSERT INTO user_roles (organization_id, user_id, branch_id, role_id)
+        VALUES
+          ('${tenantAId}', '${userA1Id}', '${branchA1Id}', '${roleAdminAId}'),
+          ('${tenantAId}', '${userA1Id}', '${branchA2Id}', '${roleWaiterAId}'),
+          ('${tenantAId}', '${userA2Id}', '${branchA1Id}', '${roleInactiveAId}'),
+          ('${tenantBId}', '${userB1Id}', '${branchB1Id}', '${roleAdminBId}')
+        ON CONFLICT (organization_id, user_id, branch_id, role_id) DO NOTHING;
+      `);
+
+      // 5. Seed User Branch Credentials (Argon2id hashes)
+      // PIN 1234 for A1:
+      const hashA1 =
+        '$argon2id$v=19$m=65536,t=3,p=4$qg88Vq1o7w/o7E0dG00Zsw$K9c0VzN840dK3nEwh3+e81m5qK2UqX3s1+5sK2X4e1s';
+      // PIN 5678 for B1:
+      const hashB1 =
+        '$argon2id$v=19$m=65536,t=3,p=4$v7a9b0c1d2e3f4g5h6i7jw$L8b1WzM731cL2mDvg2-d70l4pJ1TpW2r0-4rJ1W3d0r';
+
+      await client.query(`
+        INSERT INTO user_branch_credentials (id, organization_id, user_id, branch_id, pin_hash, credential_version, is_revoked)
+        VALUES
+          ('${credA1Id}', '${tenantAId}', '${userA1Id}', '${branchA1Id}', '${hashA1}', 1, FALSE),
+          ('${credB1Id}', '${tenantBId}', '${userB1Id}', '${branchB1Id}', '${hashB1}', 1, FALSE)
+        ON CONFLICT (id) DO NOTHING;
+      `);
+    } finally {
+      client.release();
+    }
+  }
+
+  async function createTestJwt(options: {
+    sub?: string;
+    iss?: string;
+    aud?: string;
+    exp?: string | number;
+    nbf?: number;
+    claims?: Record<string, unknown>;
+    signingKey?: Parameters<SignJWT['sign']>[0];
+  }): Promise<string> {
+    const signer = new SignJWT(options.claims ?? {})
+      .setProtectedHeader({ alg: 'RS256' })
+      .setIssuer(options.iss ?? testIssuer)
+      .setAudience(options.aud ?? testAudience)
+      .setIssuedAt();
+
+    if (options.sub !== undefined) {
+      signer.setSubject(options.sub);
+    }
+    if (options.exp !== undefined) {
+      signer.setExpirationTime(options.exp);
+    } else {
+      signer.setExpirationTime('15m');
+    }
+    if (options.nbf !== undefined) {
+      signer.setNotBefore(options.nbf);
+    }
+
+    return await signer.sign(options.signingKey ?? rsaPrivateKey);
+  }
+
+  before(async () => {
+    // Generate real cryptographic keys for tests
+    const mainKeys = await generateKeyPair('RS256');
+    rsaPublicKey = mainKeys.publicKey;
+    rsaPrivateKey = mainKeys.privateKey;
+
+    const rogueKeys = await generateKeyPair('RS256');
+    roguePrivateKey = rogueKeys.privateKey;
+
+    const client = await pool.connect();
+    try {
+      await client.query(`
+        DROP TABLE IF EXISTS user_branch_credentials, user_roles, roles, users, test_composite_ref, branches, organizations CASCADE;
+        DELETE FROM _migrations WHERE id IN ('${wp004Id}', '${wp005Id}');
+      `);
+      await client.query(`
+        DO $$
+        BEGIN
+          IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${testRole}') THEN
+            EXECUTE 'DROP OWNED BY ${testRole}';
+            EXECUTE 'DROP ROLE ${testRole}';
+          END IF;
+        END
+        $$;
+        CREATE ROLE ${testRole} NOSUPERUSER NOBYPASSRLS NOINHERIT;
+      `);
+      // Apply all migrations up to WP-005 on DEFAULT_MIGRATIONS_DIR
+      await migrateUp(pool);
+
+      // Grant least-privilege permissions to test role (DML only, no TRUNCATE/REFERENCES/TRIGGER)
+      await client.query(`
+        GRANT USAGE ON SCHEMA public TO ${testRole};
+        GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE organizations TO ${testRole};
+        GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE branches TO ${testRole};
+        GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE users TO ${testRole};
+        GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE roles TO ${testRole};
+        GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE user_roles TO ${testRole};
+        GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE user_branch_credentials TO ${testRole};
+        GRANT EXECUTE ON FUNCTION current_app_org_id() TO ${testRole};
+      `);
+      await seedWp005Data();
+    } finally {
+      client.release();
+    }
+  });
+
+  after(async () => {
+    const client = await pool.connect();
+    try {
+      await client.query(`
+        DROP TABLE IF EXISTS user_branch_credentials, user_roles, roles, users, test_composite_ref, branches, organizations CASCADE;
+        DELETE FROM _migrations WHERE id IN ('${wp004Id}', '${wp005Id}');
+        DROP OWNED BY ${testRole};
+        DROP ROLE ${testRole};
+      `);
+    } finally {
+      client.release();
+      await closePool(pool);
+    }
+  });
+
+  it('WP005-T01: WP-005 migration applies after canonical WP-004', async () => {
+    const statuses = await getMigrationStatus(pool);
+    const appliedIds = statuses.filter((s) => s.applied).map((s) => s.id);
+    assert.ok(appliedIds.includes(baselineId), 'WP-003 baseline must be applied');
+    assert.ok(appliedIds.includes(wp004Id), 'WP-004 foundation must be applied');
+    assert.ok(appliedIds.includes(wp005Id), 'WP-005 Cloud IAM migration must be applied');
+  });
+
+  interface ColumnInfo {
+    column_name: string;
+    data_type: string;
+    is_nullable: string;
+  }
+
+  it('WP005-T02: users schema exact', async () => {
+    const cols = await pool.query<ColumnInfo>(`
+      SELECT column_name, data_type, is_nullable
+      FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'users'
+      ORDER BY ordinal_position;
+    `);
+    const colMap = new Map<string, ColumnInfo>(cols.rows.map((r) => [r.column_name, r]));
+
+    assert.equal(colMap.get('id')?.data_type, 'uuid');
+    assert.equal(colMap.get('id')?.is_nullable, 'NO');
+    assert.equal(colMap.get('organization_id')?.data_type, 'uuid');
+    assert.equal(colMap.get('organization_id')?.is_nullable, 'NO');
+    assert.equal(colMap.get('email')?.is_nullable, 'NO');
+    assert.equal(colMap.get('full_name')?.is_nullable, 'NO');
+    assert.equal(colMap.get('is_active')?.data_type, 'boolean');
+    assert.equal(colMap.get('is_active')?.is_nullable, 'NO');
+    assert.equal(colMap.get('created_at')?.is_nullable, 'NO');
+    assert.equal(colMap.get('updated_at')?.is_nullable, 'NO');
+
+    const uqCheck = await pool.query<{ conname: string }>(`
+      SELECT conname FROM pg_constraint
+      WHERE conrelid = 'users'::regclass AND contype = 'u';
+    `);
+    const conNames = uqCheck.rows.map((r) => r.conname);
+    assert.ok(conNames.includes('uq_users_org_email'));
+    assert.ok(conNames.includes('uq_users_org_id'));
+  });
+
+  it('WP005-T03: roles schema exact', async () => {
+    const cols = await pool.query<ColumnInfo>(`
+      SELECT column_name, data_type, is_nullable
+      FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'roles'
+      ORDER BY ordinal_position;
+    `);
+    const colMap = new Map<string, ColumnInfo>(cols.rows.map((r) => [r.column_name, r]));
+
+    assert.equal(colMap.get('id')?.data_type, 'uuid');
+    assert.equal(colMap.get('id')?.is_nullable, 'NO');
+    assert.equal(colMap.get('organization_id')?.data_type, 'uuid');
+    assert.equal(colMap.get('organization_id')?.is_nullable, 'NO');
+    assert.equal(colMap.get('code')?.is_nullable, 'NO');
+    assert.equal(colMap.get('name')?.is_nullable, 'NO');
+    assert.equal(colMap.get('permissions')?.data_type, 'jsonb');
+    assert.equal(colMap.get('permissions')?.is_nullable, 'NO');
+    assert.equal(colMap.get('is_active')?.data_type, 'boolean');
+    assert.equal(colMap.get('is_active')?.is_nullable, 'NO');
+
+    const uqCheck = await pool.query<{ conname: string }>(`
+      SELECT conname FROM pg_constraint
+      WHERE conrelid = 'roles'::regclass AND contype = 'u';
+    `);
+    const conNames = uqCheck.rows.map((r) => r.conname);
+    assert.ok(conNames.includes('uq_roles_org_code'));
+    assert.ok(conNames.includes('uq_roles_org_id'));
+  });
+
+  it('WP005-T04: user_roles schema exact', async () => {
+    const cols = await pool.query<ColumnInfo>(`
+      SELECT column_name, data_type, is_nullable
+      FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'user_roles'
+      ORDER BY ordinal_position;
+    `);
+    const colMap = new Map<string, ColumnInfo>(cols.rows.map((r) => [r.column_name, r]));
+
+    assert.equal(colMap.get('organization_id')?.data_type, 'uuid');
+    assert.equal(colMap.get('user_id')?.data_type, 'uuid');
+    assert.equal(colMap.get('branch_id')?.data_type, 'uuid');
+    assert.equal(colMap.get('role_id')?.data_type, 'uuid');
+
+    // Verify composite primary key
+    const pkCheck = await pool.query<{ conname: string; contype: string }>(`
+      SELECT conname, contype FROM pg_constraint
+      WHERE conrelid = 'user_roles'::regclass AND contype = 'p';
+    `);
+    assert.equal(pkCheck.rows.length, 1);
+
+    // Verify composite foreign keys
+    const fkCheck = await pool.query<{ conname: string }>(`
+      SELECT conname FROM pg_constraint
+      WHERE conrelid = 'user_roles'::regclass AND contype = 'f';
+    `);
+    const fkNames = fkCheck.rows.map((r) => r.conname);
+    assert.ok(fkNames.includes('fk_user_roles_user'));
+    assert.ok(fkNames.includes('fk_user_roles_branch'));
+    assert.ok(fkNames.includes('fk_user_roles_role'));
+  });
+
+  it('WP005-T05: user_branch_credentials schema exact', async () => {
+    const cols = await pool.query<ColumnInfo>(`
+      SELECT column_name, data_type, is_nullable
+      FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'user_branch_credentials'
+      ORDER BY ordinal_position;
+    `);
+    const colMap = new Map<string, ColumnInfo>(cols.rows.map((r) => [r.column_name, r]));
+
+    assert.equal(colMap.get('id')?.data_type, 'uuid');
+    assert.equal(colMap.get('organization_id')?.data_type, 'uuid');
+    assert.equal(colMap.get('user_id')?.data_type, 'uuid');
+    assert.equal(colMap.get('branch_id')?.data_type, 'uuid');
+    assert.equal(colMap.get('pin_hash')?.is_nullable, 'NO');
+    assert.equal(colMap.get('credential_version')?.data_type, 'integer');
+    assert.equal(colMap.get('is_revoked')?.data_type, 'boolean');
+    assert.equal(colMap.get('updated_at')?.is_nullable, 'NO');
+
+    const conCheck = await pool.query<{ conname: string }>(`
+      SELECT conname FROM pg_constraint
+      WHERE conrelid = 'user_branch_credentials'::regclass;
+    `);
+    const conNames = conCheck.rows.map((r) => r.conname);
+    assert.ok(conNames.includes('uq_user_branch_cred'));
+    assert.ok(conNames.includes('uq_user_branch_cred_org_id'));
+    assert.ok(conNames.includes('fk_user_branch_cred_user'));
+    assert.ok(conNames.includes('fk_user_branch_cred_branch'));
+  });
+
+  it('WP005-T06: permissions table DOES NOT exist', async () => {
+    const res = await pool.query(`
+      SELECT table_name FROM information_schema.tables
+      WHERE table_schema = 'public' AND table_name = 'permissions';
+    `);
+    assert.equal(res.rows.length, 0, 'permissions table must not exist');
+  });
+
+  it('WP005-T07: role_permissions table DOES NOT exist', async () => {
+    const res = await pool.query(`
+      SELECT table_name FROM information_schema.tables
+      WHERE table_schema = 'public' AND table_name = 'role_permissions';
+    `);
+    assert.equal(res.rows.length, 0, 'role_permissions table must not exist');
+  });
+
+  it('WP005-T08: users composite tenant identity exists', async () => {
+    const res = await pool.query<{ conname: string }>(`
+      SELECT conname FROM pg_constraint
+      WHERE conrelid = 'users'::regclass AND conname = 'uq_users_org_id';
+    `);
+    assert.equal(res.rows.length, 1);
+  });
+
+  it('WP005-T09: roles composite tenant identity exists', async () => {
+    const res = await pool.query<{ conname: string }>(`
+      SELECT conname FROM pg_constraint
+      WHERE conrelid = 'roles'::regclass AND conname = 'uq_roles_org_id';
+    `);
+    assert.equal(res.rows.length, 1);
+  });
+
+  it('WP005-T10: cross-tenant user_roles FK rejected', async () => {
+    // Attempt to assign Tenant B user to Tenant A branch/role under Tenant A organization
+    await assert.rejects(
+      pool.query(`
+        INSERT INTO user_roles (organization_id, user_id, branch_id, role_id)
+        VALUES ('${tenantAId}', '${userB1Id}', '${branchA1Id}', '${roleAdminAId}');
+      `),
+      (err: unknown) => {
+        const pgErr = err as { code?: string };
+        assert.equal(
+          pgErr.code,
+          '23503',
+          'Cross-tenant FK must be rejected with foreign_key_violation',
+        );
+        return true;
+      },
+    );
+  });
+
+  it('WP005-T11: cross-tenant credential FK rejected', async () => {
+    // Attempt to create credential in Tenant A referencing Tenant B branch
+    await assert.rejects(
+      pool.query(`
+        INSERT INTO user_branch_credentials (organization_id, user_id, branch_id, pin_hash)
+        VALUES ('${tenantAId}', '${userA1Id}', '${branchB1Id}', '$argon2id$v=19$dummy');
+      `),
+      (err: unknown) => {
+        const pgErr = err as { code?: string };
+        assert.equal(pgErr.code, '23503', 'Cross-tenant credential FK must be rejected');
+        return true;
+      },
+    );
+  });
+
+  it('WP005-T12: RLS enabled all four tables', async () => {
+    const res = await pool.query<{ relname: string; relrowsecurity: boolean }>(`
+      SELECT relname, relrowsecurity FROM pg_class
+      WHERE relname IN ('users', 'roles', 'user_roles', 'user_branch_credentials');
+    `);
+    assert.equal(res.rows.length, 4);
+    for (const row of res.rows) {
+      assert.equal(row.relrowsecurity, true, `RLS must be enabled on ${row.relname}`);
+    }
+  });
+
+  it('WP005-T13: FORCE RLS all four tables', async () => {
+    const res = await pool.query<{ relname: string; relforcerowsecurity: boolean }>(`
+      SELECT relname, relforcerowsecurity FROM pg_class
+      WHERE relname IN ('users', 'roles', 'user_roles', 'user_branch_credentials');
+    `);
+    assert.equal(res.rows.length, 4);
+    for (const row of res.rows) {
+      assert.equal(row.relforcerowsecurity, true, `FORCE RLS must be enabled on ${row.relname}`);
+    }
+  });
+
+  it('WP005-T14: no tenant context returns zero rows', async () => {
+    await asTestRole(async (client) => {
+      const u = await client.query('SELECT * FROM users;');
+      assert.equal(u.rows.length, 0);
+
+      const r = await client.query('SELECT * FROM roles;');
+      assert.equal(r.rows.length, 0);
+
+      const ur = await client.query('SELECT * FROM user_roles;');
+      assert.equal(ur.rows.length, 0);
+
+      const ubc = await client.query('SELECT * FROM user_branch_credentials;');
+      assert.equal(ubc.rows.length, 0);
+    });
+  });
+
+  it('WP005-T15: Tenant A cannot read Tenant B users', async () => {
+    await asTestRole(async (client) => {
+      await client.query('BEGIN;');
+      await setTenantContext(client, tenantAId);
+
+      const allUsers = await client.query<{ id: string; organization_id: string }>(
+        'SELECT id, organization_id FROM users;',
+      );
+      assert.ok(allUsers.rows.length > 0);
+      assert.ok(allUsers.rows.every((row) => row.organization_id === tenantAId));
+
+      const bUser = await client.query('SELECT * FROM users WHERE id = $1;', [userB1Id]);
+      assert.equal(bUser.rows.length, 0);
+
+      await client.query('COMMIT;');
+    });
+  });
+
+  it('WP005-T16: Tenant A cannot read Tenant B roles', async () => {
+    await asTestRole(async (client) => {
+      await client.query('BEGIN;');
+      await setTenantContext(client, tenantAId);
+
+      const allRoles = await client.query<{ id: string; organization_id: string }>(
+        'SELECT id, organization_id FROM roles;',
+      );
+      assert.ok(allRoles.rows.length > 0);
+      assert.ok(allRoles.rows.every((row) => row.organization_id === tenantAId));
+
+      const bRole = await client.query('SELECT * FROM roles WHERE id = $1;', [roleAdminBId]);
+      assert.equal(bRole.rows.length, 0);
+
+      await client.query('COMMIT;');
+    });
+  });
+
+  it('WP005-T17: Tenant A cannot read Tenant B user_roles', async () => {
+    await asTestRole(async (client) => {
+      await client.query('BEGIN;');
+      await setTenantContext(client, tenantAId);
+
+      const ur = await client.query<{ organization_id: string }>(
+        'SELECT organization_id FROM user_roles;',
+      );
+      assert.ok(ur.rows.length > 0);
+      assert.ok(ur.rows.every((row) => row.organization_id === tenantAId));
+
+      const bUr = await client.query('SELECT * FROM user_roles WHERE user_id = $1;', [userB1Id]);
+      assert.equal(bUr.rows.length, 0);
+
+      await client.query('COMMIT;');
+    });
+  });
+
+  it('WP005-T18: Tenant A cannot read Tenant B credentials', async () => {
+    await asTestRole(async (client) => {
+      await client.query('BEGIN;');
+      await setTenantContext(client, tenantAId);
+
+      const ubc = await client.query<{ organization_id: string }>(
+        'SELECT organization_id FROM user_branch_credentials;',
+      );
+      assert.ok(ubc.rows.length > 0);
+      assert.ok(ubc.rows.every((row) => row.organization_id === tenantAId));
+
+      const bCred = await client.query('SELECT * FROM user_branch_credentials WHERE id = $1;', [
+        credB1Id,
+      ]);
+      assert.equal(bCred.rows.length, 0);
+
+      await client.query('COMMIT;');
+    });
+  });
+
+  it('WP005-T19: valid signed JWT accepted', async () => {
+    const token = await createTestJwt({ sub: userA1Id });
+    const authResult = await authenticateTenantPrincipal(
+      pool,
+      { token, candidateOrganizationId: tenantAId, candidateBranchId: branchA1Id },
+      { issuer: testIssuer, audience: testAudience, key: rsaPublicKey },
+    );
+
+    assert.equal(authResult.ok, true);
+    if (authResult.ok) {
+      assert.equal(authResult.value.userId, userA1Id);
+      assert.equal(authResult.value.organizationId, tenantAId);
+      assert.equal(authResult.value.branchId, branchA1Id);
+      assert.ok(authResult.value.permissions.includes('comanda.iniciar'));
+      assert.ok(authResult.value.permissions.includes('caja.cobrar'));
+    }
+  });
+
+  it('WP005-T20: invalid signature rejected', async () => {
+    const token = await createTestJwt({ sub: userA1Id, signingKey: roguePrivateKey });
+    const authResult = await authenticateTenantPrincipal(
+      pool,
+      { token, candidateOrganizationId: tenantAId, candidateBranchId: branchA1Id },
+      { issuer: testIssuer, audience: testAudience, key: rsaPublicKey },
+    );
+
+    assert.equal(authResult.ok, false);
+    if (!authResult.ok) {
+      assert.equal(authResult.error.code, 'INVALID_JWT');
+    }
+  });
+
+  it('WP005-T21: expired JWT rejected', async () => {
+    const token = await createTestJwt({
+      sub: userA1Id,
+      exp: Math.floor(Date.now() / 1000) - 100,
+    });
+    const authResult = await authenticateTenantPrincipal(
+      pool,
+      { token, candidateOrganizationId: tenantAId, candidateBranchId: branchA1Id },
+      { issuer: testIssuer, audience: testAudience, key: rsaPublicKey },
+    );
+
+    assert.equal(authResult.ok, false);
+    if (!authResult.ok) {
+      assert.equal(authResult.error.code, 'INVALID_JWT');
+    }
+  });
+
+  it('WP005-T22: future nbf rejected', async () => {
+    const token = await createTestJwt({
+      sub: userA1Id,
+      nbf: Math.floor(Date.now() / 1000) + 3600,
+    });
+    const authResult = await authenticateTenantPrincipal(
+      pool,
+      { token, candidateOrganizationId: tenantAId, candidateBranchId: branchA1Id },
+      { issuer: testIssuer, audience: testAudience, key: rsaPublicKey },
+    );
+
+    assert.equal(authResult.ok, false);
+    if (!authResult.ok) {
+      assert.equal(authResult.error.code, 'INVALID_JWT');
+    }
+  });
+
+  it('WP005-T23: wrong issuer rejected', async () => {
+    const token = await createTestJwt({
+      sub: userA1Id,
+      iss: 'https://rogue.example.com',
+    });
+    const authResult = await authenticateTenantPrincipal(
+      pool,
+      { token, candidateOrganizationId: tenantAId, candidateBranchId: branchA1Id },
+      { issuer: testIssuer, audience: testAudience, key: rsaPublicKey },
+    );
+
+    assert.equal(authResult.ok, false);
+    if (!authResult.ok) {
+      assert.equal(authResult.error.code, 'INVALID_JWT');
+    }
+  });
+
+  it('WP005-T24: wrong audience rejected', async () => {
+    const token = await createTestJwt({
+      sub: userA1Id,
+      aud: 'https://other-service.example.com',
+    });
+    const authResult = await authenticateTenantPrincipal(
+      pool,
+      { token, candidateOrganizationId: tenantAId, candidateBranchId: branchA1Id },
+      { issuer: testIssuer, audience: testAudience, key: rsaPublicKey },
+    );
+
+    assert.equal(authResult.ok, false);
+    if (!authResult.ok) {
+      assert.equal(authResult.error.code, 'INVALID_JWT');
+    }
+  });
+
+  it('WP005-T25: missing subject rejected', async () => {
+    const token = await createTestJwt({
+      claims: { email: 'admin@tenant-a.com' },
+    });
+    const authResult = await authenticateTenantPrincipal(
+      pool,
+      { token, candidateOrganizationId: tenantAId, candidateBranchId: branchA1Id },
+      { issuer: testIssuer, audience: testAudience, key: rsaPublicKey },
+    );
+
+    assert.equal(authResult.ok, false);
+    if (!authResult.ok) {
+      assert.equal(authResult.error.code, 'INVALID_JWT');
+    }
+  });
+
+  it('WP005-T26: alg-none / algorithm confusion rejected', async () => {
+    const header = Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString('base64url');
+    const payload = Buffer.from(
+      JSON.stringify({
+        iss: testIssuer,
+        aud: testAudience,
+        sub: userA1Id,
+        exp: Math.floor(Date.now() / 1000) + 900,
+      }),
+    ).toString('base64url');
+    const unsignedToken = `${header}.${payload}.`;
+
+    const authResult = await authenticateTenantPrincipal(
+      pool,
+      { token: unsignedToken, candidateOrganizationId: tenantAId, candidateBranchId: branchA1Id },
+      { issuer: testIssuer, audience: testAudience, key: rsaPublicKey },
+    );
+
+    assert.equal(authResult.ok, false);
+    if (!authResult.ok) {
+      assert.equal(authResult.error.code, 'INVALID_JWT');
+    }
+  });
+
+  it('WP005-T27: jwt.sub maps directly to users.id', async () => {
+    const token = await createTestJwt({ sub: userA1Id });
+    const authResult = await authenticateTenantPrincipal(
+      pool,
+      { token, candidateOrganizationId: tenantAId },
+      { issuer: testIssuer, audience: testAudience, key: rsaPublicKey },
+    );
+
+    assert.equal(authResult.ok, true);
+    if (authResult.ok) {
+      assert.equal(authResult.value.userId, userA1Id);
+      // Double check in database that user exists with exactly this ID
+      const userRes = await pool.query('SELECT id, email FROM users WHERE id = $1;', [userA1Id]);
+      assert.equal(userRes.rows[0]?.id, userA1Id);
+    }
+  });
+
+  it('WP005-T28: email-only authentication lookup not used', async () => {
+    // Attempting to pass an unknown subject UUID with a valid email payload
+    const fakeSub = '00000000-0000-0000-0000-000000000000';
+    const token = await createTestJwt({
+      sub: fakeSub,
+      claims: { email: 'admin@tenant-a.com' },
+    });
+
+    const authResult = await authenticateTenantPrincipal(
+      pool,
+      { token, candidateOrganizationId: tenantAId },
+      { issuer: testIssuer, audience: testAudience, key: rsaPublicKey },
+    );
+
+    assert.equal(authResult.ok, false);
+    if (!authResult.ok) {
+      assert.equal(authResult.error.code, 'USER_NOT_FOUND_OR_INACTIVE');
+    }
+  });
+
+  it('WP005-T29: inactive user rejected', async () => {
+    const token = await createTestJwt({ sub: userA2Id }); // User A2 is is_active = FALSE
+    const authResult = await authenticateTenantPrincipal(
+      pool,
+      { token, candidateOrganizationId: tenantAId, candidateBranchId: branchA1Id },
+      { issuer: testIssuer, audience: testAudience, key: rsaPublicKey },
+    );
+
+    assert.equal(authResult.ok, false);
+    if (!authResult.ok) {
+      assert.equal(authResult.error.code, 'USER_NOT_FOUND_OR_INACTIVE');
+    }
+  });
+
+  it('WP005-T30: Tenant A JWT + Tenant B requested org rejected', async () => {
+    const token = await createTestJwt({ sub: userA1Id }); // User A1 belongs to Tenant A
+    const authResult = await authenticateTenantPrincipal(
+      pool,
+      { token, candidateOrganizationId: tenantBId, candidateBranchId: branchB1Id },
+      { issuer: testIssuer, audience: testAudience, key: rsaPublicKey },
+    );
+
+    assert.equal(authResult.ok, false);
+    if (!authResult.ok) {
+      assert.equal(authResult.error.code, 'USER_NOT_FOUND_OR_INACTIVE');
+    }
+  });
+
+  it('WP005-T31: same email in different tenant does not alter identity binding', async () => {
+    // User A1 and User B2 share email 'admin@tenant-a.com', but have distinct subject UUIDs
+    const token = await createTestJwt({ sub: userA1Id });
+
+    // Requesting Tenant B context with User A1's token
+    const authResult = await authenticateTenantPrincipal(
+      pool,
+      { token, candidateOrganizationId: tenantBId },
+      { issuer: testIssuer, audience: testAudience, key: rsaPublicKey },
+    );
+
+    // Must be rejected because identity is strictly bound to jwt.sub, not email!
+    assert.equal(authResult.ok, false);
+    if (!authResult.ok) {
+      assert.equal(authResult.error.code, 'USER_NOT_FOUND_OR_INACTIVE');
+    }
+  });
+
+  it('WP005-T32: valid branch role permission allowed', async () => {
+    const token = await createTestJwt({ sub: userA1Id });
+    const authResult = await authenticateTenantPrincipal(
+      pool,
+      { token, candidateOrganizationId: tenantAId, candidateBranchId: branchA1Id },
+      { issuer: testIssuer, audience: testAudience, key: rsaPublicKey },
+    );
+
+    assert.equal(authResult.ok, true);
+    if (authResult.ok) {
+      assert.ok(authResult.value.permissions.includes('caja.cobrar'));
+    }
+  });
+
+  it('WP005-T33: missing permission denied', async () => {
+    // User A1 on Branch A2 has Waiter role (only comanda.iniciar)
+    const token = await createTestJwt({ sub: userA1Id });
+    const authResult = await authenticateTenantPrincipal(
+      pool,
+      { token, candidateOrganizationId: tenantAId, candidateBranchId: branchA2Id },
+      { issuer: testIssuer, audience: testAudience, key: rsaPublicKey },
+    );
+
+    assert.equal(authResult.ok, true);
+    if (authResult.ok) {
+      assert.ok(authResult.value.permissions.includes('comanda.iniciar'));
+      assert.equal(authResult.value.permissions.includes('caja.cobrar'), false);
+      assert.equal(authResult.value.permissions.includes('corte.emitir_z'), false);
+    }
+  });
+
+  it('WP005-T34: inactive role denied', async () => {
+    // User A2 has roleInactiveAId which is inactive
+    const token = await createTestJwt({ sub: userA2Id });
+    const authResult = await authenticateTenantPrincipal(
+      pool,
+      { token, candidateOrganizationId: tenantAId, candidateBranchId: branchA1Id },
+      { issuer: testIssuer, audience: testAudience, key: rsaPublicKey },
+    );
+
+    // Inactive user/role rejected
+    assert.equal(authResult.ok, false);
+  });
+
+  it('WP005-T35: wrong branch denied', async () => {
+    // User A1 requesting Branch B1 (belonging to Tenant B)
+    const token = await createTestJwt({ sub: userA1Id });
+    const authResult = await authenticateTenantPrincipal(
+      pool,
+      { token, candidateOrganizationId: tenantAId, candidateBranchId: branchB1Id },
+      { issuer: testIssuer, audience: testAudience, key: rsaPublicKey },
+    );
+
+    assert.equal(authResult.ok, false);
+    if (!authResult.ok) {
+      assert.equal(authResult.error.code, 'BRANCH_AUTHORIZATION_FAILED');
+    }
+  });
+
+  it('WP005-T36: client-supplied role/permission ignored', async () => {
+    // Client injects forged claims in token payload
+    const token = await createTestJwt({
+      sub: userA1Id,
+      claims: {
+        role: 'SUPER_ADMIN',
+        roles: ['GLOBAL_ROOT'],
+        permissions: ['*:*'],
+        isAdmin: true,
+      },
+    });
+
+    const authResult = await authenticateTenantPrincipal(
+      pool,
+      { token, candidateOrganizationId: tenantAId, candidateBranchId: branchA2Id },
+      { issuer: testIssuer, audience: testAudience, key: rsaPublicKey },
+    );
+
+    assert.equal(authResult.ok, true);
+    if (authResult.ok) {
+      // Must only contain database-evaluated Waiter permissions for Branch A2
+      assert.deepEqual(authResult.value.permissions, ['comanda.iniciar']);
+      assert.equal(authResult.value.permissions.includes('*:*'), false);
+    }
+  });
+
+  it('WP005-T37: Argon2id PIN hash generated', async () => {
+    const client = await pool.connect();
+    try {
+      const testUserId = '9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb88';
+      await client.query(`
+        INSERT INTO users (id, organization_id, email, full_name)
+        VALUES ('${testUserId}', '${tenantAId}', 'pin-test@tenant-a.com', 'PIN User')
+        ON CONFLICT (id) DO NOTHING;
+      `);
+
+      const provRes = await provisionBranchPinCredential(client, {
+        organizationId: tenantAId,
+        userId: testUserId,
+        branchId: branchA1Id,
+        pin: '9876',
+      });
+
+      assert.equal(provRes.ok, true);
+      if (provRes.ok) {
+        assert.equal(provRes.value.credentialVersion, 1);
+      }
+    } finally {
+      client.release();
+    }
+  });
+
+  it('WP005-T38: Argon2 parameters match frozen baseline', async () => {
+    const client = await pool.connect();
+    try {
+      const res = await client.query<{ pin_hash: string }>(`
+        SELECT pin_hash FROM user_branch_credentials
+        WHERE user_id = '9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb88';
+      `);
+
+      assert.ok(res.rows.length > 0);
+      const hash = res.rows[0]?.pin_hash ?? '';
+      assert.ok(hash.startsWith('$argon2id$v=19$'));
+      assert.ok(hash.includes(`m=${ARGON2ID_FROZEN_BASELINE.memoryCost}`));
+      assert.ok(hash.includes(`t=${ARGON2ID_FROZEN_BASELINE.timeCost}`));
+      assert.ok(hash.includes(`p=${ARGON2ID_FROZEN_BASELINE.parallelism}`));
+    } finally {
+      client.release();
+    }
+  });
+
+  it('WP005-T39: PIN rotation increments credential_version atomically', async () => {
+    const client = await pool.connect();
+    try {
+      const rotateRes = await rotateBranchPinCredential(client, {
+        organizationId: tenantAId,
+        userId: '9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb88',
+        branchId: branchA1Id,
+        newPin: '5432',
+      });
+
+      assert.equal(rotateRes.ok, true);
+      if (rotateRes.ok) {
+        assert.equal(rotateRes.value.credentialVersion, 2);
+      }
+
+      const verifyCheck = await client.query<{ credential_version: number; is_revoked: boolean }>(`
+        SELECT credential_version, is_revoked FROM user_branch_credentials
+        WHERE user_id = '9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb88';
+      `);
+      assert.equal(verifyCheck.rows[0]?.credential_version, 2);
+      assert.equal(verifyCheck.rows[0]?.is_revoked, false);
+    } finally {
+      client.release();
+    }
+  });
+
+  it('WP005-T40: revoked credential state persists correctly', async () => {
+    const client = await pool.connect();
+    try {
+      const revokeRes = await revokeBranchPinCredential(client, {
+        organizationId: tenantAId,
+        userId: '9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb88',
+        branchId: branchA1Id,
+      });
+
+      assert.equal(revokeRes.ok, true);
+
+      const check = await client.query<{ is_revoked: boolean }>(`
+        SELECT is_revoked FROM user_branch_credentials
+        WHERE user_id = '9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb88';
+      `);
+      assert.equal(check.rows[0]?.is_revoked, true);
+    } finally {
+      client.release();
+    }
+  });
+
+  it('WP005-T41: plaintext PIN never persisted', async () => {
+    const res = await pool.query<{ pin_hash: string }>(`
+      SELECT pin_hash FROM user_branch_credentials;
+    `);
+    for (const row of res.rows) {
+      assert.ok(row.pin_hash.startsWith('$argon2id$'));
+      assert.equal(row.pin_hash.includes('1234'), false);
+      assert.equal(row.pin_hash.includes('5432'), false);
+      assert.equal(row.pin_hash.includes('9876'), false);
+    }
+  });
+
+  it('WP005-T42: connection reuse does not leak tenant context', async () => {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN;');
+      await setTenantContext(client, tenantAId);
+      await client.query('COMMIT;');
+
+      const freshContext = await client.query<{ current_app_org_id: string }>(
+        'SELECT current_app_org_id();',
+      );
+      assert.equal(freshContext.rows[0]?.current_app_org_id, null);
+    } finally {
+      client.release();
+    }
+  });
+
+  it('WP005-T43: normal app test role NOBYPASSRLS / NOSUPERUSER', async () => {
+    const roleCheck = await pool.query<{ rolsuper: boolean; rolbypassrls: boolean }>(`
+      SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = '${testRole}';
+    `);
+    assert.equal(roleCheck.rows.length, 1);
+    assert.equal(roleCheck.rows[0]?.rolsuper, false);
+    assert.equal(roleCheck.rows[0]?.rolbypassrls, false);
+  });
+
+  it('WP005-T44: zero-to-latest WP-003 + WP-004 + WP-005 migration', async () => {
+    const client = await pool.connect();
+    try {
+      await client.query(`
+        DROP TABLE IF EXISTS user_branch_credentials, user_roles, roles, users, test_composite_ref, branches, organizations, _migrations CASCADE;
+        DROP EXTENSION IF EXISTS pgcrypto, "uuid-ossp" CASCADE;
+        DROP FUNCTION IF EXISTS current_app_org_id() CASCADE;
+      `);
+    } finally {
+      client.release();
+    }
+
+    const upRes = await migrateUp(pool);
+    assert.equal(upRes.alreadyUpToDate, false);
+    assert.ok(upRes.applied.includes(`${baselineId}_baseline_infrastructure`));
+    assert.ok(upRes.applied.includes(`${wp004Id}_tenant_rls_foundation`));
+    assert.ok(upRes.applied.includes(`${wp005Id}_cloud_iam_auth`));
+
+    const status = await getMigrationStatus(pool);
+    assert.equal(status.length, 3);
+    assert.ok(status.every((s) => s.applied && s.checksumMatches));
+  });
+
+  it('WP005-T45: controlled non-production WP-005 down returns to WP-004 state', async () => {
+    const downResult = await migrateDown(pool, { allowDestructiveDown: true });
+    assert.equal(downResult.reverted, `${wp005Id}_cloud_iam_auth`);
+
+    // Verify WP-005 tables are dropped
+    const checkWp005 = await pool.query(`
+      SELECT table_name FROM information_schema.tables
+      WHERE table_schema = 'public' AND table_name IN ('users', 'roles', 'user_roles', 'user_branch_credentials');
+    `);
+    assert.equal(checkWp005.rows.length, 0);
+
+    // Verify WP-004 tables remain intact
+    const checkWp004 = await pool.query(`
+      SELECT table_name FROM information_schema.tables
+      WHERE table_schema = 'public' AND table_name IN ('organizations', 'branches');
+    `);
+    assert.equal(checkWp004.rows.length, 2);
+  });
+
+  it('WP005-T46: up → down → up succeeds', async () => {
+    // Re-apply WP-005
+    const upRes = await migrateUp(pool);
+    assert.ok(upRes.applied.includes(`${wp005Id}_cloud_iam_auth`));
+
+    // Verify WP-005 tables exist again
+    const checkWp005 = await pool.query(`
+      SELECT table_name FROM information_schema.tables
+      WHERE table_schema = 'public' AND table_name IN ('users', 'roles', 'user_roles', 'user_branch_credentials');
+    `);
+    assert.equal(checkWp005.rows.length, 4);
+  });
+
+  it('WP005-T47: WP-003 and WP-004 migration checksums unchanged', async () => {
+    const ledger = await pool.query<{ id: string; checksum: string }>(
+      `
+      SELECT id, checksum FROM _migrations WHERE id IN ($1, $2) ORDER BY id;
+    `,
+      [baselineId, wp004Id],
+    );
+
+    assert.equal(ledger.rows.length, 2);
+
+    const baselineFile = path.join(
+      DEFAULT_MIGRATIONS_DIR,
+      `${baselineId}_baseline_infrastructure.sql`,
+    );
+    const wp004File = path.join(DEFAULT_MIGRATIONS_DIR, `${wp004Id}_tenant_rls_foundation.sql`);
+
+    const expectedBaselineChecksum = computeChecksum(fs.readFileSync(baselineFile, 'utf8'));
+    const expectedWp004Checksum = computeChecksum(fs.readFileSync(wp004File, 'utf8'));
+
+    assert.equal(ledger.rows[0]?.checksum, expectedBaselineChecksum);
+    assert.equal(ledger.rows[1]?.checksum, expectedWp004Checksum);
   });
 });
