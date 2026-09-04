@@ -97,15 +97,33 @@ function detectCycles(adj) {
   return cycles;
 }
 
+const ALLOWED_INTERNAL_DEPENDENCIES = {
+  '@trident/core': [],
+  '@trident/pos': ['@trident/core'],
+  '@trident/sync': ['@trident/core'],
+  '@trident/ui': ['@trident/core'],
+  '@trident/edge': ['@trident/core'],
+};
+
 function checkArchitecturalRules(adj) {
   const violations = [];
 
-  // Rule 1: @trident/core must not depend on any other @trident package
-  const coreDeps = adj.get('@trident/core') || [];
-  for (const dep of coreDeps) {
-    violations.push(
-      `Architectural violation: @trident/core must not depend on higher-level package '${dep}'`,
-    );
+  for (const [pkgName, deps] of adj.entries()) {
+    const allowed = ALLOWED_INTERNAL_DEPENDENCIES[pkgName];
+    if (allowed === undefined) {
+      violations.push(
+        `Architectural violation: Unrecognized internal package '${pkgName}' has no defined dependency policy.`,
+      );
+      continue;
+    }
+
+    for (const dep of deps) {
+      if (!allowed.includes(dep)) {
+        violations.push(
+          `Architectural boundary violation: Package '${pkgName}' is not permitted to depend on internal package '${dep}'. Permitted internal dependencies: [${allowed.map((d) => `'${d}'`).join(', ')}]`,
+        );
+      }
+    }
   }
 
   return violations;

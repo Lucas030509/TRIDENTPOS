@@ -359,7 +359,97 @@ If WP-001 is rejected during role-separated review:
 
 ---
 
-## 11. Builder Submission
+## 11. Pre-Review Micro-Remediation R1
+
+**Remediation Date:** 2026-09-03  
+**Builder:** `18_DevOps_Engineer`  
+**Previous Provisional Subject SHA:** `8309f5cbec639698ba50b3c7af989032d2359fc2`  
+**Target Pull Request:** #5  
+
+### 11.1 Purpose & Corrections Applied
+Before freezing the final subject SHA $S_2$, three targeted implementation corrections were applied without scope expansion:
+1. **Node Type Alignment:** Replaced `@types/node@^22.13.9` with `@types/node@^24.13.2` (resolved to `24.13.3` in `package-lock.json`), directly aligning type definitions with the active Node 24 LTS (`v24.20.0`) runtime while maintaining compatibility with frozen TypeScript `5.4.5`.
+2. **Removed Type Escape Hatch (`skipLibCheck`):** Set `"skipLibCheck": false` in `tsconfig.base.json`. All workspace packages and root tooling compile cleanly under strict declaration checking without error.
+3. **Internal Package Dependency Boundary Guard:** Strengthened `scripts/check-graph.mjs` with an explicit internal package allowlist enforcing the approved architecture contract:
+   - `@trident/core`: zero internal `@trident/*` dependencies
+   - `@trident/pos`: permits only `@trident/core`
+   - `@trident/sync`: permits only `@trident/core`
+   - `@trident/ui`: permits only `@trident/core`
+   - `@trident/edge`: permits only `@trident/core`
+   All unauthorized cross-package imports (e.g. `@trident/pos -> @trident/sync`) are deterministically rejected even when acyclic.
+
+### 11.2 Acyclic Boundary Guard Negative Test
+An intentional, unauthorized acyclic dependency (`@trident/pos -> @trident/sync`) was temporarily injected into `packages/pos/package.json`.
+- **Command:** `npm run graph:check`
+- **Expected Exit Code:** Non-zero (`1`)
+- **Actual Exit Code:** `1`
+- **Captured Output:**
+  ```text
+  === TRIDENTPOS Monorepo Dependency Graph Validation ===
+
+  Discovered 5 workspace packages:
+    - @trident/core (packages/core)
+    - @trident/edge (packages/edge)
+    - @trident/pos (packages/pos)
+    - @trident/sync (packages/sync)
+    - @trident/ui (packages/ui)
+
+  Package Dependency Adjacency:
+    @trident/core -> (none)
+    @trident/edge -> @trident/core
+    @trident/pos -> @trident/core, @trident/sync
+    @trident/sync -> @trident/core
+    @trident/ui -> @trident/core
+
+  ERROR: Architectural boundary rule violations detected:
+    Architectural boundary violation: Package '@trident/pos' is not permitted to depend on internal package '@trident/sync'. Permitted internal dependencies: ['@trident/core']
+  ```
+The test fixture was completely reverted, and `npm run graph:check` returned `0`.
+
+### 11.3 Circular Dependency Guard Verification
+Cycle detection was re-verified using a temporary dependency `@trident/core -> @trident/pos`.
+- **Command:** `npm run graph:check`
+- **Exit Code:** `1`
+- **Captured Output:**
+  ```text
+  ERROR: Circular dependency detected in monorepo packages!
+    Cycle path: @trident/core -> @trident/pos -> @trident/core
+  ```
+The test fixture was completely reverted, and clean state restored.
+
+### 11.4 Clean Install & Supply-Chain Observations
+- **Command:** `npm ci --fetch-timeout=5000`
+- **Exit Code:** `0`
+- **Install Summary:** `added 142 packages in 6s (37 packages looking for funding)`
+- **Audit Endpoint Observation:** Direct HTTP POST requests to `https://registry.npmjs.org/-/npm/v1/security/advisories/bulk` timeout in this execution environment (`curl` exit 28; `npm audit --fetch-timeout=5000` logged `npm warn audit network timeout at: https://registry.npmjs.org/-/npm/v1/security/advisories/bulk` with exit 1). This is recorded truthfully without running destructive `npm audit fix --force`. Automated CI SCA will be introduced in WP-002.
+
+### 11.5 Full Regression Suite Results (Clean State)
+
+| Check | Command | Exit Code | Observed Result |
+| :--- | :--- | :---: | :--- |
+| **Node Version** | `node --version` | `0` | `v24.20.0` |
+| **npm Version** | `npm --version` | `0` | `11.19.0` |
+| **Clean Install** | `npm ci --fetch-timeout=5000` | `0` | 142 packages installed cleanly |
+| **Graph Check** | `npm run graph:check` | `0` | 0 cycles; 5/5 package boundaries satisfied |
+| **Formatting** | `npm run format:check` | `0` | All files match Prettier style |
+| **Typecheck** | `npm run typecheck` | `0` | 6/6 tasks passed (`skipLibCheck: false`) |
+| **Lint** | `npm run lint` | `0` | 5/5 tasks passed cleanly |
+| **Build** | `npm run build` | `0` | 5/5 packages compiled cleanly |
+| **Tests** | `npm run test` | `0` | 10/10 tasks passed (6/6 unit tests pass) |
+| **Turbo Cache** | `npm run build` (re-run) | `0` | `FULL TURBO` (5 cached in 5ms) |
+
+### 11.6 Modified Files in Remediation Commit
+1. `package.json` (aligned `@types/node` to `^24.13.2`)
+2. `package-lock.json` (resolved `@types/node` to `24.13.3`, locked)
+3. `tsconfig.base.json` (set `"skipLibCheck": false`)
+4. `scripts/check-graph.mjs` (added `ALLOWED_INTERNAL_DEPENDENCIES` allowlist enforcement)
+5. `evidence/WP-001_BUILDER_EVIDENCE.md` (documented micro-remediation R1 evidence)
+
+Zero workflow files, zero database schemas, zero business logic.
+
+---
+
+## 12. Builder Submission
 
 The `18_DevOps_Engineer` submits this implementation and evidence for independent, role-separated review:
 
@@ -373,3 +463,4 @@ NEXT REVIEWERS:
 11_Code_Reviewer (Mandatory Code Review)
 ================================================================================
 ```
+
