@@ -9,6 +9,7 @@
 - **Review Model:** ROLE-SEPARATED EAAF AGENT REVIEW (Specialist: `03_Data_Architect`, Code Reviewer: `11_Code_Reviewer`)
 - **Implementation Base:** `675e3bfc90becdc4fcc90fd5b58c6e16076d003a` (`origin/main`)
 - **Feature Branch:** `feature/wp-003-postgresql-migration-engine`
+- **Initial Pre-Remediation Head:** `d375fff1c1b25320b695579c041514b7351a0760`
 - **Date:** 2026-09-04
 - **Builder Status:** READY FOR ROLE-SEPARATED REVIEW
 
@@ -19,11 +20,11 @@
 - **Evaluated Options:** Prisma, Drizzle Kit, Knex.js, node-pg-migrate, Dedicated TypeScript `pg`-based engine.
 - **Decision Artifact:** `evidence/WP-003_TOOLING_DECISION.md`
 - **Selected Tooling:** Dedicated TypeScript PostgreSQL Migration Engine using `pg` (node-postgres).
-- **Exact Tooling Versions:**
-  - `pg`: `^8.13.3` (runtime driver)
+- **Exact Pinned Tooling Versions:**
+  - `pg`: `8.13.3` (runtime wire protocol driver)
   - `pg-protocol`: `1.7.1` (pinned wire protocol for TS 5.4 compatibility)
   - `dotenv`: `^16.4.7` (environment loader)
-  - `@types/pg`: `^8.11.11` (type definitions)
+  - `@types/pg`: `8.11.11` (dev type definitions pinned to TS 5.4 line)
 - **Selection Rationale:**
   - Minimal supply-chain footprint: only direct wire protocol driver and types, zero heavy ORM binaries.
   - Native Node.js 24 LTS and strict TypeScript (ESM) integration.
@@ -31,34 +32,33 @@
   - Native SHA-256 cryptographic hashing of canonical migration content.
   - Strict tamper & drift detection: halts immediately if applied migration file changes.
   - Guaranteed atomic transactional boundaries (`BEGIN` ... `COMMIT` / `ROLLBACK`).
+  - Advisory lock serialization (`pg_advisory_lock`) to prevent race conditions during concurrent runs.
   - Programmatic guard rejecting destructive `down` executions in production or without `ALLOW_DESTRUCTIVE_DOWN=true`.
   - Zero premature coupling to business entities or domain ORMs.
   - Full compatibility with future Supabase PostgreSQL 16 deployment.
 
 ---
 
-## 3. Inventory of Changes
+## 3. Inventory of Changes & Builder Remediation History
 
-### A. Monorepo Package Infrastructure
-- `packages/database/package.json`: Created package `@trident/database` with dependencies `pg`, `pg-protocol`, `dotenv`, and devDependency `@types/pg`. Added scripts `build`, `typecheck`, `lint`, `test`, `migrate`, `migrate:down`, `migrate:status`.
-- `packages/database/tsconfig.json`: Created package TSConfig extending root `tsconfig.base.json`.
-- `packages/database/migrations/0001_baseline_infrastructure.sql`: Baseline migration enabling extensions `uuid-ossp` and `pgcrypto` with reversible `-- Down` block.
-- `packages/database/src/types.ts`: Interface definitions for migration records, files, runner options, and statuses.
-- `packages/database/src/checksum.ts`: Cross-platform deterministic SHA-256 computation utility.
-- `packages/database/src/connection.ts`: PostgreSQL connection pool harness, environment resolution (`DATABASE_URL`), and credential redaction/sanitization.
-- `packages/database/src/parser.ts`: Migration file discovery and parsing (`-- Up` / `-- Down`).
-- `packages/database/src/runner.ts`: Core migration engine supporting sequential transactional execution, SHA-256 checksum verification, drift detection, and production-guarded down-step execution.
-- `packages/database/src/cli.ts`: Command-line interface executable for `up`, `down`, `status`.
-- `packages/database/src/index.ts`: Public package export surface.
-- `packages/database/src/index.test.ts`: Integration test suite covering WP003-T01 through WP003-T14.
-
-### B. Monorepo Governance & Workflows
+### A. Initial WP-003 Implementation
+- `evidence/WP-003_TOOLING_DECISION.md`: Pre-implementation tooling evaluation and decision record.
+- `packages/database/package.json`: Package scaffold (`@trident/database`) with strict scripts and dependencies.
+- `packages/database/tsconfig.json`: Package TSConfig extending root `tsconfig.base.json`.
 - `scripts/check-graph.mjs`: Added `'@trident/database': ['@trident/core']` to `ALLOWED_INTERNAL_DEPENDENCIES`.
 - `package.json`: Added workspace scripts `db:migrate`, `db:migrate:down`, `db:migrate:status`, `db:test`, and override `"pg-protocol": "1.7.1"`.
 - `package-lock.json`: Deterministically regenerated via `npm install` under Node 24.20.0 and verified with `npm ci`.
-- `.github/workflows/ci.yml`: Added `postgres:16` service container with healthcheck and `DATABASE_URL` environment configuration to the `unit-tests` job.
-- `evidence/WP-003_TOOLING_DECISION.md`: Pre-implementation tooling evaluation and decision record.
-- `evidence/WP-003_BUILDER_EVIDENCE.md`: This comprehensive builder evidence report.
+- `.github/workflows/ci.yml`: Added PostgreSQL 16 service container to the `unit-tests` job.
+- `packages/database/src/`: Migration engine modules (`connection.ts`, `checksum.ts`, `parser.ts`, `runner.ts`, `cli.ts`, `types.ts`, `index.ts`).
+
+### B. Builder Remediation Lineage
+1. `e0eddd0`: Tooling decision record and package scaffold.
+2. `23f72fe`: Migration engine and baseline migration.
+3. `150b0a1`: Integration tests and CI service container.
+4. `1238fd3`: Initial builder evidence.
+5. `ba80f02`: Aligned migration engine with frozen data SSOT (`YYYYMMDDHHMMSS_name.sql` naming, explicit `DATABASE_URL` requirement without implicit fallbacks, advisory lock serialization, 18 tests).
+6. `578920e` - `d375fff`: Pinning pg stack to TypeScript 5.4-compatible lines (`pg@8.13.3`, `pg-protocol@1.7.1`, `@types/pg@8.11.11`), updating lockfile and formatting.
+7. Final Remediation: Updated root `turbo.json` declaring `"env": ["DATABASE_URL"]` on the `test` task, resolving the Stage B test environment propagation blocker.
 
 ---
 
@@ -66,8 +66,10 @@
 
 - **Node.js Runtime:** `v24.20.0`
 - **npm Version:** `11.19.0`
-- **Database Engine:** PostgreSQL `16.14 (Homebrew)` / CI container `postgres:16`
-- **Test Database URL:** `postgresql://postgres:postgres@localhost:5432/tridentpos_test`
+- **Database Engine (Local):** PostgreSQL `16.14 (Homebrew)`
+- **Database Engine (CI Container):** `postgres:16.15@sha256:f1c3376c26f2609ab9f29f71f824103fe2fcd8ee0346485cb6122a4f93df6f94`
+- **Test Database Target:** `postgresql://postgres:postgres@localhost:5432/tridentpos_test` (disposable integration instance)
+- **DATABASE_URL Propagation:** Explicitly declared in root `turbo.json` `tasks.test.env: ["DATABASE_URL"]` to propagate across monorepo workspace test processes.
 - **Log Sanitization:** All connection strings redact password credentials (`postgresql://postgres:***@localhost:5432/...`).
 
 ---
@@ -94,6 +96,9 @@ CREATE TABLE IF NOT EXISTS _migrations (
 - On every forward migration run, all previously applied migrations are cross-referenced against on-disk migration files.
 - If an applied migration file is missing, or if its SHA-256 checksum differs from the ledger, execution aborts immediately with a non-zero exit code, leaving no modifications.
 
+### Concurrency & Locking
+- Uses PostgreSQL session-level advisory locks (`pg_advisory_lock(hashtext('_migrations_lock'))`) to prevent concurrent runner executions from interleaving or applying out of order.
+
 ### Transactional Semantics
 - Each migration executes within an explicit `BEGIN` ... `COMMIT` block.
 - Upon any SQL error, an automatic `ROLLBACK` is issued; no partial schema modifications are left behind, and no record is added to `_migrations`.
@@ -117,28 +122,32 @@ The engine executes forward migrations deterministically to support this discipl
 
 ## 7. Automated Integration Test Results
 
-The integration test suite was executed against local PostgreSQL 16.14 (`tridentpos_test`):
+The integration test suite executes 18 automated integration tests (`WP003-T01` through `WP003-T18`) against PostgreSQL 16:
 
 ```text
 ▶ TRIDENTPOS WP-003 PostgreSQL Migration Engine Integration Suite
-  ✔ WP003-T01: PostgreSQL 16 connectivity (1.272083ms)
-  ✔ WP003-T02: required extension migration applies (21.183083ms)
-  ✔ WP003-T03: _migrations tracking created (9.172333ms)
-  ✔ WP003-T04: migration applies once (0.634833ms)
-  ✔ WP003-T05: re-running migration is idempotent/no duplicate execution (1.030458ms)
-  ✔ WP003-T06: checksum recorded (0.378708ms)
-  ✔ WP003-T07: modified applied migration checksum mismatch detected (8.475958ms)
-  ✔ WP003-T08: migration failure rolls transaction back (8.766875ms)
-  ✔ WP003-T09: subsequent valid migration applies in order (5.970833ms)
-  ✔ WP003-T10: non-production down-step works (7.578708ms)
-  ✔ WP003-T11: production destructive down is rejected (0.18ms)
-  ✔ WP003-T12: clean database can migrate from zero to latest (11.894417ms)
-  ✔ WP003-T13: up → down → up cycle works in test environment (4.244ms)
-  ✔ WP003-T14: no domain/WP-004 tables created (1.255542ms)
-✔ TRIDENTPOS WP-003 PostgreSQL Migration Engine Integration Suite (96.354042ms)
-ℹ tests 14
+  ✔ WP003-T01: PostgreSQL 16 connectivity
+  ✔ WP003-T02: required extension migration applies
+  ✔ WP003-T03: _migrations tracking created
+  ✔ WP003-T04: migration applies once
+  ✔ WP003-T05: re-running migration is idempotent/no duplicate execution
+  ✔ WP003-T06: checksum recorded
+  ✔ WP003-T07: modified applied migration checksum mismatch detected
+  ✔ WP003-T08: migration failure rolls transaction back
+  ✔ WP003-T09: subsequent valid migration applies in order
+  ✔ WP003-T10: non-production down-step works
+  ✔ WP003-T11: production destructive down is rejected
+  ✔ WP003-T12: clean database can migrate from zero to latest
+  ✔ WP003-T13: up → down → up cycle works in test environment
+  ✔ WP003-T14: no domain/WP-004 tables created
+  ✔ WP003-T15: frozen Cloud migration filename convention is enforced
+  ✔ WP003-T16: duplicate timestamp IDs are rejected
+  ✔ WP003-T17: retroactive migration insertion is rejected
+  ✔ WP003-T18: concurrent migration runners serialize on advisory lock
+✔ TRIDENTPOS WP-003 PostgreSQL Migration Engine Integration Suite
+ℹ tests 18
 ℹ suites 1
-ℹ pass 14
+ℹ pass 18
 ℹ fail 0
 ```
 
@@ -148,13 +157,13 @@ The integration test suite was executed against local PostgreSQL 16.14 (`trident
 
 A clean-room validation cycle was conducted:
 1. `DROP DATABASE IF EXISTS tridentpos_test; CREATE DATABASE tridentpos_test OWNER postgres;`
-2. `npm run db:migrate` -> Applied `0001_baseline_infrastructure`.
+2. `npm run db:migrate` with explicit `DATABASE_URL` -> Applied `20260904160000_baseline_infrastructure`.
 3. Catalog inspection:
-   - Extensions verified: `uuid-ossp` (v1.1) and `pgcrypto` (v1.3) present.
-   - Migration ledger: 1 record, checksum `9afc000a171307db905528c3f366f0b81446c38311dfd5d82e8781cc3cc54493`.
-4. Integration suite: 14/14 passed.
-5. Controlled down migration: `ALLOW_DESTRUCTIVE_DOWN=true npm run db:migrate:down` -> Reverted `0001_baseline_infrastructure`. Ledger emptied (0 rows).
-6. Forward migration: `npm run db:migrate` -> Successfully re-applied `0001_baseline_infrastructure`.
+   - Extensions verified: `uuid-ossp` and `pgcrypto` present.
+   - Migration ledger: 1 record, valid SHA-256 checksum recorded.
+4. Integration suite: 18/18 passed.
+5. Controlled down migration: `ALLOW_DESTRUCTIVE_DOWN=true npm run db:migrate:down` -> Reverted baseline migration. Ledger emptied (0 rows).
+6. Forward migration: `npm run db:migrate` -> Successfully re-applied `20260904160000_baseline_infrastructure`.
 7. Catalog table scan: Exactly 1 base table found (`public._migrations`). Zero domain tables created.
 
 ---
@@ -186,8 +195,8 @@ A clean-room validation cycle was conducted:
 | `npm run typecheck` | 0 | SATISFIED |
 | `npm run lint` | 0 | SATISFIED |
 | `npm run build` | 0 | SATISFIED |
-| `npm run test` | 0 | SATISFIED |
-| `npm run db:test` | 0 | SATISFIED |
+| `DATABASE_URL=... npm run test` | 0 | SATISFIED |
+| `DATABASE_URL=... npm run db:test` | 0 | SATISFIED |
 
 ---
 
@@ -209,10 +218,10 @@ A clean-room validation cycle was conducted:
 | **WP003-01** | Correct Base Commit | `675e3bfc90becdc4fcc90fd5b58c6e16076d003a` | SATISFIED |
 | **WP003-02** | Stage B Active | Required status contexts enforced on main | SATISFIED |
 | **WP003-03** | Tooling Decision Recorded | `evidence/WP-003_TOOLING_DECISION.md` created | SATISFIED |
-| **WP003-04** | PostgreSQL 16 Target | PostgreSQL 16 verified locally and in CI container | SATISFIED |
-| **WP003-05** | Connection Harness | Environment-driven, redacted secrets, pool lifecycle | SATISFIED |
+| **WP003-04** | PostgreSQL 16 Target | PostgreSQL 16.14 local / 16.15 container pinned by digest | SATISFIED |
+| **WP003-05** | Connection Harness | Environment-driven, redacted secrets, explicit URL requirement | SATISFIED |
 | **WP003-06** | Migration Runner | Forward execution, CLI interface, clean error reporting | SATISFIED |
-| **WP003-07** | Deterministic Ordering | Lexicographical sequencing by filename / execution order | SATISFIED |
+| **WP003-07** | Deterministic Ordering | `YYYYMMDDHHMMSS` timestamp ordering, append-only | SATISFIED |
 | **WP003-08** | `_migrations` Tracking | Canonical table tracking id, name, checksum, applied_at, order | SATISFIED |
 | **WP003-09** | SHA-256 Checksums | 64-char hex SHA-256 recorded per migration | SATISFIED |
 | **WP003-10** | Applied Drift Detection | Checksum mismatch or missing file halts execution | SATISFIED |
@@ -231,8 +240,8 @@ A clean-room validation cycle was conducted:
 | **WP003-23** | `npm run typecheck` | Strict TypeScript compilation passes with zero errors | SATISFIED |
 | **WP003-24** | `npm run lint` | ESLint passes with zero errors across all workspaces | SATISFIED |
 | **WP003-25** | `npm run build` | Monorepo build passes for all 6 packages | SATISFIED |
-| **WP003-26** | `npm run test` | Turbo test suite passes across all 6 packages | SATISFIED |
-| **WP003-27** | PostgreSQL Integration Tests | 14 integration tests executed and verified | SATISFIED |
+| **WP003-26** | `npm run test` | Turbo test suite passes with DATABASE_URL propagation | SATISFIED |
+| **WP003-27** | PostgreSQL Integration Tests | 18 integration tests executed and verified | SATISFIED |
 | **WP003-28** | `secret-scan` | TruffleHog scan clean | SATISFIED |
 | **WP003-29** | `sca-scan` | Trivy vulnerability scan clean (0 High/Critical) | SATISFIED |
 | **WP003-30** | Rollback Procedure | Documented non-production down and git revert | SATISFIED |
@@ -277,9 +286,10 @@ All 9 open questions remain `PENDING PO DECISION`:
 
 ## 15. Builder Verdict
 
-**WP-003 IMPLEMENTATION: READY FOR ROLE-SEPARATED REVIEW**
+**WP-003 BUILDER: READY FOR ROLE-SEPARATED REVIEW**
 
 - Builder: `17_Database_Engineer`
-- Implementation PR is ready to be opened.
-- All local tests, builds, and clean-room runs are green.
+- Remediated Turborepo `DATABASE_URL` environment propagation.
+- All 18 integration tests pass against real PostgreSQL 16.
+- All 6 Stage B checks pass.
 - Handed off for independent role-separated reviews by `03_Data_Architect` and `11_Code_Reviewer`.
