@@ -247,25 +247,25 @@ Foundational domain models, Multi-Tenant RLS isolation, IAM, and audit logging.
 
 #### `WP-005`: Cloud IAM & Administrative Authentication
 * **Bounded Context:** Platform Core
-* **Frozen Requirements:** `IAM_SECURITY_MODEL.md` Sec. 2; `SECURITY_ARCHITECTURE.md` Sec. 3
+* **Frozen Requirements:** `IAM_SECURITY_MODEL.md` Sec. 1, 4; `SECURITY_ARCHITECTURE.md` Sec. 1, 2.2, 5.1, 6
 * **ADRs:** `ADR-001`
-* **Data Objects:** `users`, `roles`, `permissions`, `role_permissions`, `user_roles`
-* **APIs / Contracts:** Auth token verification middleware, RBAC evaluation service
+* **Data Objects:** `users`, `roles`, `user_roles`, `user_branch_credentials` (Cloud provisioning & storage; Edge offline runtime verification owned by `WP-010`)
+* **APIs / Contracts:** Auth token verification middleware, RBAC evaluation service, branch PIN provisioning service
 * **Builder Agent:** `13_Backend_Developer`
 * **Specialist Reviewer:** `08_Security_Architect`
 * **Code Reviewer:** `11_Code_Reviewer`
 * **Prerequisites:** `WP-004`
-* **Dependencies:** Supabase Auth / JWT verification library, Argon2id / bcrypt.
-* **Inputs:** `IAM_SECURITY_MODEL.md`, `SECURITY_CONTROL_MATRIX.md`
-* **Outputs:** User and RBAC schema migrations, JWT extraction middleware, permission check decorator/guard.
-* **Acceptance Criteria:** Validates signed JWT; extracts `orgId`, `userId`, `role`; rejects expired tokens; enforces least privilege based on permissions table.
-* **Tests:** Unit tests for RBAC evaluation; integration tests for JWT expiration, invalid signature, and role elevation rejection.
-* **Security Debt:** `SEC-VAL-05` (Token secret management and validation).
-* **Evidence Required:** Auth test suite execution logs covering positive and negative test cases.
-* **Rollback:** Disable auth guard or revert service deployment.
+* **Dependencies:** Supabase Auth / JWT verification library, Argon2id (RFC 9106 parameter baseline for Cloud PIN hash provisioning; bcrypt is strictly forbidden).
+* **Inputs:** `IAM_SECURITY_MODEL.md`, `SECURITY_ARCHITECTURE.md`, `SECURITY_CONTROL_MATRIX.md`, `DATA_MODEL.md`
+* **Outputs:** SQL schema migrations creating `users`, `roles`, `user_roles`, and `user_branch_credentials` with composite tenant-safe foreign keys and RLS (ENABLE + FORCE ROW LEVEL SECURITY, `current_app_org_id()` default-deny); JWT extraction & cryptographic verification middleware binding `jwt.sub` to `users.id` with canonical tenant cross-check; RBAC evaluation service evaluating `roles.permissions JSONB`; branch PIN provisioning/rotation service generating Argon2id hashes.
+* **Acceptance Criteria:** Cryptographically validates signed JWT (signature, JWKS, issuer, audience, expiration); binds `jwt.sub` to `users.id`; cross-checks and enforces `users.organization_id` against requested tenant context; rejects tenant mismatch and inactive users; enforces least privilege based on `user_roles -> roles -> roles.permissions JSONB`; applies FORCE RLS on all WP-005 tables; provisions `user_branch_credentials` using Argon2id baseline (offline runtime verification, brute-force lockout, and benchmarks remain in WP-010).
+* **Tests:** Unit tests for RBAC evaluation against `roles.permissions JSONB`; integration tests for JWT signature verification, expiration, invalid signature, subject binding, tenant mismatch rejection, inactive user rejection, and role elevation rejection; SQL penetration tests for RLS isolation and tenant-safe composite foreign key rejection across tenants; unit tests for Argon2id PIN hash generation.
+* **Security Debt:** `SEC-VAL-05` (Token secret management and validation, CI secret scanning).
+* **Evidence Required:** Auth test suite execution logs covering positive and negative test cases, RLS isolation evidence.
+* **Rollback:** Revert schema migrations / disable auth guard or revert service deployment.
 * **Feature Flag:** NO
 * **Migration Impact:** Expand
-* **Risk:** Medium
+* **Risk:** Medium (Security critical)
 * **PO Dependency:** None
 * **Parallelizable:** YES (with `WP-006`)
 * **Handoff Target:** `WP-007`, `WP-008`

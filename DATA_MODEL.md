@@ -48,10 +48,12 @@ CREATE TABLE branches (
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CONSTRAINT uq_branches_org_code UNIQUE (organization_id, code)
+    CONSTRAINT uq_branches_org_code UNIQUE (organization_id, code),
+    CONSTRAINT uq_branches_org_id UNIQUE (organization_id, id)
 );
 
 -- Usuarios y Credenciales Administrativas
+-- users.id es el identificador canónico vinculado al sujeto de autenticación de Supabase (jwt.sub)
 CREATE TABLE users (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     organization_id UUID NOT NULL REFERENCES organizations(id),
@@ -60,20 +62,25 @@ CREATE TABLE users (
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CONSTRAINT uq_users_org_email UNIQUE (organization_id, email)
+    CONSTRAINT uq_users_org_email UNIQUE (organization_id, email),
+    CONSTRAINT uq_users_org_id UNIQUE (organization_id, id)
 );
 
 -- Credenciales Operativas de Borde (Hashes de PIN)
+-- Esquema Cloud y aprovisionamiento gobernado por WP-005; verificación offline en Edge gobernada por WP-010
 CREATE TABLE user_branch_credentials (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     organization_id UUID NOT NULL REFERENCES organizations(id),
-    user_id UUID NOT NULL REFERENCES users(id),
-    branch_id UUID NOT NULL REFERENCES branches(id),
-    pin_hash VARCHAR(255) NOT NULL, -- Argon2id salted hash
+    user_id UUID NOT NULL,
+    branch_id UUID NOT NULL,
+    pin_hash VARCHAR(255) NOT NULL, -- Argon2id salted hash (RFC 9106 baseline)
     credential_version INTEGER NOT NULL DEFAULT 1,
     is_revoked BOOLEAN NOT NULL DEFAULT FALSE,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CONSTRAINT uq_user_branch_cred UNIQUE (organization_id, user_id, branch_id)
+    CONSTRAINT uq_user_branch_cred UNIQUE (organization_id, user_id, branch_id),
+    CONSTRAINT uq_user_branch_cred_org_id UNIQUE (organization_id, id),
+    CONSTRAINT fk_user_branch_cred_user FOREIGN KEY (organization_id, user_id) REFERENCES users(organization_id, id) ON DELETE CASCADE,
+    CONSTRAINT fk_user_branch_cred_branch FOREIGN KEY (organization_id, branch_id) REFERENCES branches(organization_id, id) ON DELETE CASCADE
 );
 
 -- Roles y Permisos (RBAC)
@@ -82,17 +89,21 @@ CREATE TABLE roles (
     organization_id UUID NOT NULL REFERENCES organizations(id),
     code VARCHAR(50) NOT NULL,
     name VARCHAR(100) NOT NULL,
-    permissions JSONB NOT NULL DEFAULT '[]', -- Array de strings de permissions
+    permissions JSONB NOT NULL DEFAULT '[]', -- Array canónico de strings de permissions
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
-    CONSTRAINT uq_roles_org_code UNIQUE (organization_id, code)
+    CONSTRAINT uq_roles_org_code UNIQUE (organization_id, code),
+    CONSTRAINT uq_roles_org_id UNIQUE (organization_id, id)
 );
 
 CREATE TABLE user_roles (
     organization_id UUID NOT NULL REFERENCES organizations(id),
-    user_id UUID NOT NULL REFERENCES users(id),
-    branch_id UUID NOT NULL REFERENCES branches(id),
-    role_id UUID NOT NULL REFERENCES roles(id),
-    PRIMARY KEY (organization_id, user_id, branch_id, role_id)
+    user_id UUID NOT NULL,
+    branch_id UUID NOT NULL,
+    role_id UUID NOT NULL,
+    PRIMARY KEY (organization_id, user_id, branch_id, role_id),
+    CONSTRAINT fk_user_roles_user FOREIGN KEY (organization_id, user_id) REFERENCES users(organization_id, id) ON DELETE CASCADE,
+    CONSTRAINT fk_user_roles_branch FOREIGN KEY (organization_id, branch_id) REFERENCES branches(organization_id, id) ON DELETE CASCADE,
+    CONSTRAINT fk_user_roles_role FOREIGN KEY (organization_id, role_id) REFERENCES roles(organization_id, id) ON DELETE CASCADE
 );
 
 -- Estaciones / Dispositivos Autorizados
