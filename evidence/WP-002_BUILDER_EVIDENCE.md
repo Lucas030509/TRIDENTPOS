@@ -336,4 +336,86 @@ Prior to role-separated review activations, a pre-review audit identified four s
   - **Artifacts:** `tridentpos-sbom` generated and uploaded to run `33879790652`.
   - **Security Gating:** Zero jobs skipped, zero jobs using `continue-on-error`, zero swallowed exit codes.
 
-**BUILDER REMEDIATION VERDICT:** **`READY FOR ROLE-SEPARATED REVIEW`**
+---
+
+## 15. Post-Review Remediation R2 — Complete Development Dependency SCA Coverage
+
+### 15.1. Context and Defect Identification
+Following historical R1 reviews on Subject S2 (`476017056cc148ba5ec7f759ba8e6271326332bf`), an independent post-review audit detected incomplete SCA coverage:
+- **Material Defect:** The remote Trivy execution logs on S2 showed:
+  ```text
+  Suppressing dependencies for development and testing.
+  To display them, try the '--include-dev-deps' flag.
+  ```
+- Trivy by default excludes `devDependencies` in npm projects unless explicitly instructed to include them.
+- In TRIDENTPOS, build-time dependencies (`typescript`, `eslint`, `prettier`, `turbo`) execute within the trusted CI pipeline. Frozen WP-002 Acceptance Criteria require blocking High and Critical dependency CVEs across the entire project dependency supply chain without a production-only carve-out.
+
+### 15.2. Historical R1 Reviews Disposition
+- **Previous Subject (S2):** `476017056cc148ba5ec7f759ba8e6271326332bf`
+- **Historical Specialist Review R1:** Commit `93f101f2ac051896b2c4b1723cf7d28f0d5bf217` on `review/wp-002-specialist-r1` (reviewed S2)
+- **Historical Code Review R1:** Commit `e0b5f34c7692985b2de48e3a30c7b31d88e2487f` on `review/wp-002-code-r1` (reviewed S2)
+- **Disposition:**
+  **R1 REVIEWS SUPERSEDED FOR PROGRESSION AFTER SUBJECT MUTATION**
+  Because Subject S2 is mutated to resolve the dev-dependency defect, both historical R1 review artifacts are formally superseded and cannot authorize progression or merging of S3. Fresh role-separated R2 reviews (`review/wp-002-specialist-r2` and `review/wp-002-code-r2`) are strictly required.
+
+### 15.3. Remediation Implementation
+1. **Root Trivy Configuration (`trivy.yaml`):**
+   Created root configuration file `trivy.yaml` with governed directive:
+   ```yaml
+   pkg:
+     include-dev-deps: true
+   ```
+   Zero ignore rules, zero vulnerability suppression, zero `.trivyignore`, and no `ignore-unfixed: true`.
+2. **Workflow Configuration (`.github/workflows/security-scan.yml`):**
+   Added `trivy-config: 'trivy.yaml'` to both `sca-scan` and `sbom-generate` jobs while preserving all immutable action and scanner pins:
+   - `aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25`
+   - `version: 'v0.74.0'`
+   - `severity: 'HIGH,CRITICAL'`
+   - `exit-code: '1'`
+   - `format: 'table'` (for SCA) and `format: 'cyclonedx'` (for SBOM)
+
+### 15.4. Precise Security Claim
+> **SCA COVERS NPM RUNTIME AND DEVELOPMENT DEPENDENCY GRAPH FOR HIGH/CRITICAL CVE GATING**
+>
+> *(Note: This claim reflects deterministic dependency scanning against known CVE databases at CI execution time; it does not claim elimination of all future vulnerabilities or unbounded ecosystem security.)*
+
+### 15.5. Commit Lineage & Remote Verification on P_R2
+- **Parent Commit (S2):** `476017056cc148ba5ec7f759ba8e6271326332bf`
+- **Remediation Commit A (P_R2):** `0d8c67274fbdd76106da0173bc829c6deeacd386`
+- **Remote Workflow Runs on P_R2:**
+  - **CI Workflow Run:** ID `33885596061`, Status: `success`
+    - `build` (Job ID: `101064452131`): `success` (18s)
+    - `typecheck` (Job ID: `101064452378`): `success` (12s)
+    - `unit-tests` (Job ID: `101064452464`): `success` (14s)
+    - `lint` (Job ID: `101064452678`): `success` (16s)
+  - **Security Scan Workflow Run:** ID `33885596099`, Status: `success`
+    - `secret-scan` (Job ID: `101064451902`): `success` (9s)
+    - `sast-scan` (Job ID: `101064452271`): `success` (19s)
+    - `sca-scan` (Job ID: `101064452336`): `success` (8s)
+    - `sbom-generate` (Job ID: `101064452347`): `success` (16s)
+
+### 15.6. SCA Effective Dev Dependency Coverage Assertion
+Inspection of the raw `sca-scan` job log (`101064452336`):
+- `trivy.yaml` loaded successfully: `INFO Loaded file_path="trivy.yaml"`.
+- Dev dependency suppression message is **strictly ABSENT** (no occurrence of `"Suppressing dependencies for development and testing"`).
+- Scan results: Target `package-lock.json` scanned with Type `npm`, finding **0** vulnerabilities.
+- **High/Critical CVE Result:** Zero High or Critical CVEs discovered across runtime and development dependencies.
+
+### 15.7. CycloneDX SBOM Coverage & Component Assertion
+Verification of remote SBOM artifact (`tridentpos-sbom`) from run `33885596099`:
+- **Artifact ID:** `9941691735`
+- **Artifact Zip Digest:** `sha256:45d80102f88a25032e198da3fe7946c654a88aa75abf8960a90745ac6927d49f`
+- **Unpacked JSON Digest:** `sha256:6cb1a513cfac821a5210392e32143591bc15b2eb6c67123373e8f58f0779776b`
+- **Total Components:** `142` (increased from 6 in S2, demonstrating full dev-dependency inclusion).
+- **Known Build-Time Packages Verified Present:**
+  - `typescript` (version `5.4.5`) — PRESENT
+  - `eslint` (version `8.57.1`) — PRESENT
+  - `prettier` (version `3.9.6`) — PRESENT
+  - `turbo` (version `2.10.12`) — PRESENT
+
+---
+
+## 16. Builder Remediation Verdict
+
+**BUILDER REMEDIATION VERDICT:** **`READY FOR ROLE-SEPARATED R2 REVIEW`**
+
