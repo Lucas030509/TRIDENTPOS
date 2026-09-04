@@ -117,7 +117,7 @@ Work Packages involving critical domains are mapped canonically per `IMPLEMENTAT
 * Edge enrollment & trust bootstrap (`WP-009`): `08_Security_Architect`.
 * Offline IAM & floor PIN auth (`WP-010`): `08_Security_Architect`.
 * Folio lease allocation & fencing protocol (`WP-011`): `03_Data_Architect` (plus security validation obligations).
-* Finance & cash reconciliation (`WP-020`): `03_Data_Architect`.
+* Finance & cash reconciliation (`WP-020`): `01_Solution_Architect` (canonical reviewer per `IMPLEMENTATION_PLAN.md`; Data Architect review additionally applies if schema/migration impact is independently introduced).
 * Fiscal invoicing engine / PAC / CFDI / CSD private keys (`WP-021`): `08_Security_Architect`.
 * Delivery aggregator webhooks / provider verification (`WP-023`): `08_Security_Architect`.
 * Schema/Data migrations: Any WP introducing database schema changes is governed by `DATA_MIGRATION_STRATEGY.md`. `WP-003` establishes the migration engine foundation; subsequent schema changes follow Expand-Transition-Contract. Production destructive down-migrations remain prohibited.

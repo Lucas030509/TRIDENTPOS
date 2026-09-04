@@ -105,7 +105,7 @@ Critical domains and their canonical Work Package mappings (aligned with `IMPLEM
 | **WP-009:** Edge Enrollment & Trust Bootstrap Protocol | Security / Bootstrap crypto | `08_Security_Architect` |
 | **WP-010:** Offline IAM & Floor PIN Authentication | Security / Offline auth | `08_Security_Architect` |
 | **WP-011:** Folio Lease Allocation & Fencing Protocol | Fiscal / Data integrity | `03_Data_Architect` (plus security validation obligations where applicable) |
-| **WP-020:** Finance / AP / AR / Cash Reconciliation | Financial integrity | `03_Data_Architect` |
+| **WP-020:** Finance / AP / AR / Cash Reconciliation | Financial integrity | `01_Solution_Architect` |
 | **WP-021:** Fiscal Invoicing Engine / PAC / CFDI / CSD Private Key | Fiscal crypto / Key security | `08_Security_Architect` |
 | **WP-023:** Delivery Aggregator Webhooks / Cryptographic Verification | Security / Webhook verification | `08_Security_Architect` |
 
@@ -117,7 +117,7 @@ Any Work Package producing database/schema migrations is strictly governed by `D
 * Data Architect (`03_Data_Architect`) specialist review is applied according to canonical Work Package assignment and schema/data migration impact.
 
 ### Compensating Controls for High-Risk Work Packages:
-1. **Owning Architect Review:** Mandatory specialist review from `08_Security_Architect` and/or `03_Data_Architect` as assigned above.
+1. **Owning Architect Review:** Mandatory specialist review from the canonically assigned Specialist Reviewer Agent (`01_Solution_Architect`, `08_Security_Architect`, or `03_Data_Architect`) as mapped above. If a future change to `WP-020` independently introduces database schema/migration impact, `03_Data_Architect` review additionally applies according to migration governance without replacing the canonical reviewer.
 2. **Automated Validation Evidence:** 100% PASS of the required automated tenant-isolation/security-invariant test suite applicable to the Work Package. Universal line coverage metrics remain governed by `IMPLEMENTATION_PLAN.md` (no uncalibrated universal 100% line coverage target is introduced).
 3. **External Authority Recording:** If an architectural decision exceeds internal project authority (e.g., `SEC-VAL-11` Legal/Privacy retention policies or external PAC/SAT certifications), it must be recorded as `EXTERNAL AUTHORITY REQUIRED BEFORE PRODUCTION`, not falsely claimed as approved.
 
