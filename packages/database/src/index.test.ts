@@ -142,7 +142,9 @@ describe('TRIDENTPOS WP-003 PostgreSQL Migration Engine Integration Suite', () =
         `SELECT table_name FROM information_schema.tables WHERE table_name = 'test_bad_tbl';`,
       );
       assert.equal(badCheck.rows.length, 0);
-      const ledgerCheck = await pool.query(`SELECT id FROM ${testTable} WHERE id = '20260904160300';`);
+      const ledgerCheck = await pool.query(
+        `SELECT id FROM ${testTable} WHERE id = '20260904160300';`,
+      );
       assert.equal(ledgerCheck.rows.length, 0);
     } finally {
       await pool.query(`DROP TABLE IF EXISTS test_good_tbl, test_bad_tbl, ${testTable} CASCADE;`);
@@ -247,7 +249,13 @@ describe('TRIDENTPOS WP-003 PostgreSQL Migration Engine Integration Suite', () =
     `);
     const tables = res.rows.map((r) => r.table_name).sort();
     assert.deepEqual(tables, ['_migrations']);
-    for (const table of ['organizations', 'branches', 'organization_memberships', 'users', 'roles']) {
+    for (const table of [
+      'organizations',
+      'branches',
+      'organization_memberships',
+      'users',
+      'roles',
+    ]) {
       assert.ok(!tables.includes(table));
     }
   });
@@ -291,7 +299,9 @@ describe('TRIDENTPOS WP-003 PostgreSQL Migration Engine Integration Suite', () =
         /Migration order drift detected/,
       );
     } finally {
-      await pool.query(`DROP TABLE IF EXISTS test_retro_first, test_retro_earlier, ${testTable} CASCADE;`);
+      await pool.query(
+        `DROP TABLE IF EXISTS test_retro_first, test_retro_earlier, ${testTable} CASCADE;`,
+      );
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
   });

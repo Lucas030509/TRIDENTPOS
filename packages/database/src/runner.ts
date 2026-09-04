@@ -43,7 +43,12 @@ function assertAppliedSequence(applied: MigrationRecord[], files: MigrationFile[
   for (let index = 0; index < applied.length; index++) {
     const record = applied[index];
     const expectedFile = files[index];
-    if (!record || !expectedFile || record.id !== expectedFile.id || record.name !== expectedFile.name) {
+    if (
+      !record ||
+      !expectedFile ||
+      record.id !== expectedFile.id ||
+      record.name !== expectedFile.name
+    ) {
       throw new Error(
         `Migration order drift detected at execution order ${index + 1}. New Cloud migrations must be appended after the latest applied YYYYMMDDHHMMSS migration; retroactive insertion or rename is prohibited.`,
       );
@@ -197,7 +202,11 @@ export async function migrateDown(pool: pg.Pool, options?: RunnerOptions): Promi
     const applied = await getAppliedMigrations(client, tableName);
     for (const record of applied) {
       const matchingFile = files.find((f) => f.id === record.id);
-      if (!matchingFile || matchingFile.name !== record.name || matchingFile.checksum !== record.checksum) {
+      if (
+        !matchingFile ||
+        matchingFile.name !== record.name ||
+        matchingFile.checksum !== record.checksum
+      ) {
         throw new Error(
           `Migration drift detected before down-step for '${record.id}_${record.name}'. Down execution is prohibited against mutated history.`,
         );
