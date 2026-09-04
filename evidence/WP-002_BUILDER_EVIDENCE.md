@@ -21,7 +21,7 @@
 - **Package Manager:** `npm` v`11.19.0`
 - **Installation Strategy:** Deterministic clean install via `npm ci`
 - **Host OS:** Darwin / macOS 26.6.2 (ARM64 `arm64`)
-- **Remote CI Runner:** GitHub-hosted `ubuntu-latest` (Ubuntu 24.04 LTS runner environment)
+- **Remote CI Runner:** GitHub-hosted `ubuntu-24.04` (Canonical Ubuntu 24.04 LTS runner environment)
 
 ---
 
@@ -31,9 +31,9 @@ Per EAAF v1.2 and `SUPPLY_CHAIN_SECURITY.md`, floating third-party GitHub Action
 
 | Action Identifier | Upstream Repository | Resolved Release / Version | Immutable Full Commit SHA | Purpose |
 |---|---|---|---|---|
-| `actions/checkout` | `actions/checkout` | `v4.2.2` | `11bd71901bbe5b1630ceea73d27597364c9af683` | Deterministic workspace checkout |
-| `actions/setup-node` | `actions/setup-node` | `v4.2.0` | `1d0ff469b7ec7b3cb9d8673fde0c81c44821de2a` | Node.js 24 LTS runtime & npm cache bootstrap |
-| `actions/upload-artifact` | `actions/upload-artifact` | `v4.6.1` | `4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1` | Secure SBOM artifact persistence |
+| `actions/checkout` | `actions/checkout` | `v7.0.1` | `3d3c42e5aac5ba805825da76410c181273ba90b1` | Deterministic workspace checkout |
+| `actions/setup-node` | `actions/setup-node` | `v7.0.0` | `820762786026740c76f36085b0efc47a31fe5020` | Node.js 24 LTS runtime & npm cache bootstrap |
+| `actions/upload-artifact` | `actions/upload-artifact` | `v7.0.1` | `043fb46d1a93c77aae656e7c1c64a875d1fc6a0a` | Secure SBOM artifact persistence |
 | `trufflesecurity/trufflehog` | `trufflesecurity/trufflehog` | `v3.97.4` | `363923b901c911a9164f50b6c423f47c15372b1c` | Enterprise-grade secret detection scanner |
 | `aquasecurity/trivy-action` | `aquasecurity/trivy-action` | `0.36.0` | `ed142fd0673e97e23eac54620cfb913e5ce36c25` | SCA vulnerability scanner & CycloneDX SBOM generator |
 
@@ -49,6 +49,7 @@ Two segregating, non-overlapping workflow pipelines were authored under `.github
   - `push` targeting `main`
 - **Concurrency:** `group: ${{ github.workflow }}-${{ github.ref }}`, `cancel-in-progress: true`
 - **Permissions:** Top-level `permissions: contents: read` (no write permissions, no dangerous `pull_request_target`)
+- **Runner:** `runs-on: ubuntu-24.04`
 - **Jobs:**
   1. `build`: Verifies monorepo graph constraints via `npm run graph:check` and builds all workspace packages via `npm run build`.
   2. `lint`: Enforces formatting via `npm run format:check` and linting rules via `npm run lint`.
@@ -61,11 +62,12 @@ Two segregating, non-overlapping workflow pipelines were authored under `.github
   - `push` targeting `main`
 - **Concurrency:** `group: ${{ github.workflow }}-${{ github.ref }}`, `cancel-in-progress: true`
 - **Permissions:** Top-level `permissions: contents: read` (no write permissions)
+- **Runner:** `runs-on: ubuntu-24.04`
 - **Jobs:**
-  1. `secret-scan`: Full-depth checkout (`fetch-depth: 0`) and secret scanning via TruffleHog OSS (`extra_args: --results=verified,unverified`) failing on detected secrets.
-  2. `sca-scan`: Filesystem Software Composition Analysis via Aqua Security Trivy with blocking policy on `HIGH,CRITICAL` severities (`exit-code: '1'`).
-  3. `sast-scan`: Static security analysis verifying ESLint and strict TypeScript compiler rules.
-  4. `sbom-generate`: Generates CycloneDX 1.7 machine-readable SBOM (`tridentpos-sbom.cdx.json`) and uploads it as a GitHub Actions artifact with a 14-day retention period.
+  1. `secret-scan`: Full-depth checkout (`fetch-depth: 0`) and secret scanning via TruffleHog OSS (`version: '3.97.4'`, `extra_args: --results=verified,unverified`) failing on detected secrets.
+  2. `sca-scan`: Filesystem Software Composition Analysis via Aqua Security Trivy (`version: 'v0.74.0'`) with blocking policy on `HIGH,CRITICAL` severities (`exit-code: '1'`).
+  3. `sast-scan`: Static analysis baseline implemented for current WP-001 scaffold enforcing ESLint and strict TypeScript compiler rules.
+  4. `sbom-generate`: Generates CycloneDX 1.7 machine-readable SBOM (`tridentpos-sbom.cdx.json`) via Trivy (`version: 'v0.74.0'`) and uploads it as a GitHub Actions artifact with a 14-day retention period.
 
 ---
 
@@ -135,7 +137,7 @@ To ensure the pipelines are fail-closed and will gate invalid changes, negative 
 ## 7. Machine-Readable SBOM Generation Evidence
 
 - **Format:** CycloneDX 1.7 specification (`bomFormat: "CycloneDX"`, `specVersion: "1.7"`).
-- **Generator:** Aqua Security Trivy `0.74.0`.
+- **Generator:** Aqua Security Trivy `v0.74.0` (pinned via `version: 'v0.74.0'`).
 - **Artifact Filename:** `tridentpos-sbom.cdx.json`.
 - **Artifact Name in GitHub Actions:** `tridentpos-sbom`.
 - **Retention:** 14 days.
@@ -160,21 +162,13 @@ To ensure the pipelines are fail-closed and will gate invalid changes, negative 
 
 ---
 
-## 8. Remote Execution & Real Context Discovery
+## 8. Remote Execution & Real Context Discovery (Historical Run on d4ca0d1)
 
 Provisional implementation commit `d4ca0d1` was pushed to branch `feature/wp-002-ci-security` and implementation Pull Request **#7** was opened targeting `main`.
 
 ### 8.1. Observed GitHub Workflow Runs
-- **CI Workflow Run:**
-  - Run ID: `33877503823`
-  - URL: `https://github.com/Lucas030509/TRIDENTPOS/actions/runs/33877503823`
-  - Status: `completed`
-  - Conclusion: `success`
-- **Security Scan Workflow Run:**
-  - Run ID: `33877503840`
-  - URL: `https://github.com/Lucas030509/TRIDENTPOS/actions/runs/33877503840`
-  - Status: `completed`
-  - Conclusion: `success`
+- **CI Workflow Run:** Run ID `33877503823`, Conclusion: `success`.
+- **Security Scan Workflow Run:** Run ID `33877503840`, Conclusion: `success`.
 
 ### 8.2. Real Observed Status Check / Context Names
 The real check run names discovered through live GitHub API observation on the PR commit are:
@@ -199,29 +193,33 @@ The real check run names discovered through live GitHub API observation on the P
 
 ## 9. Governance & Validation Debt Status
 
-### 9.1. SEC-VAL-05 Status
-- **Current Status:** `IMPLEMENTED — VALIDATION / CANONICAL ACTIVATION PENDING`
-- **Reason:** Automated CI and security scanning workflows are fully implemented and validated on remote PR #7. Canonical closure of `SEC-VAL-05` requires PR merge to `main` followed by Stage B control-plane branch protection activation.
+### 9.1. SEC-VAL-05 Status & Disposition
+- **Current Status:** **`PARTIALLY IMPLEMENTED — CI/CD SECRET SCANNING IMPLEMENTED; LOG-REDACTION VERIFICATION REMAINS OPEN; CANONICAL STAGE B ENFORCEMENT PENDING`**
+- **Obligation Scope:** `SEC-VAL-05: Secrets & Vault — CI/CD secret scanning AND log-redaction verification`
+- **Assessment:** WP-002 implements only the CI/CD secret-scanning sub-obligation. Full `SEC-VAL-05` remains **`OPEN`** because log-redaction verification is an application/logging obligation that remains unverified and canonical Stage B branch protection activation is pending merge and control-plane activation.
 
-### 9.2. Preserved Security Validation Debts
-All other validation debts remain strictly `OPEN`:
-- `SEC-VAL-01`: Tenant isolation at DB/RLS layer (Pending WP-004)
-- `SEC-VAL-02`: Offline JWT verification & RBAC enforcement (Pending WP-005)
-- `SEC-VAL-03`: Peripheral communication integrity (Pending WP-008)
-- `SEC-VAL-04`: Audit log immutability & cryptographic chaining (Pending WP-004)
-- `SEC-VAL-06`: Offline-first sync conflict resolution integrity (Pending WP-006)
-- `SEC-VAL-07`: Data migration zero data-loss validation (Pending WP-004)
-- `SEC-VAL-08`: Disaster recovery RPO/RTO validation (Pending Wave 4)
-- `SEC-VAL-09`: API contract regression & breaking change detection (Pending WP-003)
-- `SEC-VAL-10`: End-to-end payment workflow isolation (Pending WP-008)
-- `SEC-VAL-11`: Multi-node edge mesh failover integrity (Pending WP-006)
+### 9.2. Preserved Security Validation Debts (Canonical Downstream Security Gate R3 Catalog)
+All other downstream security validation debts remain strictly **`OPEN`** per repository SSOT:
+- `SEC-VAL-01`: Multi-Tenant Isolation — tenant breakout and RLS bypass validation (`OPEN`)
+- `SEC-VAL-02`: Offline IAM & Brute Force — PIN rate limiting / lockout penetration validation (`OPEN`)
+- `SEC-VAL-03`: Trust Bootstrap — rogue mDNS / certificate mismatch LAN validation (`OPEN`)
+- `SEC-VAL-04`: Lease Fencing — zombie Edge reactivation / token rejection (`OPEN`)
+- `SEC-VAL-06`: Tamper-Evident Audit — DB alteration and Cloud sync integrity verification (`OPEN`)
+- `SEC-VAL-07`: Electron Security — preload / IPC allowlist SAST validation (`OPEN`)
+- `SEC-VAL-08`: Hardware Benchmark — Argon2id resource benchmark on <=2 GB POS hardware (`OPEN`)
+- `SEC-VAL-09`: Failure-Mode Validation — WAN outage / offline continuity validation (`OPEN`)
+- `SEC-VAL-10`: Provider Contracts — webhook signature / timestamp verification (`OPEN`)
+- `SEC-VAL-11`: Legal / Privacy — retention-policy legal review (`OPEN`)
 - Data debts (`DAT-04`, `DAT-08`) and risk items (`RSK-08`, `RSK-11`, `RSK-15`) remain `OPEN`.
 
-### 9.3. Preserved Product Owner Decisions
-All nine (9) Product Owner questions remain `PENDING PO DECISION`:
+### 9.3. SAST Scope Precision
+The `sast-scan` remote check implements a **static analysis baseline for the current WP-001 monorepo scaffold** (ESLint + strict TypeScript checking). It does NOT constitute full application security SAST coverage. Application- and Electron-specific SAST validation (notably `SEC-VAL-07`) remains governed downstream and remains `OPEN`.
+
+### 9.4. Preserved Product Owner Decisions
+All nine (9) Product Owner questions remain strictly **`PENDING PO DECISION`**:
 - `OQ-SSOT-01` through `OQ-SSOT-07`
 - `OQ-ARCH-01` through `OQ-ARCH-02`
-- **WP-002 PO Dependency:** None.
+- **WP-002 PO Dependency:** None. No business policies were encoded.
 
 ---
 
@@ -235,7 +233,7 @@ All nine (9) Product Owner questions remain `PENDING PO DECISION`:
 
 ## 11. Rollback Strategy
 
-1. **Workflow Revert:** In the event of an unexpected defect, workflows can be disabled or deleted via a standard Git revert of the WP-002 commit on `main`.
+1. **Workflow Revert:** Workflows can be disabled or deleted via a standard Git revert of the WP-002 commit on `main`.
 2. **State & Database:** WP-002 introduces zero schema changes, zero database migrations, and zero application data drift; rollback requires no data migration operations.
 3. **Stage B Rollback:** Because Stage B is not yet active, no branch protection changes need to be rolled back at this stage.
 
@@ -268,18 +266,74 @@ All nine (9) Product Owner questions remain `PENDING PO DECISION`:
 | `WP002-21` | No pull_request_target Risk | No untrusted code execution | `pull_request` used exclusively | **SATISFIED** |
 | `WP002-22` | Remote PR Trigger | Real remote PR execution | PR #7 triggered and observed | **SATISFIED** |
 | `WP002-23` | Actual Context Discovery | Exact observed check names recorded | Recorded in Section 8.2 | **SATISFIED** |
-| `WP002-24` | Final S Remote Green | Final subject remote runs pass | Validation on final S pending freeze | **VALIDATION REQUIRED** |
+| `WP002-24` | Final S Remote Green | Final subject remote runs pass | Validation on final S2 pending freeze | **VALIDATION REQUIRED** |
 | `WP002-25` | No Application Drift | Zero business code modified | Only `.github/` and `evidence/` | **SATISFIED** |
 | `WP002-26` | PO Questions Preserved | All 9 PO open questions open | Preserved verbatim | **SATISFIED** |
-| `WP002-27` | Validation Debt Preserved | All debts open, SEC-VAL-05 pending | Preserved verbatim | **SATISFIED** |
+| `WP002-27` | Validation Debt Preserved | Canonical catalog & partial SEC-VAL-05 | Preserved verbatim | **SATISFIED** |
 | `WP002-28` | Rollback | Rollback strategy documented | Documented in Section 11 | **SATISFIED** |
 | `WP002-29` | Stage B NOT Prematurely Activated | Stage B remains inactive | Documented in Section 10 | **SATISFIED** |
 | `WP002-30` | No Secrets Committed | Zero credentials in repo history | Verified by TruffleHog | **SATISFIED** |
 
 ---
 
-## 13. Builder Conclusion
+## 13. Builder Conclusion (Initial Activation)
 
 The automated CI/CD and security scanning infrastructure for TRIDENTPOS WP-002 is fully implemented and validated against remote runners. All action references are pinned immutably, fail-closed security gating is established, and actual status context names have been discovered.
 
-**BUILDER VERDICT:** **`READY FOR ROLE-SEPARATED REVIEW`**
+---
+
+## 14. Pre-Review Supply-Chain & Evidence Remediation R1
+
+### 14.1. Context and Motivation
+Prior to role-separated review activations, a pre-review audit identified four supply-chain and evidence areas requiring remediation:
+1. **Implicit Mutable Scanner Version:** The TruffleHog action defaulted internally to `VERSION: latest`.
+2. **Scanner Version Discrepancy:** Trivy executed on action default `v0.70.0` while builder evidence recorded `v0.74.0`.
+3. **Foundational Actions Deprecation:** Foundational GitHub actions (`actions/checkout`, `actions/setup-node`, `actions/upload-artifact`) targeted older Node 20 runtime releases subject to runner deprecation notices.
+4. **Governance Catalog Semantic Alignment:** Security Validation Debt descriptions were re-aligned to the frozen canonical Downstream Security Gate R3 catalog.
+
+### 14.2. Commit Lineage
+- **Initial Provisional Subject:** `6186dfaa97676c3f5dabfe3b3fff0fcfde8673a3`
+- **Workflow Hardening Remediation Commit (P_R1):** `69ac8d358cb41e3d9d842e1ac4772493c7e6ecc7`
+  - Parent: `6186dfaa97676c3f5dabfe3b3fff0fcfde8673a3`
+  - Commit message: `fix(ci): [WP-002] pin maintained actions and scanner versions`
+
+### 14.3. Action and Scanner Version Disambiguation Table
+
+| Component | Component Type | Action Version / Tag | Action Commit SHA | Scanner / Tool Version | Pinning Strategy |
+|---|---|---|---|---|---|
+| `actions/checkout` | GitHub Action | `v7.0.1` | `3d3c42e5aac5ba805825da76410c181273ba90b1` | N/A (JS Action) | Full immutable commit SHA |
+| `actions/setup-node` | GitHub Action | `v7.0.0` | `820762786026740c76f36085b0efc47a31fe5020` | Node.js `24.20.0` | Full immutable commit SHA |
+| `actions/upload-artifact` | GitHub Action | `v7.0.1` | `043fb46d1a93c77aae656e7c1c64a875d1fc6a0a` | N/A (JS Action) | Full immutable commit SHA |
+| `trufflesecurity/trufflehog` | Vendor Action | `v3.97.4` | `363923b901c911a9164f50b6c423f47c15372b1c` | `3.97.4` | Action pinned by SHA; scanner pinned via `version: '3.97.4'` |
+| `aquasecurity/trivy-action` | Vendor Action | `0.36.0` | `ed142fd0673e97e23eac54620cfb913e5ce36c25` | `v0.74.0` | Action pinned by SHA; scanner pinned via `version: 'v0.74.0'` |
+
+### 14.4. Runner OS Standardization & Known Limitations
+- **Runner Label:** `runs-on: ubuntu-24.04` across all 8 jobs.
+- **Limitation Statement:** Setting `ubuntu-24.04` stabilizes the major operating system baseline on Ubuntu 24.04 LTS, eliminating the mutable major-OS alias `ubuntu-latest`. However, GitHub-hosted runner images are not bit-for-bit immutable since GitHub may apply upstream software patches to hosted runner virtual environments over time.
+
+### 14.5. Remote Execution Evidence on P_R1 (`69ac8d358cb41e3d9d842e1ac4772493c7e6ecc7`)
+- **CI Workflow Run:**
+  - Run ID: `33879790626`
+  - URL: `https://github.com/Lucas030509/TRIDENTPOS/actions/runs/33879790626`
+  - Status: `completed` (`success`)
+  - Jobs:
+    - `build`: `success` (18s) (Job ID: `101045360878`)
+    - `lint`: `success` (13s) (Job ID: `101045360485`)
+    - `typecheck`: `success` (14s) (Job ID: `101045360764`)
+    - `unit-tests`: `success` (14s) (Job ID: `101045360817`)
+- **Security Scan Workflow Run:**
+  - Run ID: `33879790652`
+  - URL: `https://github.com/Lucas030509/TRIDENTPOS/actions/runs/33879790652`
+  - Status: `completed` (`success`)
+  - Jobs:
+    - `secret-scan`: `success` (11s) (Job ID: `101045358987`)
+    - `sca-scan`: `success` (16s) (Job ID: `101045358801`)
+    - `sast-scan`: `success` (20s) (Job ID: `101045358982`)
+    - `sbom-generate`: `success` (13s) (Job ID: `101045358946`)
+- **Remote Log Inspections on P_R1:**
+  - **TruffleHog:** Log confirms `VERSION: 3.97.4`, image `ghcr.io/trufflesecurity/trufflehog:3.97.4`, scanner version `3.97.4`. No occurrence of `latest`.
+  - **Trivy:** Log confirms `version: v0.74.0`, `aquasecurity/trivy info found version: 0.74.0 for v0.74.0/Linux/64bit`.
+  - **Artifacts:** `tridentpos-sbom` generated and uploaded to run `33879790652`.
+  - **Security Gating:** Zero jobs skipped, zero jobs using `continue-on-error`, zero swallowed exit codes.
+
+**BUILDER REMEDIATION VERDICT:** **`READY FOR ROLE-SEPARATED REVIEW`**
