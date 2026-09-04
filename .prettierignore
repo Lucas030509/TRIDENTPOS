@@ -1,0 +1,9 @@
+node_modules/
+dist/
+build/
+.turbo/
+package-lock.json
+coverage/
+*.md
+ADR/
+evidence/

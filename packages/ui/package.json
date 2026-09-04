@@ -1,0 +1,25 @@
+{
+  "name": "@trident/ui",
+  "version": "0.1.0",
+  "description": "TRIDENTPOS UI Component Foundation Scaffolding",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "dependencies": {
+    "@trident/core": "*"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src/",
+    "test": "node --test dist/index.test.js",
+    "clean": "rm -rf dist"
+  }
+}
