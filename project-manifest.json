@@ -37,9 +37,12 @@
   "bootstrap_governance_review_evidence_commit": "3ddd3a55ccf25fafd7a759928f0473185071d41d",
   "solo_maintainer_change_request": "ACR-2026-003",
   "solo_maintainer_adr": "ADR-010",
-  "solo_maintainer_governance_status": "READY FOR INDEPENDENT AGENT REVIEW",
-  "next_action": "INDEPENDENT AGENT REVIEW OF SOLO MAINTAINER GOVERNANCE MODEL",
-  "next_author_agent": "Independent Solution Architect + 10_DevOps_Platform_Architect",
+  "solo_maintainer_governance_status": "PROMOTED TO MAIN",
+  "node_runtime_lts_change_request": "ACR-2026-004",
+  "node_runtime_lts_adr": "ADR-011",
+  "node_runtime_lts_status": "READY FOR ROLE-SEPARATED REVIEW",
+  "next_action": "INDEPENDENT ROLE-SEPARATED REVIEW OF ACR-2026-004 / ADR-011",
+  "next_author_agent": "10_DevOps_Platform_Architect + 08_Security_Architect",
   "ssot_functional_artifacts": [
     "RESTAURANT_SOFTWARE_RECONSTRUCTION_SPEC.md",
     "FUNCTIONAL_ARCHITECTURE.md",
@@ -95,7 +98,8 @@
     "PRODUCT_OWNER_IMPLEMENTATION_ACTIVATION_BOOTSTRAP_APPROVAL.md",
     "ARCHITECTURE_CHANGE_REQUEST_SOLO_MAINTAINER_GOVERNANCE.md",
     "SOLO_MAINTAINER_GOVERNANCE.md",
-    "HANDOFF_IMPLEMENTATION.md"
+    "HANDOFF_IMPLEMENTATION.md",
+    "ARCHITECTURE_CHANGE_REQUEST_NODE_RUNTIME_LTS_REFRESH.md"
   ],
   "adr_suite": [
     "ADR/ADR-001-modular-monolith-bounded-contexts.md",
@@ -107,7 +111,8 @@
     "ADR/ADR-007-durable-cloud-integration-events.md",
     "ADR/ADR-008-disaster-recovery-strategy.md",
     "ADR/ADR-009-implementation-activation-bootstrap-protocol.md",
-    "ADR/ADR-010-solo-maintainer-governance-model.md"
+    "ADR/ADR-010-solo-maintainer-governance-model.md",
+    "ADR/ADR-011-nodejs-lts-runtime-baseline.md"
   ],
   "pending_po_decisions": 9,
   "governance_notes": [
