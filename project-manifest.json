@@ -28,13 +28,18 @@
   "implementation_readiness_gate_evidence_commit": "ee3348e4f604d9b1ea5c37e14257482079a48ddd",
   "product_owner_approval": "APPROVED",
   "implementation_authorized": "FALSE / PENDING STAGE A REPOSITORY ACTIVATION",
+  "operating_mode": "SOLO_MAINTAINER",
+  "active_human_maintainers": 1,
   "bootstrap_governance_change": "APPROVED",
   "bootstrap_change_request": "ACR-2026-002",
   "bootstrap_adr": "ADR-009",
   "bootstrap_governance_review": "PASS",
   "bootstrap_governance_review_evidence_commit": "3ddd3a55ccf25fafd7a759928f0473185071d41d",
-  "next_action": "ENABLE AND VERIFY STAGE A MAIN BRANCH PROTECTION",
-  "next_author_agent": "Repo Admin / 10_DevOps_Platform_Architect / 18_DevOps_Engineer",
+  "solo_maintainer_change_request": "ACR-2026-003",
+  "solo_maintainer_adr": "ADR-010",
+  "solo_maintainer_governance_status": "READY FOR INDEPENDENT AGENT REVIEW",
+  "next_action": "INDEPENDENT AGENT REVIEW OF SOLO MAINTAINER GOVERNANCE MODEL",
+  "next_author_agent": "Independent Solution Architect + 10_DevOps_Platform_Architect",
   "ssot_functional_artifacts": [
     "RESTAURANT_SOFTWARE_RECONSTRUCTION_SPEC.md",
     "FUNCTIONAL_ARCHITECTURE.md",
@@ -88,6 +93,8 @@
     "ARCHITECTURE_CHANGE_REQUEST_IMPLEMENTATION_ACTIVATION_BOOTSTRAP.md",
     "IMPLEMENTATION_ACTIVATION_BOOTSTRAP_GOVERNANCE_REVIEW.md",
     "PRODUCT_OWNER_IMPLEMENTATION_ACTIVATION_BOOTSTRAP_APPROVAL.md",
+    "ARCHITECTURE_CHANGE_REQUEST_SOLO_MAINTAINER_GOVERNANCE.md",
+    "SOLO_MAINTAINER_GOVERNANCE.md",
     "HANDOFF_IMPLEMENTATION.md"
   ],
   "adr_suite": [
@@ -99,7 +106,8 @@
     "ADR/ADR-006-outbox-and-idempotent-sync.md",
     "ADR/ADR-007-durable-cloud-integration-events.md",
     "ADR/ADR-008-disaster-recovery-strategy.md",
-    "ADR/ADR-009-implementation-activation-bootstrap-protocol.md"
+    "ADR/ADR-009-implementation-activation-bootstrap-protocol.md",
+    "ADR/ADR-010-solo-maintainer-governance-model.md"
   ],
   "pending_po_decisions": 9,
   "governance_notes": [

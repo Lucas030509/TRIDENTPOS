@@ -26,14 +26,15 @@
 Before any work package implementation begins:
 1. **Gate Verdict:** `IMPLEMENTATION_READINESS_GATE` evaluated as **`PASS`** by Independent Solution Architect.
 2. **Product Owner Decision:** Formal PO Approval recorded and frozen.
-3. **Repository Control Activation Precondition (`AMEND-GOV-IR-001` Implementation Activation Bootstrap Protocol):**
+3. **Repository Control Activation Precondition (`AMEND-GOV-IR-001` / `ADR-010` Solo Maintainer Model):**
    - **Stage A (Pre-WP-001 Bootstrap):** Stage A remote `main` branch protection must be enabled and independently verified on remote **before `WP-001` implementation begins** (no builder may begin `WP-001`, write implementation code, execute WP changes, or open formal handoff execution until Stage A is verified on remote), enforcing:
      * Mandatory pull requests before merging (direct commits to `main` prohibited).
-     * Minimum 1 approved review from designated reviewer (builder cannot self-approve).
+     * Admin enforcement (`enforce_admins = true`).
      * Prohibition of force pushes and branch deletions.
+     * Solo Maintainer Profile (`ADR-010`): GitHub required approving review count set to 0 while `active_human_maintainers = 1` (eliminates impossible human reviewer requirement; auto-upgrades to >= 1 when >= 2 maintainers exist).
      * Automated status check contexts omitted during Stage A because no CI workflows exist in repository prior to `WP-002`.
-     * Strict compensating controls for `WP-001`: local `npm ci`, local `npm run build`, dependency graph linting, evidence artifact with command output, dual review (`01_Solution_Architect` + `11_Code_Reviewer`).
-   - **Stage B (Post-WP-002 Full Protection):** Immediately after `WP-002` merges and establishes GitHub Actions workflow contexts, `main` branch protection must be updated to enforce mandatory passing CI status checks (`build`, `lint`, `typecheck`, `unit-tests`, `secret-scan`, `sca-scan`). Stage B is a hard precondition before `WP-003` or any subsequent domain WP can merge.
+     * Strict compensating controls for `WP-001`: local `npm ci`, local `npm run build`, dependency graph linting, evidence artifact with command output, dual segregated EAAF agent review (`01_Solution_Architect` + `11_Code_Reviewer`).
+    - **Stage B (Post-WP-002 Full Protection):** Immediately after `WP-002` merges and establishes GitHub Actions workflow contexts, `main` branch protection must be updated to enforce mandatory passing CI status checks (`build`, `lint`, `typecheck`, `unit-tests`, `secret-scan`, `sca-scan`). Stage B is a hard precondition before `WP-003` or any subsequent domain WP can merge.
 4. **Supply Chain Contract:** Monorepo package management adheres strictly to `npm workspaces`, committed `package-lock.json`, and `npm ci` in all CI/build environments per `SUPPLY_CHAIN_SECURITY.md`.
 5. **Tooling Decision:** ORM selection (`Drizzle` vs. `Prisma`) must be formally recorded by `17_Database_Engineer` and `03_Data_Architect` prior to starting `WP-003`.
 6. **Migration Governance:** Database schema evolution adheres strictly to `DATA_MIGRATION_STRATEGY.md` (Expand-Transition-Contract). Universal destructive down-migrations in production are prohibited.
@@ -57,19 +58,34 @@ Builders must execute work packages in strict wave dependency sequence according
 
 ---
 
-## 3. Branching, PR and Dual Review Rules
+## 3. Branching, PR and Dual EAAF Agent Review Rules
 
-* **Branch Per Work Package:** Every WP must be implemented on its own dedicated branch: `feature/wp-XXX-<slug>`.
-* **Builder $\ne$ Reviewer:** The author/builder of a PR cannot approve their own pull request.
-* **Dual Review Requirements:** Every code-producing PR must receive approved reviews from BOTH:
-  1. **Primary Specialist Reviewer:**
+* **Branch Per Work Package:** Every WP must be implemented on its own dedicated branch: `feature/wp-XXX-<slug>` created from base commit `B`.
+* **Builder Agent $\ne$ Reviewer Agent:** The author/builder of an implementation cannot act as reviewer in the same session.
+* **Builder Execution Evidence (Part of Frozen Subject `S`):** Before requesting review, the builder MUST execute and commit all builder execution evidence under `evidence/` on the feature branch (documenting `npm ci`, `npm run build`, automated test logs, lint checks, rollback verification, and remaining risk). The final commit containing all implementation code and builder evidence constitutes the **Implementation Subject SHA `S`**, which is frozen before reviewer activation.
+* **GitHub Human Approval vs. EAAF Agent Evidence (Solo Mode):** Under Solo Maintainer Mode (`ADR-010`), GitHub `required_approving_review_count = 0` because exactly one human maintainer exists. However, every code-producing WP must obtain PASS evidence from BOTH:
+  1. **Primary Specialist Reviewer Agent:**
      - Database changes: `03_Data_Architect` (and `08_Security_Architect` for RLS).
      - Security/Crypto/Auth/IPC changes: `08_Security_Architect`.
      - Context boundary/Architecture contracts: `01_Solution_Architect`.
      - DevOps pipelines/Packaging: `10_DevOps_Platform_Architect`.
      - Testing/Chaos: `09_QA_Test_Architect`.
-  2. **Mandatory Code Reviewer:** `11_Code_Reviewer` on 100% of code-producing PRs.
-* **Evidence Delivery:** Every PR must include its verifiable evidence markdown artifact under `evidence/` documenting Expected vs. Actual, test run output, commit SHA, and remaining risk.
+  2. **Mandatory Code Reviewer Agent:** `11_Code_Reviewer` on 100% of code-producing WPs.
+* **Sidecar Review Evidence (NO Mutation of `S`):** Reviewer PASS evidence (`ES`, `EC`) MUST NOT be committed to the implementation feature branch after `S`. Reviewers operate on dedicated sidecar review branches (`review/wp-XXX-specialist-rN`, `review/wp-XXX-code-rN`), inspecting immutable subject `S`.
+* **Hard SHA-Binding Invariant:**
+  ```text
+  SPECIALIST_REVIEW.subject_sha = CODE_REVIEW.subject_sha = IMPLEMENTATION_PR.head_sha = S
+  ```
+  If `IMPLEMENTATION_PR.head_sha != S` at merge authorization time (for any reason, including code edits, documentation changes, evidence commits, rebase, or merge-from-main), all previous reviews are **INVALID** and full re-review is mandatory. Never allow $\text{PASS}(S) \rightarrow \text{MERGE}(S_2)$.
+* **Pre-Merge Authorization Checklist:** Merge is authorized only when:
+  1. PR head SHA equals reviewed subject `S`;
+  2. Both `ES` and `EC` exist remotely, reference `S`, and award `PASS`;
+  3. No post-review commit exists on the feature branch;
+  4. All automated checks applicable to the Work Package and current repository stage are PASS:
+     * **Stage A (`WP-001` and `WP-002`):** Required remote Stage B status contexts are not applicable / do not yet exist. Merge authorization relies on mandatory local execution evidence (`npm ci` where applicable, build, lint / graph validation where applicable, WP-specific tests), Specialist Reviewer Agent PASS, `11_Code_Reviewer` Agent PASS, hard SHA-binding (`SPECIALIST_REVIEW.subject_sha = CODE_REVIEW.subject_sha = IMPLEMENTATION_PR.head_sha = S`; `ES` and `EC` are separate immutable sidecar evidence commits referencing `S`), and zero blocking findings (testing is NOT waived);
+     * **Stage B (`WP-003` through `WP-028`):** All six required remote CI status contexts MUST PASS (`build`, `lint`, `typecheck`, `unit-tests`, `secret-scan`, `sca-scan`) with zero waivers;
+  5. Open blocking findings = 0;
+  6. Governing completion record logs `S`, `ES`, `EC`, and merge commit `M`.
 
 ---
 
