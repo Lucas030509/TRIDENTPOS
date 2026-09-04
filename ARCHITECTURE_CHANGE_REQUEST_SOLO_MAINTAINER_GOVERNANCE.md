@@ -99,26 +99,55 @@ For as long as `active_human_maintainers = 1`:
 8. **Stage B Status Checks:** Enforced immediately post-`WP-002` (`build`, `lint`, `typecheck`, `unit-tests`, `secret-scan`, `sca-scan`).
 
 ### 4.2 Segregated EAAF Agent Review Obligations
-Every code-producing Work Package retains three separate activations:
+GitHub branch protection enforces `required_approving_review_count = 0` on GitHub during Solo Mode because no second human exists. However, every code-producing Work Package must obtain formal PASS evidence from BOTH of the following segregated EAAF agent activations before merge:
 1. **Builder Activation:** Generates the implementation on a feature branch (`18_DevOps_Engineer`, `13_Backend_Developer`, etc.).
-2. **Specialist Reviewer Activation:** Fresh context evaluating domain architecture (`01_Solution_Architect`, `03_Data_Architect`, `10_DevOps_Platform_Architect`, `04_Security_Architect`).
+2. **Specialist Reviewer Activation:** Fresh context evaluating domain architecture (`01_Solution_Architect`, `03_Data_Architect`, `10_DevOps_Platform_Architect`, `08_Security_Architect`).
 3. **Code Reviewer Activation:** Fresh context evaluating code quality and security (`11_Code_Reviewer`).
 * Builder cannot self-review inside the same activation.
-* All reviews must inspect an immutable commit SHA and produce markdown evidence.
+* All reviews must inspect an immutable, pinned commit SHA, evaluate Expected vs Actual results, document findings, and record an explicit `PASS` verdict.
+* These agent reviews are EAAF verification artifacts, NOT GitHub human approvals.
 
 ### 4.3 High-Risk Change Compensating Policy
-Changes involving authentication, cryptography, tenant isolation, fiscal logic, destructive migrations, or secret management require:
-* Specialist EAAF agent review + `11_Code_Reviewer` review.
-* 100% passing automated test and lint evidence.
-* If external organizational certification is required prior to Production release, it must be recorded as `EXTERNAL AUTHORITY REQUIRED BEFORE PRODUCTION`, not faked during development.
+Work Packages involving critical domains are mapped canonically per `IMPLEMENTATION_PLAN.md`:
+* Multi-tenant RLS & tenant isolation (`WP-004`): `08_Security_Architect` + `03_Data_Architect`.
+* Cloud IAM & admin authentication (`WP-005`): `08_Security_Architect`.
+* Security logging & cloud audit trail (`WP-006`): `08_Security_Architect`.
+* Electron hardening & IPC security (`WP-007`): `08_Security_Architect`.
+* SQLite durability & WAL manager (`WP-008`): `03_Data_Architect`.
+* Edge enrollment & trust bootstrap (`WP-009`): `08_Security_Architect`.
+* Offline IAM & floor PIN auth (`WP-010`): `08_Security_Architect`.
+* Folio lease allocation & fencing protocol (`WP-011`): `03_Data_Architect` (plus security validation obligations).
+* Finance & cash reconciliation (`WP-020`): `03_Data_Architect`.
+* Fiscal invoicing engine / PAC / CFDI / CSD private keys (`WP-021`): `08_Security_Architect`.
+* Delivery aggregator webhooks / provider verification (`WP-023`): `08_Security_Architect`.
+* Schema/Data migrations: Any WP introducing database schema changes is governed by `DATA_MIGRATION_STRATEGY.md`. `WP-003` establishes the migration engine foundation; subsequent schema changes follow Expand-Transition-Contract. Production destructive down-migrations remain prohibited.
+* Test Evidence Standard: 100% PASS of the required automated tenant-isolation/security-invariant test suite applicable to the Work Package (line coverage metrics remain governed by `IMPLEMENTATION_PLAN.md`).
+* External Authority: If external organizational or regulatory sign-off is needed (e.g. `SEC-VAL-11` legal retention, PAC certification), it must be recorded as `EXTERNAL AUTHORITY REQUIRED BEFORE PRODUCTION`, not fabricated during development.
 
 ### 4.4 Solo Mode Exit Condition (Auto-Upgrade)
-* **Trigger:** If the number of active, trusted human maintainers with write/admin permissions increases to $\ge 2$.
+* **Trigger:** If active, trusted human maintainers with write/admin permissions increase to $\ge 2$.
+* **Requirement:** The second maintainer must be a distinct, real human (not a duplicate or sockpuppet account), trusted, active, and Write/Maintain/Admin capable.
 * **Action:** GitHub branch protection must immediately be updated to `required_approving_review_count >= 1`, restoring human pull request review as an enforceable repository control.
 
 ---
 
-## 5. Scope Invariants & Integrity Assurances
+## 5. EAAF Architecture Change Step 5 Downstream Disposition
+
+In accordance with `workflows/ARCHITECTURE_CHANGE.md` Step 5 (*Update Downstream Baseline Artifacts*), the downstream baseline impact of ACR-2026-003 is formally recorded as:
+
+* **Functional SSOT:** `NOT APPLICABLE`  
+  *Reason:* No business capability, restaurant functional rule, or domain workflow is altered by this governance model change.
+* **Data Migration Guidance:** `NOT APPLICABLE TO THIS GOVERNANCE CHANGE`  
+  *Reason:* No database schema, entity contract, or data migration is introduced by ACR-2026-003 itself.
+* **Implementation Governance / Handoff:** `APPLICABLE`  
+  *Governed Artifacts:*
+  - `SOLO_MAINTAINER_GOVERNANCE.md` (`SPEC-GOV-SOLO-001` — Created)
+  - `HANDOFF_IMPLEMENTATION.md` (Updated)
+  - `IMPLEMENTATION_PLAN.md` (Updated)
+
+---
+
+## 6. Scope Invariants & Integrity Assurances
 
 * **Zero Architecture Drift:** Functional, Solution, Data, and Security baselines remain 100% frozen.
 * **Zero Work Package Changes:** The 28 Work Packages (`WP-001` to `WP-028`) retain their exact scopes, acceptance criteria, test obligations, and DAG dependencies.
@@ -127,7 +156,7 @@ Changes involving authentication, cryptography, tenant isolation, fiscal logic, 
 
 ---
 
-## 6. Supersession & Traceability
+## 7. Supersession & Traceability
 
 * **Superseded Clause:** Amends the specific clause of `ADR-009` / `AMEND-GOV-IR-001` that required a distinct GitHub approving reviewer during solo maintainer operation.
 * **Preserved Controls:** All other Stage A safeguards (PR required, no direct push, no force-push, no deletions, admin enforcement) and all Stage B status checks remain fully intact.
@@ -140,7 +169,7 @@ Changes involving authentication, cryptography, tenant isolation, fiscal logic, 
 
 ---
 
-## 7. Author Status & Recommendation
+## 8. Author Status & Recommendation
 
 The author submits this Change Request for independent agent review by `Independent Solution Architect` and `10_DevOps_Platform_Architect`.
 

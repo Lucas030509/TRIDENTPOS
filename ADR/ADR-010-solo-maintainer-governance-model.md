@@ -55,22 +55,21 @@ While `active_human_maintainers = 1`, remote `main` branch protection is configu
 7. **Status Checks (Stage B):** Enforced immediately after `WP-002` (`build`, `lint`, `typecheck`, `unit-tests`, `secret-scan`, `sca-scan`).
 
 ### 3.3 Segregated EAAF Agent Review Lifecycle
-For every Work Package, the following sequential activations are mandatory:
+During Solo Mode, GitHub human approval count is 0. However, every code-producing Work Package must obtain formal PASS evidence from BOTH of the following sequential agent activations:
 1. **Builder Activation:** Implements feature on dedicated branch (`feature/wp-xxx`).
-2. **Specialist Reviewer Activation:** Fresh session evaluating domain compliance (`01_Solution_Architect`, `03_Data_Architect`, etc.).
+2. **Specialist Reviewer Activation:** Fresh session evaluating domain compliance (`01_Solution_Architect`, `03_Data_Architect`, `08_Security_Architect`, `10_DevOps_Platform_Architect`, `09_QA_Test_Architect`).
 3. **11_Code_Reviewer Activation:** Fresh session evaluating code quality, edge cases, and security.
 * Builder cannot review their own work in the same session.
-* Markdown review evidence containing exact commit SHAs, Expected vs Actual results, and findings must be committed before merging.
+* Markdown review evidence containing exact pinned commit SHAs, Expected vs Actual results, findings, and formal PASS / PARTIAL / FAIL verdict must be committed before merging. These are internal EAAF agent verifications, NOT GitHub human approvals.
 
 ### 3.4 Automated CI as the Primary Gate (Stage B)
 Because human peer review is absent, Stage B automated CI status checks (`build`, `lint`, `typecheck`, `unit-tests`, `secret-scan`, `sca-scan`) serve as the uncompromising machine gate for every PR starting with `WP-003`.
 
 ### 3.5 Solo Mode Exit Condition (Auto-Upgrade)
-If at any point a second trusted human maintainer is added with write/admin permissions to the repository, branch protection must immediately be updated to:
-```text
-required_approving_review_count >= 1
-```
-thereby transitioning the repository into standard multi-maintainer mode.
+If at any point a second trusted human maintainer is added:
+* Must be a distinct, real human (not a duplicate or sockpuppet account).
+* Must be active, trusted, and possess Write/Maintain/Admin repository permissions.
+* GitHub branch protection must immediately be updated to `required_approving_review_count >= 1`, transitioning the repository into standard multi-maintainer mode with mandatory human peer review.
 
 ## 4. Consequences
 
@@ -88,6 +87,11 @@ thereby transitioning the repository into standard multi-maintainer mode.
 
 * **Amends:** Specifically supersedes the requirement in `ADR-009` (Section 5, Stage A) and `ACR-2026-002` that mandated `required_approving_review_count >= 1` on GitHub during solo maintainer operation.
 * **Preserves:** All other clauses of `ADR-009`, `ACR-2026-002`, and `AMEND-GOV-IR-001` remain in full effect.
+
+### 5.1 EAAF Architecture Change Step 5 Downstream Disposition
+* **Functional SSOT:** `NOT APPLICABLE` (no functional or restaurant domain logic change).
+* **Data Migration Guidance:** `NOT APPLICABLE TO THIS GOVERNANCE CHANGE` (no schema/data migration introduced by ADR-010 itself).
+* **Implementation Governance / Handoff:** `APPLICABLE` (governed via `SOLO_MAINTAINER_GOVERNANCE.md`, `HANDOFF_IMPLEMENTATION.md`, and `IMPLEMENTATION_PLAN.md`).
 
 ---
 

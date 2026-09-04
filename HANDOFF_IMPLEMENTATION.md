@@ -33,8 +33,8 @@ Before any work package implementation begins:
      * Prohibition of force pushes and branch deletions.
      * Solo Maintainer Profile (`ADR-010`): GitHub required approving review count set to 0 while `active_human_maintainers = 1` (eliminates impossible human reviewer requirement; auto-upgrades to >= 1 when >= 2 maintainers exist).
      * Automated status check contexts omitted during Stage A because no CI workflows exist in repository prior to `WP-002`.
-     * Strict compensating controls for `WP-001`: local `npm ci`, local `npm run build`, dependency graph linting, evidence artifact with command output, dual independent EAAF agent review (`01_Solution_Architect` + `11_Code_Reviewer`).
-   - **Stage B (Post-WP-002 Full Protection):** Immediately after `WP-002` merges and establishes GitHub Actions workflow contexts, `main` branch protection must be updated to enforce mandatory passing CI status checks (`build`, `lint`, `typecheck`, `unit-tests`, `secret-scan`, `sca-scan`). Stage B is a hard precondition before `WP-003` or any subsequent domain WP can merge.
+     * Strict compensating controls for `WP-001`: local `npm ci`, local `npm run build`, dependency graph linting, evidence artifact with command output, dual segregated EAAF agent review (`01_Solution_Architect` + `11_Code_Reviewer`).
+    - **Stage B (Post-WP-002 Full Protection):** Immediately after `WP-002` merges and establishes GitHub Actions workflow contexts, `main` branch protection must be updated to enforce mandatory passing CI status checks (`build`, `lint`, `typecheck`, `unit-tests`, `secret-scan`, `sca-scan`). Stage B is a hard precondition before `WP-003` or any subsequent domain WP can merge.
 4. **Supply Chain Contract:** Monorepo package management adheres strictly to `npm workspaces`, committed `package-lock.json`, and `npm ci` in all CI/build environments per `SUPPLY_CHAIN_SECURITY.md`.
 5. **Tooling Decision:** ORM selection (`Drizzle` vs. `Prisma`) must be formally recorded by `17_Database_Engineer` and `03_Data_Architect` prior to starting `WP-003`.
 6. **Migration Governance:** Database schema evolution adheres strictly to `DATA_MIGRATION_STRATEGY.md` (Expand-Transition-Contract). Universal destructive down-migrations in production are prohibited.
@@ -58,18 +58,19 @@ Builders must execute work packages in strict wave dependency sequence according
 
 ---
 
-## 3. Branching, PR and Dual Review Rules
+## 3. Branching, PR and Dual EAAF Agent Review Rules
 
 * **Branch Per Work Package:** Every WP must be implemented on its own dedicated branch: `feature/wp-XXX-<slug>`.
-* **Builder $\ne$ Reviewer:** The author/builder of a PR cannot approve their own pull request.
-* **Dual Review Requirements:** Every code-producing PR must receive approved reviews from BOTH:
-  1. **Primary Specialist Reviewer:**
+* **Builder Agent $\ne$ Reviewer Agent:** The author/builder of an implementation cannot act as reviewer in the same session.
+* **GitHub Human Approval vs. EAAF Agent Evidence (Solo Mode):** Under Solo Maintainer Mode (`ADR-010`), GitHub `required_approving_review_count = 0` because exactly one human maintainer exists (no distinct human is available to provide human approval). However, human approval is NOT bypassed or faked. Instead, every code-producing WP must obtain PASS evidence from BOTH the assigned Specialist Reviewer Agent and `11_Code_Reviewer` Agent before merge:
+  1. **Primary Specialist Reviewer Agent:**
      - Database changes: `03_Data_Architect` (and `08_Security_Architect` for RLS).
      - Security/Crypto/Auth/IPC changes: `08_Security_Architect`.
      - Context boundary/Architecture contracts: `01_Solution_Architect`.
      - DevOps pipelines/Packaging: `10_DevOps_Platform_Architect`.
      - Testing/Chaos: `09_QA_Test_Architect`.
-  2. **Mandatory Code Reviewer:** `11_Code_Reviewer` on 100% of code-producing PRs.
+  2. **Mandatory Code Reviewer Agent:** `11_Code_Reviewer` on 100% of code-producing WPs.
+* **Review Evidence Contract:** EAAF agent reviews must inspect an immutable pinned subject SHA, evaluate Expected vs Actual results, record findings, and produce explicit PASS / PARTIAL / FAIL evidence committed under `evidence/`. They are internal EAAF verification artifacts, NOT GitHub human approvals.
 * **Evidence Delivery:** Every PR must include its verifiable evidence markdown artifact under `evidence/` documenting Expected vs. Actual, test run output, commit SHA, and remaining risk.
 
 ---
