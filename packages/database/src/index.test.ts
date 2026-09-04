@@ -395,21 +395,21 @@ describe('TRIDENTPOS WP-004 Organization & Branch Multi-Tenant RLS Foundation Su
       await client.query(`
         DO $$
         BEGIN
-          IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${testRole}') THEN
-            CREATE ROLE ${testRole} NOSUPERUSER NOBYPASSRLS NOINHERIT;
-          ELSE
-            ALTER ROLE ${testRole} WITH NOSUPERUSER NOBYPASSRLS NOINHERIT;
+          IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${testRole}') THEN
+            EXECUTE 'DROP OWNED BY ${testRole}';
+            EXECUTE 'DROP ROLE ${testRole}';
           END IF;
         END
         $$;
+        CREATE ROLE ${testRole} NOSUPERUSER NOBYPASSRLS NOINHERIT;
       `);
       // Apply zero-to-latest migrations up to WP-004 on real DEFAULT_MIGRATIONS_DIR
       await migrateUp(pool);
-      // Grant permissions to test role
+      // Grant least-privilege permissions to test role (DML only, no TRUNCATE/REFERENCES/TRIGGER)
       await client.query(`
         GRANT USAGE ON SCHEMA public TO ${testRole};
-        GRANT ALL ON TABLE organizations TO ${testRole};
-        GRANT ALL ON TABLE branches TO ${testRole};
+        GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE organizations TO ${testRole};
+        GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE branches TO ${testRole};
         GRANT EXECUTE ON FUNCTION current_app_org_id() TO ${testRole};
       `);
       await seedTestData();
@@ -421,15 +421,12 @@ describe('TRIDENTPOS WP-004 Organization & Branch Multi-Tenant RLS Foundation Su
   after(async () => {
     const client = await pool.connect();
     try {
-      await client
-        .query(
-          `
+      await client.query(`
         DROP TABLE IF EXISTS test_composite_ref, branches, organizations CASCADE;
         DELETE FROM _migrations WHERE id = '${wp004Id}';
-        DROP ROLE IF EXISTS ${testRole};
-      `,
-        )
-        .catch(() => {});
+        DROP OWNED BY ${testRole};
+        DROP ROLE ${testRole};
+      `);
     } finally {
       client.release();
       await closePool(pool);
@@ -875,8 +872,9 @@ describe('TRIDENTPOS WP-004 Organization & Branch Multi-Tenant RLS Foundation Su
     const grantClient = await pool.connect();
     try {
       await grantClient.query(`
-        GRANT ALL ON TABLE organizations TO ${testRole};
-        GRANT ALL ON TABLE branches TO ${testRole};
+        GRANT USAGE ON SCHEMA public TO ${testRole};
+        GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE organizations TO ${testRole};
+        GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE branches TO ${testRole};
         GRANT EXECUTE ON FUNCTION current_app_org_id() TO ${testRole};
       `);
     } finally {
@@ -918,8 +916,9 @@ describe('TRIDENTPOS WP-004 Organization & Branch Multi-Tenant RLS Foundation Su
     const client = await pool.connect();
     try {
       await client.query(`
-        GRANT ALL ON TABLE organizations TO ${testRole};
-        GRANT ALL ON TABLE branches TO ${testRole};
+        GRANT USAGE ON SCHEMA public TO ${testRole};
+        GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE organizations TO ${testRole};
+        GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE branches TO ${testRole};
         GRANT EXECUTE ON FUNCTION current_app_org_id() TO ${testRole};
       `);
     } finally {
@@ -978,5 +977,87 @@ describe('TRIDENTPOS WP-004 Organization & Branch Multi-Tenant RLS Foundation Su
       0,
       `No WP-005 tables may exist, found: ${res.rows.map((r: { table_name: string }) => r.table_name).join(', ')}`,
     );
+  });
+
+  it('WP004-T29: Least-privilege application role cannot TRUNCATE tenant tables', async () => {
+    // 1. Minimum privilege verification via catalog introspection
+    const privRes = await pool.query<{
+      org_truncate: boolean;
+      branch_truncate: boolean;
+      org_references: boolean;
+      branch_references: boolean;
+      org_trigger: boolean;
+      branch_trigger: boolean;
+      org_select: boolean;
+      branch_select: boolean;
+    }>(`
+      SELECT
+        has_table_privilege('${testRole}', 'organizations', 'TRUNCATE') AS org_truncate,
+        has_table_privilege('${testRole}', 'branches', 'TRUNCATE') AS branch_truncate,
+        has_table_privilege('${testRole}', 'organizations', 'REFERENCES') AS org_references,
+        has_table_privilege('${testRole}', 'branches', 'REFERENCES') AS branch_references,
+        has_table_privilege('${testRole}', 'organizations', 'TRIGGER') AS org_trigger,
+        has_table_privilege('${testRole}', 'branches', 'TRIGGER') AS branch_trigger,
+        has_table_privilege('${testRole}', 'organizations', 'SELECT') AS org_select,
+        has_table_privilege('${testRole}', 'branches', 'SELECT') AS branch_select;
+    `);
+
+    assert.equal(
+      privRes.rows[0]?.org_truncate,
+      false,
+      'trident_test_app must not have TRUNCATE on organizations',
+    );
+    assert.equal(
+      privRes.rows[0]?.branch_truncate,
+      false,
+      'trident_test_app must not have TRUNCATE on branches',
+    );
+    assert.equal(
+      privRes.rows[0]?.org_references,
+      false,
+      'trident_test_app must not have REFERENCES on organizations',
+    );
+    assert.equal(
+      privRes.rows[0]?.branch_references,
+      false,
+      'trident_test_app must not have REFERENCES on branches',
+    );
+    assert.equal(
+      privRes.rows[0]?.org_trigger,
+      false,
+      'trident_test_app must not have TRIGGER on organizations',
+    );
+    assert.equal(
+      privRes.rows[0]?.branch_trigger,
+      false,
+      'trident_test_app must not have TRIGGER on branches',
+    );
+    assert.equal(
+      privRes.rows[0]?.org_select,
+      true,
+      'trident_test_app must retain SELECT on organizations',
+    );
+    assert.equal(
+      privRes.rows[0]?.branch_select,
+      true,
+      'trident_test_app must retain SELECT on branches',
+    );
+
+    // 2. Reject TRUNCATE attempts via PostgreSQL permission enforcement (not relying on RLS)
+    await asTestRole(async (client) => {
+      await assert.rejects(client.query('TRUNCATE organizations;'), (err: unknown) => {
+        const pgErr = err as { code?: string; message?: string };
+        assert.equal(pgErr.code, '42501', 'Must be rejected with 42501 permission_denied');
+        assert.match(pgErr.message ?? '', /permission denied for table organizations/i);
+        return true;
+      });
+
+      await assert.rejects(client.query('TRUNCATE branches;'), (err: unknown) => {
+        const pgErr = err as { code?: string; message?: string };
+        assert.equal(pgErr.code, '42501', 'Must be rejected with 42501 permission_denied');
+        assert.match(pgErr.message ?? '', /permission denied for table branches/i);
+        return true;
+      });
+    });
   });
 });

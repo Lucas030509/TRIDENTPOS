@@ -7,16 +7,21 @@
 - **Operating Mode:** `SOLO_MAINTAINER`
 - **Human / Organizational Independence:** NOT AVAILABLE (Solo Maintainer governed under EAAF v1.2.0 / ADR-010)
 - **Review Model:** ROLE-SEPARATED EAAF AGENT REVIEW (Specialist: `08_Security_Architect`, Data Specialist: `03_Data_Architect`, Mandatory Code Review: `11_Code_Reviewer`)
-- **Implementation Base:** `fa618c3705c057ddba5ec8a3d34426f702b8c74b` (`origin/main`)
+- **Canonical Main:** `fa618c3705c057ddba5ec8a3d34426f702b8c74b` (`origin/main`)
+- **Previous Subject:** `1b9d1219869cb26ff953092fb9e78de8f52864da`
+- **Feature Branch:** `feature/wp-004-tenant-rls-foundation`
+- **Existing PR:** PR #13
 - **ACR-2026-005 Promotion Provenance:**
   - Promotion PR: PR #12
   - Author Subject: `f8e9ba6e4370f8bac6801d46afa14047557c93ac`
   - Data Review Evidence: `86b8ab0e179fb2728d26b07150532e3ac1e7cbc6`
   - Security Review Evidence: `805e26c73f0a4aa4f8a0f4580d1e0fc6fea01023`
   - Resolution: `organization_memberships` formally eliminated from WP-004 scope; WP-004 strictly owns `organizations`, `branches`, `current_app_org_id()`, transaction-scoped tenant context, composite integrity keys, and RLS default deny.
-- **Feature Branch:** `feature/wp-004-tenant-rls-foundation`
+- **Governed Local Toolchain:**
+  - Node: `24.20.0`
+  - npm: `11.19.0`
 - **Date:** 2026-09-04
-- **Builder Status:** READY FOR ROLE-SEPARATED REVIEW
+- **Builder Verdict:** READY FOR ROLE-SEPARATED REVIEW
 
 ---
 
@@ -33,6 +38,7 @@
 | FORCE ROW LEVEL SECURITY | WP-004 | IMPLEMENTED |
 | Default Deny Isolation Policies | WP-004 | IMPLEMENTED |
 | Composite Key `(organization_id, id)` | WP-004 | IMPLEMENTED |
+| Least-Privilege Application Test Principal | WP-004 | IMPLEMENTED & REMEDIATED |
 | `users`, `roles`, `permissions`, `user_roles` | WP-005 | ABSENT (Enforced by WP004-T28) |
 | Supabase Auth / JWT / RBAC Middleware | WP-005 | ABSENT |
 
@@ -162,17 +168,60 @@ Verified via automated integration tests (`WP004-T15`..`T18`):
 
 ---
 
-## 6. Test Principal & Security Adversarial Validation
+## 6. Test Principal & Least-Privilege Remediation
 
-### Test Principal Properties
-- **Role Name:** `trident_test_app`
-- **Catalog Proof (`pg_roles`):**
-  - `rolsuper`: `false` (`NOSUPERUSER`)
-  - `rolbypassrls`: `false` (`NOBYPASSRLS`)
-  - `rolinherit`: `false` (`NOINHERIT`)
-- **Grants:** Minimal object grants (`USAGE ON SCHEMA public`, `ALL ON TABLE organizations, branches`, `EXECUTE ON FUNCTION current_app_org_id()`).
+### 6.1. Least-Privilege Role Grants Remediation
+In the previous subject (`1b9d1219869cb26ff953092fb9e78de8f52864da`), tests granted `GRANT ALL ON TABLE organizations, branches TO trident_test_app`. This was overly broad for an application principal.
 
-### Adversarial Cross-Tenant Attack Test Results
+The privileges have been remediated to strictly minimal DML permissions:
+```sql
+GRANT USAGE ON SCHEMA public TO trident_test_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE organizations TO trident_test_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE branches TO trident_test_app;
+GRANT EXECUTE ON FUNCTION current_app_org_id() TO trident_test_app;
+```
+
+#### Withheld / Excluded Privileges
+The test principal is strictly denied:
+- `TRUNCATE` (verified via `WP004-T29`)
+- `REFERENCES` (verified via `WP004-T29`)
+- `TRIGGER` (verified via `WP004-T29`)
+- `SUPERUSER` (`rolsuper = false`, verified via `WP004-T13`)
+- `BYPASSRLS` (`rolbypassrls = false`, verified via `WP004-T14`)
+- `CREATEDB`
+- `CREATEROLE`
+
+### 6.2. Non-DML Privilege Negative Test (`WP004-T29`)
+Added test `WP004-T29: Least-privilege application role cannot TRUNCATE tenant tables`:
+1. Catalog introspection via `has_table_privilege`:
+   - `has_table_privilege('trident_test_app', 'organizations', 'TRUNCATE') = false`
+   - `has_table_privilege('trident_test_app', 'branches', 'TRUNCATE') = false`
+   - `has_table_privilege('trident_test_app', 'organizations', 'REFERENCES') = false`
+   - `has_table_privilege('trident_test_app', 'branches', 'REFERENCES') = false`
+   - `has_table_privilege('trident_test_app', 'organizations', 'TRIGGER') = false`
+   - `has_table_privilege('trident_test_app', 'branches', 'TRIGGER') = false`
+   - `has_table_privilege('trident_test_app', 'organizations', 'SELECT') = true`
+   - `has_table_privilege('trident_test_app', 'branches', 'SELECT') = true`
+2. Execution enforcement:
+   - Executing `TRUNCATE organizations;` under `trident_test_app` role fails with PostgreSQL error `42501 (permission denied for table organizations)`.
+   - Executing `TRUNCATE branches;` under `trident_test_app` role fails with PostgreSQL error `42501 (permission denied for table branches)`.
+   - Protection is enforced directly by PostgreSQL core privilege verification without relying on RLS policies.
+
+### 6.3. Governed Clean Role Teardown Remediation
+Previously, teardown relied on `DROP ROLE IF EXISTS trident_test_app; .catch(() => {})`, which swallowed errors when role objects or schema grants remained.
+
+Remediation:
+1. Swallowing `.catch(() => {})` has been removed; any teardown failure now fails the test suite.
+2. Clean object dependency revocation is explicitly executed before dropping the role:
+   ```sql
+   DROP TABLE IF EXISTS test_composite_ref, branches, organizations CASCADE;
+   DELETE FROM _migrations WHERE id = '20260904170000';
+   DROP OWNED BY trident_test_app;
+   DROP ROLE trident_test_app;
+   ```
+3. Verified in test execution: `trident_test_app` is dropped cleanly with zero dependency errors, and `SELECT rolname FROM pg_roles WHERE rolname = 'trident_test_app'` confirms 0 rows post-test.
+
+### 6.4. Adversarial Cross-Tenant Attack Test Matrix
 
 | Test ID | Scenario Description | Expected Result | Actual Result | Status |
 |---|---|---|---|---|
@@ -188,6 +237,7 @@ Verified via automated integration tests (`WP004-T15`..`T18`):
 | `WP004-T20` | Context persistence after transaction end | Context reverts to `NULL` | `current_app_org_id() = null` | SATISFIED |
 | `WP004-T21` | Pooled connection reuse across tenants | Prior context does not leak | Transaction boundary clean | SATISFIED |
 | `WP004-T22` | Malformed tenant context injection attack | Fails closed; zero rows returned | 0 rows across all payloads | SATISFIED |
+| `WP004-T29` | Least-privilege role attempts TRUNCATE / non-DML | Denied by PostgreSQL permission enforcement | Rejected with `42501 permission_denied`; catalog privs = false | SATISFIED |
 
 ---
 
@@ -203,27 +253,31 @@ Verified via automated integration tests (`WP004-T15`..`T18`):
 
 ---
 
-## 8. Local Quality Gate Results
+## 8. Governed Local Quality Gate Results
 
-All commands executed in workspace `/Volumes/SSD_ORICO/BRAIN/TRIDENTPOSREST/eeaaf/TRIDENTPOS`:
+All commands executed under the frozen runtime in workspace `/Volumes/SSD_ORICO/BRAIN/TRIDENTPOSREST/eeaaf/TRIDENTPOS`:
 
-| Command | Exit Code | Result Summary |
-|---|---|---|
-| `node --version` | 0 | `v22.22.0` |
-| `npm --version` | 0 | `10.9.4` |
-| `npm run graph:check` | 0 | No circular dependencies, all 6 package boundaries satisfied |
-| `npm run format:check` | 0 | All matched files use Prettier code style |
-| `npm run typecheck` | 0 | Turbo typecheck in 6 packages passed cleanly |
-| `npm run lint` | 0 | ESLint in 6 packages passed cleanly |
-| `npm run build` | 0 | Turbo build in 6 packages passed cleanly |
-| `npm run test` (with `DATABASE_URL`) | 0 | 46 tests across 2 suites passed (WP-003: 18/18, WP-004: 28/28) |
+| Command | Toolchain Version | Exit Code | Result Summary |
+|---|---|---|---|
+| `node --version` | `v24.20.0` | 0 | Frozen Node LTS Krypton runtime |
+| `npm --version` | `11.19.0` | 0 | Governed npm package manager |
+| `npm ci` | `11.19.0` | 0 | Deterministic install, 0 vulnerabilities |
+| `npm run graph:check` | `24.20.0` | 0 | No circular dependencies, all 6 package boundaries satisfied |
+| `npm run format:check` | `24.20.0` | 0 | All matched files use Prettier code style (0 style issues) |
+| `npm run typecheck` | `24.20.0` | 0 | Turbo typecheck in 6 packages passed cleanly (0 errors) |
+| `npm run lint` | `24.20.0` | 0 | ESLint in 6 packages passed cleanly (0 errors, 0 warnings) |
+| `npm run build` | `24.20.0` | 0 | Turbo build in 6 packages passed cleanly |
+| `npm run test` (with `DATABASE_URL`) | `24.20.0` | 0 | **47 tests passed across 2 suites** (WP-003: 18/18, WP-004: 29/29) |
+| `actionlint .github/workflows/*.yml` | system | 0 | 0 errors |
+| `trufflehog` | system | 0 | 0 verified/unverified secrets committed |
+| `trivy fs --config trivy.yaml` | system | 0 | 0 High/Critical vulnerabilities |
 
 ---
 
 ## 9. Security Debt & Architecture Baselines Disposition
 
 ### SEC-VAL-01: Multi-Tenant Isolation
-- **Status:** `IMPLEMENTATION CONTROLS PRESENT — PENDING ROLE-SEPARATED SECURITY + DATA VALIDATION`
+- **Status:** `IMPLEMENTATION CONTROLS PRESENT — PENDING ROLE-SEPARATED VALIDATION`
 - **Note:** Builder does NOT declare SEC-VAL-01 closed or approved. Awaiting independent reviews by `08_Security_Architect`, `03_Data_Architect`, and `11_Code_Reviewer`.
 
 ### Preserved Open Technical Debts
@@ -239,8 +293,29 @@ All 9 Product Owner architecture questions remain in status: `PENDING PO DECISIO
 
 ---
 
-## 10. Builder Conclusion
+## 10. Remote CI Verification & Workflow Runs
 
+- **PR:** #13 (`feat(platform): [WP-004] multi-tenant RLS foundation`)
+- **PR State:** OPEN
+- **Remote Checks Requirement:** All remote checks must succeed on the final subject commit.
+
+| Workflow / Context | GitHub Run ID | Status | Conclusion |
+|---|---|---|---|
+| `build` | PENDING REMOTE RUN | PENDING | PENDING |
+| `lint` | PENDING REMOTE RUN | PENDING | PENDING |
+| `typecheck` | PENDING REMOTE RUN | PENDING | PENDING |
+| `unit-tests` | PENDING REMOTE RUN | PENDING | PENDING |
+| `secret-scan` | PENDING REMOTE RUN | PENDING | PENDING |
+| `sca-scan` | PENDING REMOTE RUN | PENDING | PENDING |
+| `sast-scan` | PENDING REMOTE RUN | PENDING | PENDING |
+| `sbom-generate` | PENDING REMOTE RUN | PENDING | PENDING |
+
+---
+
+## 11. Builder Conclusion
+
+- **Previous Subject:** `1b9d1219869cb26ff953092fb9e78de8f52864da`
 - **Verdict:** `READY FOR ROLE-SEPARATED REVIEW`
 - **Builder Status:** `SATISFIED`
-- **Subject Freeze:** To be declared upon PR creation and successful Stage B remote checks.
+- **Blocking Findings:** 0
+- **WP-005 Authorization:** NOT AUTHORIZED
