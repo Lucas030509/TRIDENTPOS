@@ -18,10 +18,18 @@
 |---|---|---|---|---|---|
 | `organizations` | `id` | UUID | NO | Internal | Identificador único global del Tenant / Empresa corporativa. |
 | `organizations` | `tax_id` | VARCHAR(50) | NO | Confidential | RFC o Tax ID legal. Clave única global. |
-| `branches` | `id` | UUID | NO | Internal | Identificador único de la sucursal física. |
-| `branches` | `code` | VARCHAR(50) | NO | Internal | Código corto de sucursal (ej. 'BR-01'). Único por tenant. |
-| `user_branch_credentials` | `pin_hash` | VARCHAR(255) | NO | Restricted | Hash criptográfico salteado con Argon2id del PIN de 4 dígitos. Prohibido texto plano. |
+| `branches` | `id` | UUID | NO | Internal | Identificador único de la sucursal física. Clave compuesta `(organization_id, id)`. |
+| `branches` | `code` | VARCHAR(50) | NO | Internal | Código corto de sucursal (ej. 'BR-01'). Único por tenant `(organization_id, code)`. |
+| `users` | `id` | UUID | NO | Internal | Identificador único del usuario vinculado canónicamente a Supabase Auth `sub` (`jwt.sub`). Clave compuesta `(organization_id, id)`. |
+| `users` | `email` | VARCHAR(255) | NO | Confidential | Correo electrónico administrativo. Único por tenant `(organization_id, email)`. |
+| `users` | `is_active` | BOOLEAN | NO | Internal | Estado operativo. Si es FALSE, el middleware de autenticación rechaza el acceso de inmediato. |
+| `roles` | `id` | UUID | NO | Internal | Identificador único del rol. Clave compuesta `(organization_id, id)`. |
+| `roles` | `code` | VARCHAR(50) | NO | Internal | Código semántico del rol (ej. 'ADMIN', 'GERENTE'). Único por tenant `(organization_id, code)`. |
+| `roles` | `permissions` | JSONB | NO | Internal | Array canónico de strings de permisos concedidos al rol (RBAC). |
+| `user_roles` | `(org,user,branch,role)` | UUIDs | NO | Internal | Asignación compuesta de roles a usuarios por sucursal y tenant con llaves foráneas compuestas. |
+| `user_branch_credentials` | `pin_hash` | VARCHAR(255) | NO | Restricted | Hash criptográfico salteado con Argon2id del PIN de 4 dígitos. Aprovisionado en Cloud (WP-005), verificado en Edge (WP-010). |
 | `user_branch_credentials` | `credential_version` | INTEGER | NO | Internal | Contador monotónico incrementado en cada cambio de contraseña/PIN. |
+| `user_branch_credentials` | `is_revoked` | BOOLEAN | NO | Internal | Bandera de revocación de credencial operativa de sucursal. |
 | `products` | `base_price` | DECIMAL(12,4)| NO | Internal | Precio base corporativo antes de branch overrides e impuestos. |
 | `branch_product_overrides`| `price_override` | DECIMAL(12,4)| SÍ | Internal | Sobreescritura local de precio para la sucursal específica. |
 | `folio_leases` | `epoch_id` | VARCHAR(50) | NO | Internal | Identificador de generación/época (`ep_1`, `ep_2`) para aislamiento de desastres. |
