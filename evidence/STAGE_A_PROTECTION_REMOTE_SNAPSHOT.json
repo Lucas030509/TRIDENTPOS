@@ -1,17 +1,20 @@
 {
   "repository": "Lucas030509/TRIDENTPOS",
   "branch": "main",
+  "timestamp": "2026-09-04T02:43:35Z",
+  "canonical_main_sha": "54e259864e26f3c720f2e8a6324f56e38805d1dd",
   "mechanism": "Classic Branch Protection",
-  "timestamp": "2026-09-03T18:58:47Z",
   "protection_url": "https://api.github.com/repos/Lucas030509/TRIDENTPOS/branches/main/protection",
-  "enforce_admins": {
-    "enabled": true
-  },
+  "main_protected": true,
   "required_pull_request_reviews": {
     "dismiss_stale_reviews": false,
     "require_code_owner_reviews": false,
     "require_last_push_approval": false,
-    "required_approving_review_count": 1
+    "required_approving_review_count": 0
+  },
+  "required_approving_review_count": 0,
+  "enforce_admins": {
+    "enabled": true
   },
   "allow_force_pushes": {
     "enabled": false
@@ -20,16 +23,24 @@
     "enabled": false
   },
   "required_status_checks": null,
+  "workflows_count": 0,
   "collaborators_count": 1,
   "collaborators": [
     {
       "login": "Lucas030509",
-      "role_name": "admin",
       "permissions": {
         "admin": true,
+        "maintain": true,
+        "pull": true,
         "push": true,
-        "pull": true
+        "triage": true
       }
     }
-  ]
+  ],
+  "operating_mode": "SOLO MAINTAINER",
+  "human_independence": "NOT AVAILABLE",
+  "stage_a_scope": "WP-001 / WP-002 ONLY",
+  "governance_subject_sha": "2d93c9e4b908ed8f462c85a5099c5256d6c2cda7",
+  "po_approval_sha": "03c680ecb244e6ab8e137041674ee935eeb6821d",
+  "control_plane_review_sha": "91aa11a956b845c1eaa0779953bf32f149a30eda"
 }
