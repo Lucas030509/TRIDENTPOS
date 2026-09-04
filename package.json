@@ -36,6 +36,6 @@
     "typescript": "~5.4.5"
   },
   "overrides": {
-    "pg-protocol": "1.16.0"
+    "pg-protocol": "1.7.1"
   }
 }
