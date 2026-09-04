@@ -149,7 +149,7 @@ Foundational infrastructure and CI/CD pipelines required before application code
 * **Specialist Reviewer:** `01_Solution_Architect`
 * **Code Reviewer:** `11_Code_Reviewer`
 * **Prerequisites:** `main` branch protection enabled on GitHub.
-* **Dependencies:** Node.js 20 LTS (`IMPLEMENTATION VERSION TO PIN`), npm workspaces, Turborepo, TypeScript 5.4.
+* **Dependencies:** Node.js 24 LTS (`IMPLEMENTATION VERSION/PATCH TO PIN DURING WP-001`), npm workspaces, Turborepo, TypeScript 5.4 (`ADR-011`).
 * **Inputs:** `PROJECT_BLUEPRINT.md`, `SUPPLY_CHAIN_SECURITY.md`
 * **Outputs:** Turborepo configuration, root `package.json` with npm workspaces, committed `package-lock.json`, shared `tsconfig.json`, ESLint / Prettier shared configs.
 * **Acceptance Criteria:** Monorepo builds cleanly with `npm run build`; clean installation verified via `npm ci`; workspace package dependency graph validated; circular dependencies prevented by lint rules.
@@ -309,7 +309,7 @@ Edge host runtime scaffolding, embedded persistence, local LAN communication, an
 * **Specialist Reviewer:** `08_Security_Architect`
 * **Code Reviewer:** `11_Code_Reviewer`
 * **Prerequisites:** `WP-001`
-* **Dependencies:** Electron 30+ (`IMPLEMENTATION VERSION TO PIN`), Node.js 20 LTS.
+* **Dependencies:** Electron 30+ (`IMPLEMENTATION VERSION TO PIN`), Node.js 24 LTS (build/toolchain; embedded runtime governed by Electron per `ADR-011`).
 * **Inputs:** `ADR-003`, `SECURITY_ARCHITECTURE.md` Sec. 8
 * **Outputs:** Electron main and preload processes configured with: `contextIsolation: true`, `nodeIntegration: false`, `sandbox: true`, strict CSP headers, IPC allowlist bridge.
 * **Acceptance Criteria:** Electron window initializes without Node.js exposed to renderer; IPC messages restricted to strictly allowlisted channels; external URL navigation intercepted and blocked.
@@ -1069,7 +1069,7 @@ Every one of the 11 cataloged Security Validation Debts is mapped to concrete Wo
 * **PostgreSQL 16 in Supabase:** `FROZEN ARCHITECTURE` (Strict alignment with Data Architecture).
 * **Render Web Services & WebSocket Gateway:** `FROZEN ARCHITECTURE`
 * **Vercel Edge Network:** `FROZEN ARCHITECTURE`
-* **Node.js 20 LTS:** `IMPLEMENTATION VERSION TO PIN`
+* **Node.js 24 LTS:** `IMPLEMENTATION VERSION/PATCH TO PIN DURING WP-001` (`ADR-011`)
 * **Electron 30+:** `IMPLEMENTATION VERSION TO PIN`
 * **Next.js 14:** `IMPLEMENTATION VERSION TO PIN`
 * **React Native / Expo:** `IMPLEMENTATION VERSION TO PIN`

@@ -1,9 +1,10 @@
 # TECH STACK DECISIONS & RUNTIME EVALUATION — ERP RESTAURANTES
 
 **Document ID:** `ARCH-STK-001`  
-**Version:** `1.3 NORMALIZED / REMEDIATED`  
-**Status:** `APPROVED / FROZEN`  
-**Date:** 2026-09-01  
+**Version:** `1.3 NORMALIZED / REMEDIATED (with Proposed ADR-011 Amendment)`  
+**Canonical Baseline:** `v1.3 APPROVED / FROZEN` (2026-09-01)  
+**ADR-011 Amendment Status:** `PROPOSED — PENDING ROLE-SEPARATED REVIEW / PRODUCT OWNER APPROVAL`  
+**Date:** 2026-09-04  
 **Baseline:** `EAAF v1.2.0 @ 7e036f43240b3dc28ccb996e350263598275b2cd`  
 **Supersedes:** `TECH_STACK_DECISIONS.md v1.1`  
 
@@ -14,12 +15,14 @@
 | Capa / Componente | Tecnología Seleccionada | Justificación Arquitectónica |
 |---|---|---|
 | **Cloud Web Presentation** | Next.js / React (TypeScript) en Vercel | Renderizado híbrido SSR/SSG para portal administrativo y optimización global de assets estáticos. |
-| **Cloud Backend & Sync** | Node.js / TypeScript (Express / Fastify) en Render | Ejecución del Monolito Modular con tipado estricto compartido y soporte para workers en segundo plano. |
+| **Cloud Backend & Sync** | Node.js (Node 24 LTS, ADR-011) / TypeScript (Express / Fastify) en Render | Ejecución del Monolito Modular con tipado estricto compartido y soporte para workers en segundo plano. |
 | **Base de Datos Central** | PostgreSQL multi-tenant en Supabase | Integridad transaccional ACID, soporte de Row-Level Security (RLS) y notificaciones `LISTEN / NOTIFY` para el outbox. |
-| **Edge Host Runtime** | Electron / Node.js (TypeScript) — *Baseline Actual* | Ecosistema probado para drivers de periféricos (ESC/POS, serial, básculas), reutilización 100% de tipos TypeScript con Cloud. |
+| **Edge Host Runtime** | Electron / Node.js (TypeScript) — *Baseline Actual* | Ecosistema probado para drivers de periféricos (ESC/POS, serial, básculas), reutilización 100% de tipos TypeScript con Cloud. Runtime embebido gobernado por Electron (`ADR-011`). |
 | **Base de Datos en Borde** | SQLite 3 (Modo WAL) | Motor embebido de cero administración con transacciones ACID y lecturas concurrentes sin bloqueo. |
 | **Comunicaciones LAN** | HTTP REST (Comandos) + WebSockets `ws` (Push) | Mínima sobrecarga de red y actualización en tiempo real de pantallas KDS y comanderos. |
 | **Monitoreo & Telemetría** | Sentry Cloud + Buffer Local Offline | Trazabilidad de excepciones, detección de degradación en sincronización y monitoreo de periféricos. |
+
+*Nota de Gobernanza de Runtime (ADR-011 / ACR-2026-004):* El toolchain del monorepo y el Cloud Backend adoptan formalmente Node.js 24 LTS como baseline activo, prohibiendo el uso de versiones upstream EOL. El runtime embebido en el Edge Host se gobierna por la versión de Electron seleccionada.
 
 ---
 
@@ -52,4 +55,6 @@ Se evaluó la selección del runtime para el Edge Server en sucursal entre **Ele
 
 ---
 
-DOCUMENT STATUS: APPROVED / FROZEN — 2026-09-01
+DOCUMENT STATUS:
+- Canonical Baseline v1.3: APPROVED / FROZEN — 2026-09-01
+- ADR-011 Proposed Amendment: PROPOSED — PENDING ROLE-SEPARATED REVIEW & PRODUCT OWNER APPROVAL
