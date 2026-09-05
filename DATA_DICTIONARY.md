@@ -36,9 +36,9 @@
 | `stations` | `is_authorized` | BOOLEAN | NO | Internal | Estado de autorización del dispositivo para operar en la red local/Cloud. |
 | `audit_log_events` | `id` | UUID | NO | Internal | Identificador único del evento de auditoría. Inmutable, append-only. |
 | `audit_log_events` | `organization_id` | UUID | NO | Internal | Identificador del Tenant propietario. Clave de partición lógica en RLS (`current_app_org_id()`). |
-| `audit_log_events` | `branch_id` | UUID | SÍ | Internal | Sucursal donde ocurrió el evento (NULL para eventos corporativos). Clave foránea `(organization_id, branch_id)`. |
-| `audit_log_events` | `actor_id` | UUID | SÍ | Internal | Usuario autor del evento (NULL si fue automatizado por sistema). Clave foránea `(organization_id, actor_id)`. |
-| `audit_log_events` | `station_id` | UUID | SÍ | Internal | Estación origen. Clave foránea `(organization_id, branch_id, station_id)`. |
+| `audit_log_events` | `branch_id` | UUID | SÍ | Internal | Sucursal donde ocurrió el evento (NULL para eventos corporativos). Clave foránea `(organization_id, branch_id)` con `ON DELETE SET NULL (branch_id)` preservando `organization_id`. |
+| `audit_log_events` | `actor_id` | UUID | SÍ | Internal | Usuario autor del evento (NULL si fue automatizado por sistema). Clave foránea `(organization_id, actor_id)` con `ON DELETE SET NULL (actor_id)` preservando `organization_id`. |
+| `audit_log_events` | `station_id` | UUID | SÍ | Internal | Estación origen. Clave foránea `(organization_id, branch_id, station_id)` con `ON DELETE SET NULL (station_id)` preservando `organization_id` y `branch_id`. |
 | `audit_log_events` | `event_type` | VARCHAR(100) | NO | Internal | Tipo canónico de evento (ej. 'auth.login.success', 'order.cancelled', 'audit.checkpoint.created'). |
 | `audit_log_events` | `severity` | VARCHAR(20) | NO | Internal | Severidad operativa ('INFO', 'WARN', 'ERROR', 'CRITICAL'). |
 | `audit_log_events` | `action` | VARCHAR(100) | NO | Internal | Acción ejecutada (ej. 'CREATE', 'UPDATE', 'CANCEL', 'AUTHORIZE'). |
@@ -54,9 +54,9 @@
 | `audit_log_events` | `metadata` | JSONB | NO | Confidential | Metadatos estructurados sanitizados previamente. Credenciales censuradas y PII enmascarada. Retención: `PROVISIONAL RETENTION — LEGAL/PRIVACY VALIDATION REQUIRED (SEC-VAL-11)`. |
 | `security_telemetry_events`| `id` | UUID | NO | Internal | Identificador único del evento de detección de telemetría de seguridad. Append-only. |
 | `security_telemetry_events`| `organization_id` | UUID | NO | Internal | Identificador del Tenant propietario (RLS). |
-| `security_telemetry_events`| `branch_id` | UUID | SÍ | Internal | Sucursal involucrada en la detección. Clave foránea `(organization_id, branch_id)`. |
-| `security_telemetry_events`| `station_id` | UUID | SÍ | Internal | Estación asociada a la alerta. Clave foránea `(organization_id, branch_id, station_id)`. |
-| `security_telemetry_events`| `actor_id` | UUID | SÍ | Internal | Usuario asociado a la alerta. Clave foránea `(organization_id, actor_id)`. |
+| `security_telemetry_events`| `branch_id` | UUID | SÍ | Internal | Sucursal involucrada en la detección. Clave foránea `(organization_id, branch_id)` con `ON DELETE SET NULL (branch_id)` preservando `organization_id`. |
+| `security_telemetry_events`| `station_id` | UUID | SÍ | Internal | Estación asociada a la alerta. Clave foránea `(organization_id, branch_id, station_id)` con `ON DELETE SET NULL (station_id)` preservando `organization_id` y `branch_id`. |
+| `security_telemetry_events`| `actor_id` | UUID | SÍ | Internal | Usuario asociado a la alerta. Clave foránea `(organization_id, actor_id)` con `ON DELETE SET NULL (actor_id)` preservando `organization_id`. |
 | `security_telemetry_events`| `rule_code` | VARCHAR(100) | NO | Internal | Código de regla de seguridad ('PIN_BRUTE_FORCE', 'LEASE_REVOKED_ACCESS', 'AUDIT_HASH_CHAIN_BREAK', etc.). |
 | `security_telemetry_events`| `severity` | VARCHAR(20) | NO | Internal | Nivel de severidad ('LOW', 'MEDIUM', 'HIGH', 'CRITICAL'). |
 | `security_telemetry_events`| `category` | VARCHAR(50) | NO | Internal | Categoría ('AUTHENTICATION', 'AUTHORIZATION', 'INTEGRITY', 'NETWORK', 'TIMING'). |

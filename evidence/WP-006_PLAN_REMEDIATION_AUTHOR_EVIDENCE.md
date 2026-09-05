@@ -42,6 +42,7 @@ This transaction executes purely architectural and plan remediation. Zero applic
 | **Multi-Tenant Relational Integrity** | Missing tenant-safe composite foreign keys on audit/telemetry tables. | Formalized composite foreign keys referencing `(organization_id, id)` on `branches`, `users`, and `stations`. Both tables enforce `ENABLE + FORCE ROW LEVEL SECURITY` with `current_app_org_id()`. |
 | **Cryptographic Hash & Checkpoint Contract** | Serialization and hashing parameters left unspecified. | RFC 8785 deterministic JSON canonicalization / sorted keys, standard SHA-256 (64-char hex), strictly monotonic `sequence_number`, genesis constant (64 zeroes), `audit.checkpoint.created` format, and quarantine on chain breaks. |
 | **Automatic Pre-Persistence Redaction** | Timing and depth of redaction ambiguous. | Rule: `REDACT BEFORE ANY EXTERNAL SINK`. Recursive, case-insensitive redaction of credentials (`password`, `pin`, `pin_hash`, `token`, `secret`, `authorization`, `credit_card`, `cvv`, `private_key`) and PII masking (`u***@domain.com`, `******1234`) strictly executed before database persistence or observability emission. |
+| **Multi-Column FK Delete Semantics (R2)** | Unqualified `ON DELETE SET NULL` risked attempting to NULL `organization_id NOT NULL`. | PostgreSQL 16 column-specific `ON DELETE SET NULL`: `(branch_id)` on branch FK, `(actor_id)` on user FK, and `(station_id)` on station FK. `ON DELETE CASCADE` strictly prohibited. Preserves `organization_id NOT NULL`, tenant provenance, and append-only audit history. Added integration test criteria A-F. |
 
 ---
 
@@ -59,7 +60,7 @@ This transaction executes purely architectural and plan remediation. Zero applic
 
 ## 5. Author Conclusion & Hand-Off
 
-All SSOT contradictions, data object omissions, and plan ambiguities for `WP-006` have been remediated with zero implementation code.
+All SSOT contradictions, data object omissions, plan ambiguities, and multi-column foreign key delete semantics for `WP-006` have been remediated with zero implementation code.
 
 **Author Verdict:**  
-`READY FOR ROLE-SEPARATED BASELINE REVIEW`
+`READY FOR ROLE-SEPARATED BASELINE REVIEW R2`

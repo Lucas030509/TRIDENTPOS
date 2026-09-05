@@ -167,6 +167,13 @@ Para cumplir con `DATA_PROTECTION_AND_PRIVACY.md` Sec. 3:
    - Cláusulas `USING (organization_id = current_app_org_id())` y `WITH CHECK (organization_id = current_app_org_id())`.
    - Default Deny garantizado cuando `app.current_organization_id` no está inicializada o es nula.
    - Claves foráneas compuestas con `(organization_id, id)` en sucursales, usuarios y estaciones para impedir colisiones o suplantaciones cruzadas entre inquilinos.
+4. **Semántica de Eliminación en Claves Foráneas Compuestas (Multi-Column FK Delete Semantics):**
+   - Prohibición estricta de `ON DELETE CASCADE`: La eliminación de una entidad principal jamás debe borrar en cascada la evidencia forense ni registros de auditoría.
+   - Preservación de `organization_id NOT NULL`: Para evitar violaciones de no-nulabilidad e intentos de anular la identidad del tenant, se exige la sintaxis específica de PostgreSQL 16:
+     - `ON DELETE SET NULL (branch_id)` para sucursales.
+     - `ON DELETE SET NULL (actor_id)` para usuarios / actores.
+     - `ON DELETE SET NULL (station_id)` para terminales / estaciones.
+   - Esto preserva la procedencia del tenant (`organization_id`), la inmutabilidad histórica del registro y su utilidad forense.
 
 ---
 

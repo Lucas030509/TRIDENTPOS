@@ -81,9 +81,9 @@ Repository SSOT prevails over narrative planning assumptions.
       CONSTRAINT uq_audit_log_events_org_id UNIQUE (organization_id, id),
       CONSTRAINT uq_audit_log_events_seq UNIQUE NULLS NOT DISTINCT (organization_id, branch_id, sequence_number),
       CONSTRAINT uq_audit_log_events_hash UNIQUE (organization_id, record_hash),
-      CONSTRAINT fk_audit_log_events_branch FOREIGN KEY (organization_id, branch_id) REFERENCES branches(organization_id, id) ON DELETE SET NULL,
-      CONSTRAINT fk_audit_log_events_actor FOREIGN KEY (organization_id, actor_id) REFERENCES users(organization_id, id) ON DELETE SET NULL,
-      CONSTRAINT fk_audit_log_events_station FOREIGN KEY (organization_id, branch_id, station_id) REFERENCES stations(organization_id, branch_id, id) ON DELETE SET NULL
+      CONSTRAINT fk_audit_log_events_branch FOREIGN KEY (organization_id, branch_id) REFERENCES branches(organization_id, id) ON DELETE SET NULL (branch_id),
+      CONSTRAINT fk_audit_log_events_actor FOREIGN KEY (organization_id, actor_id) REFERENCES users(organization_id, id) ON DELETE SET NULL (actor_id),
+      CONSTRAINT fk_audit_log_events_station FOREIGN KEY (organization_id, branch_id, station_id) REFERENCES stations(organization_id, branch_id, id) ON DELETE SET NULL (station_id)
   );
   ```
 
@@ -111,9 +111,9 @@ Repository SSOT prevails over narrative planning assumptions.
       timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       CONSTRAINT uq_sec_telemetry_org_id UNIQUE (organization_id, id),
-      CONSTRAINT fk_sec_telemetry_branch FOREIGN KEY (organization_id, branch_id) REFERENCES branches(organization_id, id) ON DELETE SET NULL,
-      CONSTRAINT fk_sec_telemetry_actor FOREIGN KEY (organization_id, actor_id) REFERENCES users(organization_id, id) ON DELETE SET NULL,
-      CONSTRAINT fk_sec_telemetry_station FOREIGN KEY (organization_id, branch_id, station_id) REFERENCES stations(organization_id, branch_id, id) ON DELETE SET NULL
+      CONSTRAINT fk_sec_telemetry_branch FOREIGN KEY (organization_id, branch_id) REFERENCES branches(organization_id, id) ON DELETE SET NULL (branch_id),
+      CONSTRAINT fk_sec_telemetry_actor FOREIGN KEY (organization_id, actor_id) REFERENCES users(organization_id, id) ON DELETE SET NULL (actor_id),
+      CONSTRAINT fk_sec_telemetry_station FOREIGN KEY (organization_id, branch_id, station_id) REFERENCES stations(organization_id, branch_id, id) ON DELETE SET NULL (station_id)
   );
   ```
 
@@ -186,18 +186,39 @@ In conformance with `DATA_PROTECTION_AND_PRIVACY.md` Sec. 3:
 All 9 Product Owner decisions (`OQ-SSOT-01` through `OQ-SSOT-07`, `OQ-ARCH-01`, `OQ-ARCH-02`) remain strictly `PENDING PO DECISION`.
 `WP-006` has zero PO dependency: the structured audit framework supports arbitrary event types associated with future business behaviors without deciding or committing those behaviors.
 
+### 3.9 Multi-Column Foreign Key Delete Semantics & Historical Integrity (Remediation R2)
+- **Defect in Prior Author Subject (`A1`):** Multi-column foreign keys on `audit_log_events` and `security_telemetry_events` referenced composite unique keys `(organization_id, id)` with unqualified `ON DELETE SET NULL`. Because `organization_id UUID NOT NULL`, unqualified `SET NULL` attempts to set all composite FK columns to NULL upon parent row deletion, violating the NOT NULL constraint on `organization_id` and threatening tenant identity.
+- **Architectural Decision (PostgreSQL 16 Column-Specific SET NULL):**
+  - Branch reference: `ON DELETE SET NULL (branch_id)`
+  - Actor reference: `ON DELETE SET NULL (actor_id)`
+  - Station reference: `ON DELETE SET NULL (station_id)`
+- **Prohibition of `ON DELETE CASCADE`:** Deleting a parent branch, user, or station entity must NEVER cascade-delete audit trail or security telemetry rows.
+- **Invariants Preserved:**
+  1. `organization_id NOT NULL` is unconditionally preserved.
+  2. Tenant provenance remains immutable under all referential actions.
+  3. Historical audit records remain intact and append-only.
+  4. Forensic usefulness is maximized (e.g., decommissioned stations retain branch provenance).
+  5. Fully valid DDL supported natively by PostgreSQL 16.
+- **Objective Acceptance Criteria Added to Plan:**
+  - A: Deleting a referenced branch does NOT attempt to NULL `organization_id`.
+  - B: Deleting / deactivating a referenced user follows actor-history policy without changing `organization_id`.
+  - C: Deleting a station follows station-history policy without changing `organization_id`.
+  - D: Audit records themselves are NOT cascade-deleted.
+  - E: Tenant provenance remains unchanged.
+  - F: DDL executes successfully on PostgreSQL 16.
+
 ---
 
 ## 4. Summary of Document Changes
 
 | Document | Nature of Change | Justification |
 |---|---|---|
-| `IMPLEMENTATION_PLAN.md` | Updated `WP-006` specification, dependencies, acceptance criteria, test cases, and staged `SEC-VAL-06A` / `SEC-VAL-06` mapping. Added `stations`, `audit_log_events`, and `security_telemetry_events` to Platform Core summary. | Eliminates missing section citations, defines exact deliverables and test cases, prevents false PASS on `SEC-VAL-06`. |
-| `DATA_MODEL.md` | Added composite unique constraints on `stations`, defined full DDL for `audit_log_events` and `security_telemetry_events`, append-only triggers, RLS policies, and indexes. | Resolves Contradiction A; establishes tenant-safe schema before builder activation. |
-| `DATA_DICTIONARY.md` | Added attribute-level dictionary entries for `stations`, `audit_log_events`, and `security_telemetry_events` in Section 1.1. | Aligns data dictionary with data model. |
-| `SECURITY_LOGGING_AND_MONITORING.md` | Added Section 3 defining the Cloud vs Edge split, structured logger interfaces, SHA-256 hash chaining, checkpoint format, redaction rules, and append-only model. | Resolves Contradiction B; creates the missing frozen specification for WP-006. |
+| `IMPLEMENTATION_PLAN.md` | Updated `WP-006` specification, dependencies, acceptance criteria, test cases, and staged `SEC-VAL-06A` / `SEC-VAL-06` mapping. Added `stations`, `audit_log_events`, and `security_telemetry_events` to Platform Core summary. Added integration test criteria for column-specific FK delete semantics. | Eliminates missing section citations, defines exact deliverables and test cases, prevents false PASS on `SEC-VAL-06`, verifies column-specific SET NULL. |
+| `DATA_MODEL.md` | Added composite unique constraints on `stations`, defined full DDL for `audit_log_events` and `security_telemetry_events`, append-only triggers, RLS policies, and indexes. Formalized column-specific `ON DELETE SET NULL (branch_id)`, `(actor_id)`, `(station_id)`. | Resolves Contradiction A and multi-column FK delete defect; establishes tenant-safe schema before builder activation. |
+| `DATA_DICTIONARY.md` | Added attribute-level dictionary entries for `stations`, `audit_log_events`, and `security_telemetry_events` in Section 1.1 with explicit delete semantics notes. | Aligns data dictionary with data model. |
+| `SECURITY_LOGGING_AND_MONITORING.md` | Added Section 3 defining the Cloud vs Edge split, structured logger interfaces, SHA-256 hash chaining, checkpoint format, redaction rules, append-only model, and multi-column FK delete semantics. | Resolves Contradiction B; creates the missing frozen specification for WP-006. |
 | `SECURITY_RISKS.md` | Clarified staged validation for `SEC-06` (`SEC-VAL-06A` in Cloud WP-006 vs `SEC-VAL-06` in Sync WP-013). | Aligns risk matrix with staged validation framework. |
-| `evidence/WP-006_PLAN_REMEDIATION_AUTHOR_EVIDENCE.md` | Author evidence documenting remediation decisions, baseline preservation, and review readiness. | Required EAAF author evidence artifact. |
+| `evidence/WP-006_PLAN_REMEDIATION_AUTHOR_EVIDENCE.md` | Author evidence documenting remediation decisions, baseline preservation, and review readiness for R2. | Required EAAF author evidence artifact. |
 
 ---
 
@@ -210,5 +231,5 @@ If rejected by baseline reviewers, the repository can be cleanly restored to can
 ## 6. Required Independent Reviews
 
 This Change Request requires dual role-separated EAAF agent reviews:
-1. `03_Data_Architect` — Data Architecture Conformance Review (`review/wp-006-plan-data-r1`)
-2. `08_Security_Architect` — Security Conformance Review (`review/wp-006-plan-security-r1`)
+1. `03_Data_Architect` — Data Architecture Conformance Review R2 (`review/wp-006-plan-data-r2`)
+2. `08_Security_Architect` — Security Conformance Review R2 (`review/wp-006-plan-security-r2`)

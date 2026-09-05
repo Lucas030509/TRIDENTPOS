@@ -292,6 +292,7 @@ Foundational domain models, Multi-Tenant RLS isolation, IAM, and audit logging.
   6. Each audit event chains the SHA-256 hash of the previous record for the stream; genesis record uses 64 zeroes; sequence numbers are strictly monotonic.
   7. Cloud checkpoint verification primitives validate contiguous incoming chain segments and flag/quarantine broken hash chains with `AUDIT_HASH_CHAIN_BREAK` telemetry.
   8. Security telemetry interface (`logSecurityTelemetryEvent()`) persists security policy default violations without pulling forward future detection engines.
+  9. Multi-column foreign keys on `audit_log_events` and `security_telemetry_events` enforce column-specific `ON DELETE SET NULL`: `ON DELETE SET NULL (branch_id)` for branch references, `ON DELETE SET NULL (actor_id)` for user references, and `ON DELETE SET NULL (station_id)` for station references. Deleting a parent branch, user, or station never attempts to NULL `organization_id`, preserves `organization_id NOT NULL`, maintains tenant provenance, and never cascade-deletes audit records.
 * **Tests:**
   1. Negative test attempting `UPDATE` on `audit_log_events` (must fail with append-only exception).
   2. Negative test attempting `DELETE` on `audit_log_events` (must fail with append-only exception).
@@ -300,6 +301,11 @@ Foundational domain models, Multi-Tenant RLS isolation, IAM, and audit logging.
   5. SHA-256 hash-chain continuity test verifying deterministic serialization, correct previous hash chaining, and detection of payload tampering.
   6. Recursive redaction test verifying prohibited credentials and PII masking across deeply nested metadata objects prior to persistence and logging.
   7. Cloud checkpoint verification test confirming valid chain acceptance and quarantine of broken/discontinuous sequence batches.
+  8. PostgreSQL integration test verifying that deleting a referenced branch sets `branch_id` to NULL without attempting to NULL `organization_id` or deleting the audit record.
+  9. PostgreSQL integration test verifying that deleting/deactivating a referenced user sets `actor_id` to NULL without changing `organization_id` or deleting the audit record.
+  10. PostgreSQL integration test verifying that deleting a station sets `station_id` to NULL without changing `organization_id` or `branch_id` or deleting the audit record.
+  11. PostgreSQL integration test proving audit records are NOT cascade-deleted and tenant provenance remains unchanged.
+  12. PostgreSQL 16 DDL execution test confirming all foreign keys with column-specific `ON DELETE SET NULL` execute cleanly.
 * **Security Debt:** Staged validation: `SEC-VAL-06A` (Cloud audit integrity, append-only triggers, RLS isolation & pre-persistence redaction) verified in `WP-006`. Canonical `SEC-VAL-06` (Tamper-Evident Audit & SQLite Hash Chain with direct Edge SQLite DB alteration simulation during sync) remains `OPEN` and owned by `WP-013` / `WP-008`.
 * **Evidence Required:** Test run outputs for append-only triggers, RLS tenant isolation, SHA-256 hash chain verification, and redaction verification; `EVIDENCE_SEC_VAL_06A_CLOUD_AUDIT_INTEGRITY.md`.
 * **Rollback:** Forward-fix schema trigger / drop added tables.
