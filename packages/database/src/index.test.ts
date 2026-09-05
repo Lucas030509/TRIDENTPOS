@@ -16,7 +16,12 @@ import {
   rotateBranchPinCredential,
   revokeBranchPinCredential,
 } from './iam.js';
-import { ARGON2ID_FROZEN_BASELINE } from '@trident/core';
+import { createAuditLogger } from './audit.js';
+import {
+  ARGON2ID_FROZEN_BASELINE,
+  GENESIS_PREVIOUS_RECORD_HASH,
+  REDACTED_MARKER,
+} from '@trident/core';
 
 describe('TRIDENTPOS WP-003 PostgreSQL Migration Engine Integration Suite', () => {
   const pool = getPool();
@@ -1106,6 +1111,20 @@ describe('TRIDENTPOS WP-005 Cloud IAM & Administrative Authentication Suite', ()
   const wp004Id = '20260904170000';
   const wp005Id = '20260904180000';
 
+  const wp005SuiteDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wp005-suite-'));
+  fs.copyFileSync(
+    path.join(DEFAULT_MIGRATIONS_DIR, `${baselineId}_baseline_infrastructure.sql`),
+    path.join(wp005SuiteDir, `${baselineId}_baseline_infrastructure.sql`),
+  );
+  fs.copyFileSync(
+    path.join(DEFAULT_MIGRATIONS_DIR, `${wp004Id}_tenant_rls_foundation.sql`),
+    path.join(wp005SuiteDir, `${wp004Id}_tenant_rls_foundation.sql`),
+  );
+  fs.copyFileSync(
+    path.join(DEFAULT_MIGRATIONS_DIR, `${wp005Id}_cloud_iam_auth.sql`),
+    path.join(wp005SuiteDir, `${wp005Id}_cloud_iam_auth.sql`),
+  );
+
   const tenantAId = '11111111-1111-1111-1111-111111111111';
   const tenantBId = '22222222-2222-2222-2222-222222222222';
   const branchA1Id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
@@ -1281,8 +1300,8 @@ describe('TRIDENTPOS WP-005 Cloud IAM & Administrative Authentication Suite', ()
         $$;
         CREATE ROLE ${testRole} NOSUPERUSER NOBYPASSRLS NOINHERIT;
       `);
-      // Apply all migrations up to WP-005 on DEFAULT_MIGRATIONS_DIR
-      await migrateUp(pool);
+      // Apply all migrations up to WP-005 on wp005SuiteDir
+      await migrateUp(pool, { migrationsDir: wp005SuiteDir });
 
       // Grant least-privilege permissions to test role (DML only, no TRUNCATE/REFERENCES/TRIGGER)
       await client.query(`
@@ -1312,12 +1331,12 @@ describe('TRIDENTPOS WP-005 Cloud IAM & Administrative Authentication Suite', ()
       `);
     } finally {
       client.release();
-      await closePool(pool);
+      fs.rmSync(wp005SuiteDir, { recursive: true, force: true });
     }
   });
 
   it('WP005-T01: WP-005 migration applies after canonical WP-004', async () => {
-    const statuses = await getMigrationStatus(pool);
+    const statuses = await getMigrationStatus(pool, { migrationsDir: wp005SuiteDir });
     const appliedIds = statuses.filter((s) => s.applied).map((s) => s.id);
     assert.ok(appliedIds.includes(baselineId), 'WP-003 baseline must be applied');
     assert.ok(appliedIds.includes(wp004Id), 'WP-004 foundation must be applied');
@@ -2076,19 +2095,22 @@ describe('TRIDENTPOS WP-005 Cloud IAM & Administrative Authentication Suite', ()
       client.release();
     }
 
-    const upRes = await migrateUp(pool);
+    const upRes = await migrateUp(pool, { migrationsDir: wp005SuiteDir });
     assert.equal(upRes.alreadyUpToDate, false);
     assert.ok(upRes.applied.includes(`${baselineId}_baseline_infrastructure`));
     assert.ok(upRes.applied.includes(`${wp004Id}_tenant_rls_foundation`));
     assert.ok(upRes.applied.includes(`${wp005Id}_cloud_iam_auth`));
 
-    const status = await getMigrationStatus(pool);
+    const status = await getMigrationStatus(pool, { migrationsDir: wp005SuiteDir });
     assert.equal(status.length, 3);
     assert.ok(status.every((s) => s.applied && s.checksumMatches));
   });
 
   it('WP005-T45: controlled non-production WP-005 down returns to WP-004 state', async () => {
-    const downResult = await migrateDown(pool, { allowDestructiveDown: true });
+    const downResult = await migrateDown(pool, {
+      migrationsDir: wp005SuiteDir,
+      allowDestructiveDown: true,
+    });
     assert.equal(downResult.reverted, `${wp005Id}_cloud_iam_auth`);
 
     // Verify WP-005 tables are dropped
@@ -2108,7 +2130,7 @@ describe('TRIDENTPOS WP-005 Cloud IAM & Administrative Authentication Suite', ()
 
   it('WP005-T46: up → down → up succeeds', async () => {
     // Re-apply WP-005
-    const upRes = await migrateUp(pool);
+    const upRes = await migrateUp(pool, { migrationsDir: wp005SuiteDir });
     assert.ok(upRes.applied.includes(`${wp005Id}_cloud_iam_auth`));
 
     // Verify WP-005 tables exist again
@@ -2140,5 +2162,1070 @@ describe('TRIDENTPOS WP-005 Cloud IAM & Administrative Authentication Suite', ()
 
     assert.equal(ledger.rows[0]?.checksum, expectedBaselineChecksum);
     assert.equal(ledger.rows[1]?.checksum, expectedWp004Checksum);
+  });
+});
+
+describe('TRIDENTPOS WP-006 Tamper-Evident Security Logging & Cloud Audit Trail Suite', () => {
+  const pool = getPool();
+  const testRole = 'trident_test_app';
+  const baselineId = '20260904160000';
+  const wp004Id = '20260904170000';
+  const wp005Id = '20260904180000';
+  const wp006Id = '20260904190000';
+
+  const tenantAId = '11111111-1111-1111-1111-111111111111';
+  const tenantBId = '22222222-2222-2222-2222-222222222222';
+  const branchA1Id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+  const branchA2Id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa02';
+  const branchB1Id = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
+
+  const userA1Id = '9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d';
+  const userB1Id = '9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6f';
+
+  const stationA1Id = '55555555-5555-5555-5555-555555555551';
+  const stationA2Id = '55555555-5555-5555-5555-555555555552';
+  const stationB1Id = '55555555-5555-5555-5555-555555555553';
+
+  async function asTestRole<T>(fn: (client: pg.PoolClient) => Promise<T>): Promise<T> {
+    const client = await pool.connect();
+    try {
+      await client.query(`SET ROLE ${testRole};`);
+      return await fn(client);
+    } finally {
+      try {
+        await client.query('ROLLBACK;');
+      } catch {
+        // Rollback safety
+      }
+      try {
+        await client.query('RESET ROLE;');
+      } catch {
+        // Reset role safety
+      }
+      client.release();
+    }
+  }
+
+  async function seedWp006Data(): Promise<void> {
+    const client = await pool.connect();
+    try {
+      await client.query(`
+        INSERT INTO organizations (id, legal_name, trade_name, tax_id)
+        VALUES
+          ('${tenantAId}', 'Tenant A Legal Name', 'Tenant A Trade', 'TAX-ORG-A'),
+          ('${tenantBId}', 'Tenant B Legal Name', 'Tenant B Trade', 'TAX-ORG-B')
+        ON CONFLICT (id) DO NOTHING;
+
+        INSERT INTO branches (id, organization_id, code, name)
+        VALUES
+          ('${branchA1Id}', '${tenantAId}', 'BR-A1', 'Branch A Primary'),
+          ('${branchA2Id}', '${tenantAId}', 'BR-A2', 'Branch A Secondary'),
+          ('${branchB1Id}', '${tenantBId}', 'BR-B1', 'Branch B Primary')
+        ON CONFLICT (id) DO NOTHING;
+
+        INSERT INTO users (id, organization_id, email, full_name, is_active)
+        VALUES
+          ('${userA1Id}', '${tenantAId}', 'admin@tenant-a.com', 'Admin Tenant A', TRUE),
+          ('${userB1Id}', '${tenantBId}', 'admin@tenant-b.com', 'Admin Tenant B', TRUE)
+        ON CONFLICT (id) DO NOTHING;
+
+        INSERT INTO stations (id, organization_id, branch_id, code, station_type, is_authorized)
+        VALUES
+          ('${stationA1Id}', '${tenantAId}', '${branchA1Id}', 'POS-01', 'POS', TRUE),
+          ('${stationA2Id}', '${tenantAId}', '${branchA1Id}', 'KDS-01', 'KDS', TRUE),
+          ('${stationB1Id}', '${tenantBId}', '${branchB1Id}', 'POS-01', 'POS', TRUE)
+        ON CONFLICT (id) DO NOTHING;
+      `);
+    } finally {
+      client.release();
+    }
+  }
+
+  before(async () => {
+    const client = await pool.connect();
+    try {
+      await client.query(`
+        DROP TABLE IF EXISTS security_telemetry_events, audit_log_events, stations, user_branch_credentials, user_roles, roles, users, test_composite_ref, branches, organizations, _migrations CASCADE;
+        DROP EXTENSION IF EXISTS pgcrypto, "uuid-ossp" CASCADE;
+        DROP FUNCTION IF EXISTS current_app_org_id() CASCADE;
+        DROP FUNCTION IF EXISTS trg_audit_log_append_only() CASCADE;
+
+        DO $$
+        BEGIN
+          IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${testRole}') THEN
+            EXECUTE 'DROP OWNED BY ${testRole}';
+            EXECUTE 'DROP ROLE ${testRole}';
+          END IF;
+        END
+        $$;
+        CREATE ROLE ${testRole} NOSUPERUSER NOBYPASSRLS NOINHERIT;
+      `);
+
+      await migrateUp(pool);
+
+      await client.query(`
+        GRANT USAGE ON SCHEMA public TO ${testRole};
+        GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE organizations, branches, users, roles, user_roles, user_branch_credentials, stations TO ${testRole};
+        GRANT SELECT, INSERT ON TABLE audit_log_events, security_telemetry_events TO ${testRole};
+        GRANT EXECUTE ON FUNCTION current_app_org_id() TO ${testRole};
+      `);
+
+      await seedWp006Data();
+    } finally {
+      client.release();
+    }
+  });
+
+  after(async () => {
+    const client = await pool.connect();
+    try {
+      await client.query(`
+        DROP TABLE IF EXISTS security_telemetry_events, audit_log_events, stations, user_branch_credentials, user_roles, roles, users, test_composite_ref, branches, organizations CASCADE;
+        DELETE FROM _migrations WHERE id = '${wp006Id}';
+        DROP OWNED BY ${testRole};
+        DROP ROLE ${testRole};
+      `);
+    } finally {
+      client.release();
+      await closePool(pool);
+    }
+  });
+
+  it('WP006-T01: migration applies after canonical WP-005 migration', async () => {
+    const statuses = await getMigrationStatus(pool);
+    const appliedIds = statuses.filter((s) => s.applied).map((s) => s.id);
+    assert.ok(appliedIds.includes(baselineId));
+    assert.ok(appliedIds.includes(wp004Id));
+    assert.ok(appliedIds.includes(wp005Id));
+    assert.ok(appliedIds.includes(wp006Id), 'WP-006 migration must be applied');
+  });
+
+  it('WP006-T02: stations schema exact', async () => {
+    const cols = await pool.query<{ column_name: string; data_type: string; is_nullable: string }>(`
+      SELECT column_name, data_type, is_nullable
+      FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'stations'
+      ORDER BY ordinal_position;
+    `);
+    const colMap = new Map(cols.rows.map((r) => [r.column_name, r]));
+    assert.ok(colMap.has('id') && colMap.get('id')?.data_type === 'uuid');
+    assert.ok(colMap.has('organization_id') && colMap.get('organization_id')?.is_nullable === 'NO');
+    assert.ok(colMap.has('branch_id') && colMap.get('branch_id')?.is_nullable === 'NO');
+    assert.ok(colMap.has('code') && colMap.get('code')?.is_nullable === 'NO');
+    assert.ok(colMap.has('station_type') && colMap.get('station_type')?.is_nullable === 'NO');
+    assert.ok(
+      colMap.has('public_key_fingerprint') &&
+        colMap.get('public_key_fingerprint')?.is_nullable === 'YES',
+    );
+    assert.ok(colMap.has('is_authorized') && colMap.get('is_authorized')?.is_nullable === 'NO');
+
+    const constraints = await pool.query<{ conname: string }>(`
+      SELECT conname FROM pg_constraint
+      WHERE conrelid = 'stations'::regclass;
+    `);
+    const conNames = constraints.rows.map((r) => r.conname);
+    assert.ok(conNames.includes('uq_stations_org_branch_code'));
+    assert.ok(conNames.includes('uq_stations_org_branch_id'));
+    assert.ok(conNames.includes('uq_stations_org_id'));
+    assert.ok(conNames.includes('fk_stations_branch'));
+  });
+
+  it('WP006-T03: audit_log_events schema exact', async () => {
+    const cols = await pool.query<{ column_name: string; data_type: string; is_nullable: string }>(`
+      SELECT column_name, data_type, is_nullable
+      FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'audit_log_events';
+    `);
+    const colMap = new Map(cols.rows.map((r) => [r.column_name, r]));
+    const expected = [
+      'id',
+      'organization_id',
+      'branch_id',
+      'actor_id',
+      'station_id',
+      'event_type',
+      'severity',
+      'action',
+      'entity_name',
+      'entity_id',
+      'client_timestamp',
+      'server_timestamp',
+      'sequence_number',
+      'previous_record_hash',
+      'record_hash',
+      'source',
+      'request_id',
+      'metadata',
+      'created_at',
+    ];
+    for (const c of expected) {
+      assert.ok(colMap.has(c), `Column ${c} must exist in audit_log_events`);
+    }
+
+    const constraints = await pool.query<{ conname: string }>(`
+      SELECT conname FROM pg_constraint
+      WHERE conrelid = 'audit_log_events'::regclass;
+    `);
+    const conNames = constraints.rows.map((r) => r.conname);
+    assert.ok(conNames.includes('uq_audit_log_events_org_id'));
+    assert.ok(conNames.includes('uq_audit_log_events_seq'));
+    assert.ok(conNames.includes('uq_audit_log_events_hash'));
+    assert.ok(conNames.includes('fk_audit_log_events_branch'));
+    assert.ok(conNames.includes('fk_audit_log_events_actor'));
+    assert.ok(conNames.includes('fk_audit_log_events_station'));
+  });
+
+  it('WP006-T04: security_telemetry_events schema exact', async () => {
+    const cols = await pool.query<{ column_name: string; data_type: string; is_nullable: string }>(`
+      SELECT column_name, data_type, is_nullable
+      FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'security_telemetry_events';
+    `);
+    const colMap = new Map(cols.rows.map((r) => [r.column_name, r]));
+    const expected = [
+      'id',
+      'organization_id',
+      'branch_id',
+      'station_id',
+      'actor_id',
+      'rule_code',
+      'severity',
+      'category',
+      'details',
+      'action_taken',
+      'source',
+      'request_id',
+      'timestamp',
+      'created_at',
+    ];
+    for (const c of expected) {
+      assert.ok(colMap.has(c), `Column ${c} must exist in security_telemetry_events`);
+    }
+
+    const constraints = await pool.query<{ conname: string }>(`
+      SELECT conname FROM pg_constraint
+      WHERE conrelid = 'security_telemetry_events'::regclass;
+    `);
+    const conNames = constraints.rows.map((r) => r.conname);
+    assert.ok(conNames.includes('uq_sec_telemetry_org_id'));
+    assert.ok(conNames.includes('fk_sec_telemetry_branch'));
+    assert.ok(conNames.includes('fk_sec_telemetry_actor'));
+    assert.ok(conNames.includes('fk_sec_telemetry_station'));
+  });
+
+  it('WP006-T05: stations RLS enabled', async () => {
+    const res = await pool.query<{ rowsecurity: boolean }>(`
+      SELECT rowsecurity FROM pg_tables
+      WHERE schemaname = 'public' AND tablename = 'stations';
+    `);
+    assert.equal(res.rows[0]?.rowsecurity, true);
+  });
+
+  it('WP006-T06: stations FORCE RLS enabled', async () => {
+    const res = await pool.query<{ relforcerowsecurity: boolean }>(`
+      SELECT relforcerowsecurity FROM pg_class WHERE relname = 'stations';
+    `);
+    assert.equal(res.rows[0]?.relforcerowsecurity, true);
+  });
+
+  it('WP006-T07: audit RLS enabled + forced', async () => {
+    const res = await pool.query<{ relrowsecurity: boolean; relforcerowsecurity: boolean }>(`
+      SELECT relrowsecurity, relforcerowsecurity FROM pg_class WHERE relname = 'audit_log_events';
+    `);
+    assert.equal(res.rows[0]?.relrowsecurity, true);
+    assert.equal(res.rows[0]?.relforcerowsecurity, true);
+  });
+
+  it('WP006-T08: telemetry RLS enabled + forced', async () => {
+    const res = await pool.query<{ relrowsecurity: boolean; relforcerowsecurity: boolean }>(`
+      SELECT relrowsecurity, relforcerowsecurity FROM pg_class WHERE relname = 'security_telemetry_events';
+    `);
+    assert.equal(res.rows[0]?.relrowsecurity, true);
+    assert.equal(res.rows[0]?.relforcerowsecurity, true);
+  });
+
+  it('WP006-T09: no tenant context default-deny', async () => {
+    await asTestRole(async (client) => {
+      const resStations = await client.query('SELECT * FROM stations;');
+      assert.equal(resStations.rows.length, 0);
+
+      const resAudit = await client.query('SELECT * FROM audit_log_events;');
+      assert.equal(resAudit.rows.length, 0);
+
+      const resTelemetry = await client.query('SELECT * FROM security_telemetry_events;');
+      assert.equal(resTelemetry.rows.length, 0);
+    });
+  });
+
+  it('WP006-T10: Tenant A cannot read Tenant B stations', async () => {
+    await asTestRole(async (client) => {
+      await client.query('BEGIN;');
+      await setTenantContext(client, tenantAId);
+
+      const res = await client.query<{ id: string }>('SELECT id FROM stations;');
+      const ids = res.rows.map((r) => r.id);
+      assert.ok(ids.includes(stationA1Id));
+      assert.ok(ids.includes(stationA2Id));
+      assert.ok(!ids.includes(stationB1Id));
+    });
+  });
+
+  it('WP006-T11: Tenant A cannot write Tenant B stations', async () => {
+    await asTestRole(async (client) => {
+      await client.query('BEGIN;');
+      await setTenantContext(client, tenantAId);
+
+      await assert.rejects(
+        client.query(`
+          INSERT INTO stations (id, organization_id, branch_id, code, station_type)
+          VALUES ('55555555-5555-5555-5555-555555555599', '${tenantBId}', '${branchB1Id}', 'POS-X', 'POS');
+        `),
+        /row-level security/i,
+      );
+    });
+  });
+
+  it('WP006-T12: Tenant A cannot read Tenant B audit events', async () => {
+    const logger = createAuditLogger(pool);
+    // Seed an event for Tenant B
+    await logger.logAuditEvent({
+      organizationId: tenantBId,
+      branchId: branchB1Id,
+      eventType: 'test.b',
+      action: 'ACTION_B',
+      entityName: 'test',
+      source: 'CLOUD',
+    });
+
+    await asTestRole(async (client) => {
+      await client.query('BEGIN;');
+      await setTenantContext(client, tenantAId);
+
+      const res = await client.query<{ id: string; organization_id: string }>(
+        'SELECT id, organization_id FROM audit_log_events;',
+      );
+      for (const row of res.rows) {
+        assert.equal(row.organization_id, tenantAId);
+        assert.notEqual(row.organization_id, tenantBId);
+      }
+    });
+  });
+
+  it('WP006-T13: Tenant A cannot write Tenant B audit events', async () => {
+    await asTestRole(async (client) => {
+      await client.query('BEGIN;');
+      await setTenantContext(client, tenantAId);
+
+      await assert.rejects(
+        client.query(`
+          INSERT INTO audit_log_events (
+            organization_id, branch_id, event_type, action, entity_name,
+            sequence_number, previous_record_hash, record_hash
+          ) VALUES (
+            '${tenantBId}', '${branchB1Id}', 'test.malicious', 'MALICIOUS', 'test',
+            99, '${GENESIS_PREVIOUS_RECORD_HASH}', '${'0'.repeat(64)}'
+          );
+        `),
+        /row-level security/i,
+      );
+    });
+  });
+
+  it('WP006-T14: Tenant A cannot read Tenant B telemetry', async () => {
+    const logger = createAuditLogger(pool);
+    await logger.logSecurityTelemetryEvent({
+      organizationId: tenantBId,
+      branchId: branchB1Id,
+      ruleCode: 'RLS_VIOLATION_ATTEMPT',
+      severity: 'HIGH',
+      category: 'AUTHORIZATION',
+      details: { probe: 'test' },
+      actionTaken: 'BLOCK',
+      source: 'CLOUD',
+    });
+
+    await asTestRole(async (client) => {
+      await client.query('BEGIN;');
+      await setTenantContext(client, tenantAId);
+
+      const res = await client.query<{ id: string; organization_id: string }>(
+        'SELECT id, organization_id FROM security_telemetry_events;',
+      );
+      for (const row of res.rows) {
+        assert.equal(row.organization_id, tenantAId);
+        assert.notEqual(row.organization_id, tenantBId);
+      }
+    });
+  });
+
+  it('WP006-T15: Tenant A cannot write Tenant B telemetry', async () => {
+    await asTestRole(async (client) => {
+      await client.query('BEGIN;');
+      await setTenantContext(client, tenantAId);
+
+      await assert.rejects(
+        client.query(`
+          INSERT INTO security_telemetry_events (
+            organization_id, branch_id, rule_code, severity, category,
+            details, action_taken, source
+          ) VALUES (
+            '${tenantBId}', '${branchB1Id}', 'RLS_VIOLATION_ATTEMPT', 'CRITICAL', 'AUTHORIZATION',
+            '{}', 'BLOCK', 'CLOUD'
+          );
+        `),
+        /row-level security/i,
+      );
+    });
+  });
+
+  it('WP006-T16: cross-tenant branch reference rejected', async () => {
+    const client = await pool.connect();
+    try {
+      await assert.rejects(
+        client.query(`
+          INSERT INTO stations (organization_id, branch_id, code, station_type)
+          VALUES ('${tenantAId}', '${branchB1Id}', 'POS-CROSS', 'POS');
+        `),
+        /violates foreign key constraint/i,
+      );
+    } finally {
+      client.release();
+    }
+  });
+
+  it('WP006-T17: cross-tenant actor reference rejected', async () => {
+    const client = await pool.connect();
+    try {
+      await assert.rejects(
+        client.query(`
+          INSERT INTO audit_log_events (
+            organization_id, branch_id, actor_id, event_type, action, entity_name,
+            sequence_number, previous_record_hash, record_hash
+          ) VALUES (
+            '${tenantAId}', '${branchA1Id}', '${userB1Id}', 'auth.login', 'LOGIN', 'user',
+            999, '${GENESIS_PREVIOUS_RECORD_HASH}', '${'b'.repeat(64)}'
+          );
+        `),
+        /violates foreign key constraint/i,
+      );
+    } finally {
+      client.release();
+    }
+  });
+
+  it('WP006-T18: cross-tenant station reference rejected', async () => {
+    const client = await pool.connect();
+    try {
+      await assert.rejects(
+        client.query(`
+          INSERT INTO audit_log_events (
+            organization_id, branch_id, station_id, event_type, action, entity_name,
+            sequence_number, previous_record_hash, record_hash
+          ) VALUES (
+            '${tenantAId}', '${branchA1Id}', '${stationB1Id}', 'pos.order', 'CREATE', 'order',
+            998, '${GENESIS_PREVIOUS_RECORD_HASH}', '${'c'.repeat(64)}'
+          );
+        `),
+        /violates foreign key constraint/i,
+      );
+    } finally {
+      client.release();
+    }
+  });
+
+  it('WP006-T19: UPDATE audit_log_events rejected', async () => {
+    const client = await pool.connect();
+    try {
+      await assert.rejects(
+        client.query(`UPDATE audit_log_events SET action = 'MUTATED';`),
+        /Audit trail is append-only: UPDATE and DELETE operations are strictly prohibited/i,
+      );
+    } finally {
+      client.release();
+    }
+  });
+
+  it('WP006-T20: DELETE audit_log_events rejected', async () => {
+    const client = await pool.connect();
+    try {
+      await assert.rejects(
+        client.query(`DELETE FROM audit_log_events;`),
+        /Audit trail is append-only: UPDATE and DELETE operations are strictly prohibited/i,
+      );
+    } finally {
+      client.release();
+    }
+  });
+
+  it('WP006-T21: UPDATE security_telemetry_events rejected', async () => {
+    const client = await pool.connect();
+    try {
+      await assert.rejects(
+        client.query(`UPDATE security_telemetry_events SET action_taken = 'MUTATED';`),
+        /Audit trail is append-only: UPDATE and DELETE operations are strictly prohibited/i,
+      );
+    } finally {
+      client.release();
+    }
+  });
+
+  it('WP006-T22: DELETE security_telemetry_events rejected', async () => {
+    const client = await pool.connect();
+    try {
+      await assert.rejects(
+        client.query(`DELETE FROM security_telemetry_events;`),
+        /Audit trail is append-only: UPDATE and DELETE operations are strictly prohibited/i,
+      );
+    } finally {
+      client.release();
+    }
+  });
+
+  it('WP006-T23: application principal cannot TRUNCATE audit_log_events', async () => {
+    await asTestRole(async (client) => {
+      await assert.rejects(
+        client.query('TRUNCATE TABLE audit_log_events;'),
+        /permission denied for table audit_log_events/i,
+      );
+    });
+  });
+
+  it('WP006-T24: application principal cannot TRUNCATE security_telemetry_events', async () => {
+    await asTestRole(async (client) => {
+      await assert.rejects(
+        client.query('TRUNCATE TABLE security_telemetry_events;'),
+        /permission denied for table security_telemetry_events/i,
+      );
+    });
+  });
+
+  it('WP006-T25: audit parent FKs contain zero SET NULL semantics', async () => {
+    const res = await pool.query<{ constraint_name: string; delete_rule: string }>(`
+      SELECT constraint_name, delete_rule
+      FROM information_schema.referential_constraints
+      WHERE constraint_name IN (
+        'fk_audit_log_events_branch',
+        'fk_audit_log_events_actor',
+        'fk_audit_log_events_station',
+        'fk_sec_telemetry_branch',
+        'fk_sec_telemetry_actor',
+        'fk_sec_telemetry_station'
+      );
+    `);
+    assert.equal(res.rows.length, 6, 'Must inspect all 6 audit/telemetry FK constraints');
+    for (const r of res.rows) {
+      assert.notEqual(r.delete_rule, 'SET NULL', `${r.constraint_name} must NOT use SET NULL`);
+      assert.ok(
+        r.delete_rule === 'RESTRICT' || r.delete_rule === 'NO ACTION',
+        `${r.constraint_name} must use immutable RESTRICT/NO ACTION semantics`,
+      );
+    }
+  });
+
+  it('WP006-T26: audit parent FKs contain zero CASCADE semantics', async () => {
+    const res = await pool.query<{ constraint_name: string; delete_rule: string }>(`
+      SELECT constraint_name, delete_rule
+      FROM information_schema.referential_constraints
+      WHERE constraint_name IN (
+        'fk_audit_log_events_branch',
+        'fk_audit_log_events_actor',
+        'fk_audit_log_events_station',
+        'fk_sec_telemetry_branch',
+        'fk_sec_telemetry_actor',
+        'fk_sec_telemetry_station'
+      );
+    `);
+    for (const r of res.rows) {
+      assert.notEqual(r.delete_rule, 'CASCADE', `${r.constraint_name} must NOT use CASCADE`);
+    }
+  });
+
+  it('WP006-T27: referenced branch physical deletion rejected', async () => {
+    const logger = createAuditLogger(pool);
+    await logger.logAuditEvent({
+      organizationId: tenantAId,
+      branchId: branchA2Id,
+      eventType: 'branch.op',
+      action: 'TEST',
+      entityName: 'branch',
+      source: 'CLOUD',
+    });
+
+    const client = await pool.connect();
+    try {
+      await assert.rejects(
+        client.query(`DELETE FROM branches WHERE id = '${branchA2Id}';`),
+        /violates foreign key constraint "fk_audit_log_events_branch"/i,
+      );
+    } finally {
+      client.release();
+    }
+  });
+
+  it('WP006-T28: branch soft deactivation succeeds', async () => {
+    const client = await pool.connect();
+    try {
+      const res = await client.query(
+        `UPDATE branches SET is_active = false WHERE id = '${branchA2Id}' RETURNING is_active;`,
+      );
+      assert.equal(res.rows[0]?.is_active, false);
+    } finally {
+      client.release();
+    }
+  });
+
+  it('WP006-T29: audit event remains field-for-field unchanged after branch deactivation', async () => {
+    const client = await pool.connect();
+    try {
+      const res = await client.query<{
+        branch_id: string;
+        event_type: string;
+        action: string;
+        sequence_number: string;
+        previous_record_hash: string;
+        record_hash: string;
+      }>(`
+        SELECT branch_id, event_type, action, sequence_number, previous_record_hash, record_hash
+        FROM audit_log_events
+        WHERE organization_id = '${tenantAId}' AND branch_id = '${branchA2Id}'
+        ORDER BY sequence_number DESC LIMIT 1;
+      `);
+      assert.equal(res.rows[0]?.branch_id, branchA2Id);
+      assert.equal(res.rows[0]?.event_type, 'branch.op');
+      assert.equal(res.rows[0]?.action, 'TEST');
+    } finally {
+      client.release();
+    }
+  });
+
+  it('WP006-T30: referenced user physical deletion rejected', async () => {
+    const logger = createAuditLogger(pool);
+    await logger.logAuditEvent({
+      organizationId: tenantAId,
+      branchId: branchA1Id,
+      actorId: userA1Id,
+      eventType: 'user.op',
+      action: 'TEST',
+      entityName: 'user',
+      source: 'CLOUD',
+    });
+
+    const client = await pool.connect();
+    try {
+      await assert.rejects(
+        client.query(`DELETE FROM users WHERE id = '${userA1Id}';`),
+        /violates foreign key constraint "fk_audit_log_events_actor"/i,
+      );
+    } finally {
+      client.release();
+    }
+  });
+
+  it('WP006-T31: user soft deactivation succeeds', async () => {
+    const client = await pool.connect();
+    try {
+      const res = await client.query(
+        `UPDATE users SET is_active = false WHERE id = '${userA1Id}' RETURNING is_active;`,
+      );
+      assert.equal(res.rows[0]?.is_active, false);
+    } finally {
+      client.release();
+    }
+  });
+
+  it('WP006-T32: audit event remains unchanged after user deactivation', async () => {
+    const client = await pool.connect();
+    try {
+      const res = await client.query<{ actor_id: string; event_type: string }>(`
+        SELECT actor_id, event_type FROM audit_log_events
+        WHERE organization_id = '${tenantAId}' AND actor_id = '${userA1Id}'
+        LIMIT 1;
+      `);
+      assert.equal(res.rows[0]?.actor_id, userA1Id);
+      assert.equal(res.rows[0]?.event_type, 'user.op');
+    } finally {
+      client.release();
+    }
+  });
+
+  it('WP006-T33: referenced station physical deletion rejected', async () => {
+    const logger = createAuditLogger(pool);
+    await logger.logAuditEvent({
+      organizationId: tenantAId,
+      branchId: branchA1Id,
+      stationId: stationA2Id,
+      eventType: 'station.op',
+      action: 'TEST',
+      entityName: 'station',
+      source: 'CLOUD',
+    });
+
+    const client = await pool.connect();
+    try {
+      await assert.rejects(
+        client.query(`DELETE FROM stations WHERE id = '${stationA2Id}';`),
+        /violates foreign key constraint "fk_audit_log_events_station"/i,
+      );
+    } finally {
+      client.release();
+    }
+  });
+
+  it('WP006-T34: station soft deauthorization succeeds', async () => {
+    const client = await pool.connect();
+    try {
+      const res = await client.query(
+        `UPDATE stations SET is_authorized = false WHERE id = '${stationA2Id}' RETURNING is_authorized;`,
+      );
+      assert.equal(res.rows[0]?.is_authorized, false);
+    } finally {
+      client.release();
+    }
+  });
+
+  it('WP006-T35: audit event remains unchanged after station deauthorization', async () => {
+    const client = await pool.connect();
+    try {
+      const res = await client.query<{ station_id: string; event_type: string }>(`
+        SELECT station_id, event_type FROM audit_log_events
+        WHERE organization_id = '${tenantAId}' AND station_id = '${stationA2Id}'
+        LIMIT 1;
+      `);
+      assert.equal(res.rows[0]?.station_id, stationA2Id);
+      assert.equal(res.rows[0]?.event_type, 'station.op');
+    } finally {
+      client.release();
+    }
+  });
+
+  it('WP006-T36: no audit/telemetry row cascade-deleted', async () => {
+    const client = await pool.connect();
+    try {
+      const auditCount = await client.query<{ count: string }>(
+        'SELECT count(*) FROM audit_log_events;',
+      );
+      const telemetryCount = await client.query<{ count: string }>(
+        'SELECT count(*) FROM security_telemetry_events;',
+      );
+      assert.ok(parseInt(auditCount.rows[0]?.count || '0', 10) > 0);
+      assert.ok(parseInt(telemetryCount.rows[0]?.count || '0', 10) > 0);
+    } finally {
+      client.release();
+    }
+  });
+
+  it('WP006-T46: plaintext prohibited value never reaches persistence mock/test sink', async () => {
+    const logger = createAuditLogger(pool);
+    const eventId = await logger.logAuditEvent({
+      organizationId: tenantAId,
+      branchId: branchA1Id,
+      eventType: 'auth.attempt',
+      action: 'LOGIN',
+      entityName: 'auth',
+      source: 'CLOUD',
+      metadata: {
+        password: 'RawPasswordPlaintext!',
+        pin: '9876',
+        pin_hash: 'raw_hash_to_redact',
+        apiKey: 'secret_api_key_value',
+      },
+    });
+
+    const client = await pool.connect();
+    try {
+      const res = await client.query<{ metadata: Record<string, unknown> }>(
+        `SELECT metadata FROM audit_log_events WHERE id = $1;`,
+        [eventId],
+      );
+      const meta = res.rows[0]?.metadata || {};
+      assert.equal(meta['password'], REDACTED_MARKER);
+      assert.equal(meta['pin'], REDACTED_MARKER);
+      assert.equal(meta['pin_hash'], REDACTED_MARKER);
+      assert.equal(meta['apiKey'], REDACTED_MARKER);
+      const rawJson = JSON.stringify(meta);
+      assert.ok(!rawJson.includes('RawPasswordPlaintext!'));
+      assert.ok(!rawJson.includes('9876'));
+    } finally {
+      client.release();
+    }
+  });
+
+  it('WP006-T47: plaintext prohibited value never reaches observability test sink', async () => {
+    const logger = createAuditLogger(pool);
+    const telemetryId = await logger.logSecurityTelemetryEvent({
+      organizationId: tenantAId,
+      branchId: branchA1Id,
+      ruleCode: 'PIN_BRUTE_FORCE',
+      severity: 'HIGH',
+      category: 'AUTHENTICATION',
+      details: {
+        password: 'sensitive_input',
+        email: 'victim@customer.com',
+        phone: '+52 55 1234 5678',
+      },
+      actionTaken: 'STATION_TEMPORARY_BLOCK',
+      source: 'CLOUD',
+    });
+
+    const client = await pool.connect();
+    try {
+      const res = await client.query<{ details: Record<string, unknown> }>(
+        `SELECT details FROM security_telemetry_events WHERE id = $1;`,
+        [telemetryId],
+      );
+      const det = res.rows[0]?.details || {};
+      assert.equal(det['password'], REDACTED_MARKER);
+      assert.equal(det['email'], 'v***@customer.com');
+      assert.equal(det['phone'], '******5678');
+    } finally {
+      client.release();
+    }
+  });
+
+  it('WP006-T54: sequence strictly increments', async () => {
+    const logger = createAuditLogger(pool);
+    // Use a clean branch for sequence test
+    const seqBranchId = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa03';
+    const client = await pool.connect();
+    try {
+      await client.query(`
+        INSERT INTO branches (id, organization_id, code, name)
+        VALUES ('${seqBranchId}', '${tenantAId}', 'BR-A3', 'Branch Sequence Test')
+        ON CONFLICT (id) DO NOTHING;
+      `);
+    } finally {
+      client.release();
+    }
+
+    await logger.logAuditEvent({
+      organizationId: tenantAId,
+      branchId: seqBranchId,
+      eventType: 'seq.one',
+      action: 'ACT_1',
+      entityName: 'seq',
+      source: 'CLOUD',
+    });
+    await logger.logAuditEvent({
+      organizationId: tenantAId,
+      branchId: seqBranchId,
+      eventType: 'seq.two',
+      action: 'ACT_2',
+      entityName: 'seq',
+      source: 'CLOUD',
+    });
+    await logger.logAuditEvent({
+      organizationId: tenantAId,
+      branchId: seqBranchId,
+      eventType: 'seq.three',
+      action: 'ACT_3',
+      entityName: 'seq',
+      source: 'CLOUD',
+    });
+
+    const events = await logger.getAuditTrailSlice(tenantAId, seqBranchId);
+    assert.equal(events.length, 3);
+    assert.equal(events[0]?.sequenceNumber, 1);
+    assert.equal(events[0]?.previousRecordHash, GENESIS_PREVIOUS_RECORD_HASH);
+    assert.equal(events[1]?.sequenceNumber, 2);
+    assert.equal(events[1]?.previousRecordHash, events[0]?.recordHash);
+    assert.equal(events[2]?.sequenceNumber, 3);
+    assert.equal(events[2]?.previousRecordHash, events[1]?.recordHash);
+  });
+
+  it('WP006-T55: two concurrent writes to same stream remain contiguous', async () => {
+    const logger = createAuditLogger(pool);
+    const concurrentBranchId = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa04';
+    const client = await pool.connect();
+    try {
+      await client.query(`
+        INSERT INTO branches (id, organization_id, code, name)
+        VALUES ('${concurrentBranchId}', '${tenantAId}', 'BR-A4', 'Branch Concurrent Test')
+        ON CONFLICT (id) DO NOTHING;
+      `);
+    } finally {
+      client.release();
+    }
+
+    // Launch concurrent writes to the same audit stream
+    await Promise.all([
+      logger.logAuditEvent({
+        organizationId: tenantAId,
+        branchId: concurrentBranchId,
+        eventType: 'concurrent.a',
+        action: 'CONCURRENT_A',
+        entityName: 'test',
+        source: 'CLOUD',
+      }),
+      logger.logAuditEvent({
+        organizationId: tenantAId,
+        branchId: concurrentBranchId,
+        eventType: 'concurrent.b',
+        action: 'CONCURRENT_B',
+        entityName: 'test',
+        source: 'CLOUD',
+      }),
+    ]);
+
+    const events = await logger.getAuditTrailSlice(tenantAId, concurrentBranchId);
+    assert.equal(events.length, 2);
+    assert.equal(events[0]?.sequenceNumber, 1);
+    assert.equal(events[1]?.sequenceNumber, 2);
+    assert.equal(events[1]?.previousRecordHash, events[0]?.recordHash);
+
+    const chainCheck = await logger.verifyStreamChain(tenantAId, concurrentBranchId);
+    assert.equal(chainCheck.valid, true);
+    assert.equal(chainCheck.eventCount, 2);
+  });
+
+  it('WP006-T56: corporate NULL-branch stream remains unique/contiguous', async () => {
+    const logger = createAuditLogger(pool);
+    await logger.logAuditEvent({
+      organizationId: tenantAId,
+      branchId: null, // Corporate HQ stream
+      eventType: 'corp.event1',
+      action: 'CORP_ACTION',
+      entityName: 'org',
+      source: 'CLOUD',
+    });
+    await logger.logAuditEvent({
+      organizationId: tenantAId,
+      branchId: null,
+      eventType: 'corp.event2',
+      action: 'CORP_ACTION',
+      entityName: 'org',
+      source: 'CLOUD',
+    });
+
+    const corpEvents = await logger.getAuditTrailSlice(tenantAId, null);
+    assert.equal(corpEvents.length, 2);
+    assert.equal(corpEvents[0]?.sequenceNumber, 1);
+    assert.equal(corpEvents[0]?.branchId, null);
+    assert.equal(corpEvents[1]?.sequenceNumber, 2);
+    assert.equal(corpEvents[1]?.previousRecordHash, corpEvents[0]?.recordHash);
+  });
+
+  it('WP006-T57: cross-branch streams have independent sequences', async () => {
+    const logger = createAuditLogger(pool);
+    const indBranch1 = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa05';
+    const indBranch2 = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa06';
+    const client = await pool.connect();
+    try {
+      await client.query(`
+        INSERT INTO branches (id, organization_id, code, name)
+        VALUES
+          ('${indBranch1}', '${tenantAId}', 'BR-A5', 'Branch Ind 1'),
+          ('${indBranch2}', '${tenantAId}', 'BR-A6', 'Branch Ind 2')
+        ON CONFLICT (id) DO NOTHING;
+      `);
+    } finally {
+      client.release();
+    }
+
+    await logger.logAuditEvent({
+      organizationId: tenantAId,
+      branchId: indBranch1,
+      eventType: 'stream.b1',
+      action: 'ACT',
+      entityName: 'item',
+      source: 'CLOUD',
+    });
+    await logger.logAuditEvent({
+      organizationId: tenantAId,
+      branchId: indBranch2,
+      eventType: 'stream.b2',
+      action: 'ACT',
+      entityName: 'item',
+      source: 'CLOUD',
+    });
+
+    const b1Events = await logger.getAuditTrailSlice(tenantAId, indBranch1);
+    const b2Events = await logger.getAuditTrailSlice(tenantAId, indBranch2);
+    assert.equal(b1Events[0]?.sequenceNumber, 1);
+    assert.equal(b2Events[0]?.sequenceNumber, 1);
+  });
+
+  it('WP006-T67: zero-to-latest migration succeeds', async () => {
+    const client = await pool.connect();
+    try {
+      await client.query(`
+        DROP TABLE IF EXISTS security_telemetry_events, audit_log_events, stations, user_branch_credentials, user_roles, roles, users, test_composite_ref, branches, organizations, _migrations CASCADE;
+        DROP EXTENSION IF EXISTS pgcrypto, "uuid-ossp" CASCADE;
+        DROP FUNCTION IF EXISTS current_app_org_id() CASCADE;
+        DROP FUNCTION IF EXISTS trg_audit_log_append_only() CASCADE;
+      `);
+    } finally {
+      client.release();
+    }
+
+    const upRes = await migrateUp(pool);
+    assert.equal(upRes.alreadyUpToDate, false);
+    assert.ok(upRes.applied.includes(`${baselineId}_baseline_infrastructure`));
+    assert.ok(upRes.applied.includes(`${wp004Id}_tenant_rls_foundation`));
+    assert.ok(upRes.applied.includes(`${wp005Id}_cloud_iam_auth`));
+    assert.ok(upRes.applied.includes(`${wp006Id}_cloud_audit_trail`));
+
+    const status = await getMigrationStatus(pool);
+    assert.equal(status.length, 4);
+    assert.ok(status.every((s) => s.applied && s.checksumMatches));
+  });
+
+  it('WP006-T68: WP-003/WP-004/WP-005 migration checksums unchanged', async () => {
+    const ledger = await pool.query<{ id: string; checksum: string }>(
+      `SELECT id, checksum FROM _migrations WHERE id IN ($1, $2, $3) ORDER BY id;`,
+      [baselineId, wp004Id, wp005Id],
+    );
+    assert.equal(ledger.rows.length, 3);
+
+    const f1 = path.join(DEFAULT_MIGRATIONS_DIR, `${baselineId}_baseline_infrastructure.sql`);
+    const f2 = path.join(DEFAULT_MIGRATIONS_DIR, `${wp004Id}_tenant_rls_foundation.sql`);
+    const f3 = path.join(DEFAULT_MIGRATIONS_DIR, `${wp005Id}_cloud_iam_auth.sql`);
+
+    assert.equal(ledger.rows[0]?.checksum, computeChecksum(fs.readFileSync(f1, 'utf8')));
+    assert.equal(ledger.rows[1]?.checksum, computeChecksum(fs.readFileSync(f2, 'utf8')));
+    assert.equal(ledger.rows[2]?.checksum, computeChecksum(fs.readFileSync(f3, 'utf8')));
+  });
+
+  it('WP006-T69: controlled non-production down returns to WP-005 state', async () => {
+    const downResult = await migrateDown(pool, { allowDestructiveDown: true });
+    assert.equal(downResult.reverted, `${wp006Id}_cloud_audit_trail`);
+
+    // Verify WP-006 tables are dropped
+    const checkWp006 = await pool.query(`
+      SELECT table_name FROM information_schema.tables
+      WHERE table_schema = 'public' AND table_name IN ('stations', 'audit_log_events', 'security_telemetry_events');
+    `);
+    assert.equal(checkWp006.rows.length, 0);
+
+    // Verify WP-005 tables remain intact
+    const checkWp005 = await pool.query(`
+      SELECT table_name FROM information_schema.tables
+      WHERE table_schema = 'public' AND table_name IN ('users', 'roles', 'user_roles', 'user_branch_credentials');
+    `);
+    assert.equal(checkWp005.rows.length, 4);
+  });
+
+  it('WP006-T70: up → down → up succeeds', async () => {
+    const upRes = await migrateUp(pool);
+    assert.ok(upRes.applied.includes(`${wp006Id}_cloud_audit_trail`));
+
+    const checkWp006 = await pool.query(`
+      SELECT table_name FROM information_schema.tables
+      WHERE table_schema = 'public' AND table_name IN ('stations', 'audit_log_events', 'security_telemetry_events');
+    `);
+    assert.equal(checkWp006.rows.length, 3);
+  });
+
+  it('WP006-T71: stations exists before audit FKs are created', async () => {
+    const constraints = await pool.query<{ conname: string }>(`
+      SELECT conname FROM pg_constraint
+      WHERE conrelid = 'audit_log_events'::regclass AND conname = 'fk_audit_log_events_station';
+    `);
+    assert.equal(constraints.rows.length, 1);
+
+    const stationsTable = await pool.query<{ table_name: string }>(`
+      SELECT table_name FROM information_schema.tables
+      WHERE table_schema = 'public' AND table_name = 'stations';
+    `);
+    assert.equal(stationsTable.rows.length, 1);
   });
 });

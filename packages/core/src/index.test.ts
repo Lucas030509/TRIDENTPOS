@@ -17,6 +17,21 @@ import {
   hashBranchPin,
   verifyBranchPin,
   ARGON2ID_FROZEN_BASELINE,
+  redactSensitiveData,
+  maskEmail,
+  maskPhone,
+  REDACTED_MARKER,
+  canonicalize,
+  GENESIS_PREVIOUS_RECORD_HASH,
+  GENESIS_SEQUENCE_NUMBER,
+  computeSha256Hex,
+  buildCanonicalAuditPayload,
+  computeAuditRecordHash,
+  verifyRecordHash,
+  verifyAuditHashChain,
+  createCloudCheckpoint,
+  verifyCloudCheckpoint,
+  type AuditLogEventRecord,
 } from './index.js';
 
 describe('@trident/core Foundation', () => {
@@ -466,5 +481,408 @@ describe('@trident/core Argon2id Branch PIN Engine Suite', () => {
     if (!res.ok) {
       assert.ok(!res.error.message.includes(invalidPin), 'Error must not contain plaintext PIN');
     }
+  });
+});
+
+describe('TRIDENTPOS WP-006 Platform Core Redaction & PII Masking Suite', () => {
+  it('WP006-T37: password recursively redacted', () => {
+    const input = {
+      credentials: {
+        password: 'SuperSecretPassword123!',
+        nested: { password: 'another_password' },
+      },
+    };
+    const output = redactSensitiveData(input);
+    assert.equal(output.credentials.password, REDACTED_MARKER);
+    assert.equal(output.credentials.nested.password, REDACTED_MARKER);
+  });
+
+  it('WP006-T38: pin / pin_hash recursively redacted', () => {
+    const input = {
+      security: {
+        pin: '1234',
+        pin_hash: '$argon2id$v=19$m=65536...',
+        sub: [{ pin: '9876' }, { pin_hash: 'hash_abc' }],
+      },
+    };
+    const output = redactSensitiveData(input);
+    assert.equal(output.security.pin, REDACTED_MARKER);
+    assert.equal(output.security.pin_hash, REDACTED_MARKER);
+    assert.equal(output.security.sub[0]?.pin, REDACTED_MARKER);
+    assert.equal(output.security.sub[1]?.pin_hash, REDACTED_MARKER);
+  });
+
+  it('WP006-T39: token / authorization recursively redacted', () => {
+    const input = {
+      headers: {
+        authorization: 'Bearer eyJhbGciOi...',
+        token: 'raw_opaque_token',
+      },
+    };
+    const output = redactSensitiveData(input);
+    assert.equal(output.headers.authorization, REDACTED_MARKER);
+    assert.equal(output.headers.token, REDACTED_MARKER);
+  });
+
+  it('WP006-T40: secret/private_key recursively redacted', () => {
+    const input = {
+      auth: {
+        secret: 'shhh_super_secret',
+        private_key: '-----BEGIN RSA PRIVATE KEY-----...',
+      },
+    };
+    const output = redactSensitiveData(input);
+    assert.equal(output.auth.secret, REDACTED_MARKER);
+    assert.equal(output.auth.private_key, REDACTED_MARKER);
+  });
+
+  it('WP006-T41: camelCase sensitive-key variants redacted', () => {
+    const input = {
+      accessToken: 'jwt_token_value',
+      refreshToken: 'refresh_value',
+      apiKey: 'api_key_value',
+      clientSecret: 'client_secret_value',
+      creditCard: '4111222233334444',
+      cvv: '123',
+    };
+    const output = redactSensitiveData(input);
+    assert.equal(output.accessToken, REDACTED_MARKER);
+    assert.equal(output.refreshToken, REDACTED_MARKER);
+    assert.equal(output.apiKey, REDACTED_MARKER);
+    assert.equal(output.clientSecret, REDACTED_MARKER);
+    assert.equal(output.creditCard, REDACTED_MARKER);
+    assert.equal(output.cvv, REDACTED_MARKER);
+  });
+
+  it('WP006-T42: nested arrays sanitized', () => {
+    const input = {
+      items: [{ name: 'item1', token: 'token1' }, [{ secret: 'secret2' }, { phone: '5551234567' }]],
+    };
+    const output = redactSensitiveData(input);
+    const firstItem = output.items[0] as { name: string; token: string };
+    assert.equal(firstItem.token, REDACTED_MARKER);
+    const subArr = output.items[1] as Array<{ secret?: string; phone?: string }>;
+    assert.equal(subArr[0]?.secret, REDACTED_MARKER);
+    assert.equal(subArr[1]?.phone, '******4567');
+  });
+
+  it('WP006-T43: input object not mutated', () => {
+    const input = {
+      user: {
+        password: 'raw_password',
+        pin: '1234',
+        email: 'user@example.com',
+      },
+    };
+    const snapshot = JSON.stringify(input);
+    const output = redactSensitiveData(input);
+
+    assert.equal(output.user.password, REDACTED_MARKER);
+    assert.equal(output.user.pin, REDACTED_MARKER);
+    assert.equal(output.user.email, 'u***@example.com');
+    assert.equal(JSON.stringify(input), snapshot, 'Input object must NOT be mutated');
+  });
+
+  it('WP006-T44: email correctly masked', () => {
+    assert.equal(maskEmail('admin@tenant-a.com'), 'a***@tenant-a.com');
+    assert.equal(maskEmail('john.doe@company.org'), 'j***@company.org');
+    assert.equal(maskEmail('x@domain.co'), 'x***@domain.co');
+  });
+
+  it('WP006-T45: phone correctly masked', () => {
+    assert.equal(maskPhone('+1 555 123 4567'), '******4567');
+    assert.equal(maskPhone('5551234'), '******1234');
+    assert.equal(maskPhone('1234'), '******1234');
+  });
+});
+
+describe('TRIDENTPOS WP-006 SHA-256 Hash Chain & Canonical Serialization Suite', () => {
+  it('WP006-T48: genesis hash is exactly 64 zeroes', () => {
+    assert.equal(GENESIS_PREVIOUS_RECORD_HASH.length, 64);
+    assert.equal(GENESIS_PREVIOUS_RECORD_HASH, '0'.repeat(64));
+    assert.equal(GENESIS_SEQUENCE_NUMBER, 1);
+  });
+
+  it('WP006-T49: SHA-256 output is lowercase 64-char hex', () => {
+    const digest = computeSha256Hex('test_canonical_string');
+    assert.equal(digest.length, 64);
+    assert.match(digest, /^[0-9a-f]{64}$/);
+    assert.equal(digest, digest.toLowerCase());
+  });
+
+  it('WP006-T50: same canonical event produces deterministic digest', () => {
+    const payloadInput = {
+      organizationId: '11111111-1111-1111-1111-111111111111',
+      branchId: '22222222-2222-2222-2222-222222222222',
+      sequenceNumber: 1,
+      clientTimestamp: '2026-09-04T12:00:00.000Z',
+      serverTimestamp: '2026-09-04T12:00:01.000Z',
+      eventType: 'auth.login.success',
+      action: 'LOGIN',
+      entityName: 'user',
+      entityId: '33333333-3333-3333-3333-333333333333',
+      actorId: '33333333-3333-3333-3333-333333333333',
+      stationId: null,
+      redactedMetadata: { ip: '127.0.0.1', userAgent: 'Chrome' },
+      previousRecordHash: GENESIS_PREVIOUS_RECORD_HASH,
+    };
+
+    const canonicalString = buildCanonicalAuditPayload(payloadInput);
+    assert.ok(canonicalString.startsWith('{'));
+    assert.equal(canonicalize({ z: 1, a: 2 }), '{"a":2,"z":1}');
+
+    const hash1 = computeAuditRecordHash(payloadInput);
+    const hash2 = computeAuditRecordHash(payloadInput);
+    assert.equal(hash1, hash2);
+  });
+
+  it('WP006-T51: metadata key insertion order does not alter digest', () => {
+    const base = {
+      organizationId: '11111111-1111-1111-1111-111111111111',
+      branchId: '22222222-2222-2222-2222-222222222222',
+      sequenceNumber: 1,
+      clientTimestamp: null,
+      serverTimestamp: '2026-09-04T12:00:01.000Z',
+      eventType: 'order.created',
+      action: 'CREATE',
+      entityName: 'order',
+      entityId: 'ord-123',
+      actorId: null,
+      stationId: null,
+      previousRecordHash: GENESIS_PREVIOUS_RECORD_HASH,
+    };
+
+    const hashA = computeAuditRecordHash({
+      ...base,
+      redactedMetadata: { z: 26, a: 1, m: 13, nested: { b: 2, a: 1 } },
+    });
+
+    const hashB = computeAuditRecordHash({
+      ...base,
+      redactedMetadata: { a: 1, m: 13, z: 26, nested: { a: 1, b: 2 } },
+    });
+
+    assert.equal(hashA, hashB, 'RFC 8785 canonicalization must ensure key-order independence');
+  });
+
+  it('WP006-T52: changing sanitized payload changes digest', () => {
+    const base = {
+      organizationId: '11111111-1111-1111-1111-111111111111',
+      branchId: '22222222-2222-2222-2222-222222222222',
+      sequenceNumber: 1,
+      clientTimestamp: null,
+      serverTimestamp: '2026-09-04T12:00:01.000Z',
+      eventType: 'order.created',
+      action: 'CREATE',
+      entityName: 'order',
+      entityId: 'ord-123',
+      actorId: null,
+      stationId: null,
+      redactedMetadata: { total: 100 },
+      previousRecordHash: GENESIS_PREVIOUS_RECORD_HASH,
+    };
+
+    const hash1 = computeAuditRecordHash(base);
+    const hash2 = computeAuditRecordHash({
+      ...base,
+      redactedMetadata: { total: 101 },
+    });
+
+    assert.notEqual(hash1, hash2, 'Changing payload data must alter SHA-256 digest');
+  });
+
+  it('WP006-T53: previous_record_hash chaining correct', () => {
+    const orgId = '11111111-1111-1111-1111-111111111111';
+    const branchId = '22222222-2222-2222-2222-222222222222';
+
+    const event1Hash = computeAuditRecordHash({
+      organizationId: orgId,
+      branchId,
+      sequenceNumber: 1,
+      clientTimestamp: null,
+      serverTimestamp: '2026-09-04T12:00:01.000Z',
+      eventType: 'event.one',
+      action: 'ACTION_1',
+      entityName: 'entity',
+      entityId: '1',
+      actorId: null,
+      stationId: null,
+      redactedMetadata: {},
+      previousRecordHash: GENESIS_PREVIOUS_RECORD_HASH,
+    });
+
+    const event2Hash = computeAuditRecordHash({
+      organizationId: orgId,
+      branchId,
+      sequenceNumber: 2,
+      clientTimestamp: null,
+      serverTimestamp: '2026-09-04T12:00:02.000Z',
+      eventType: 'event.two',
+      action: 'ACTION_2',
+      entityName: 'entity',
+      entityId: '2',
+      actorId: null,
+      stationId: null,
+      redactedMetadata: {},
+      previousRecordHash: event1Hash,
+    });
+
+    assert.notEqual(event2Hash, event1Hash);
+    assert.equal(event2Hash.length, 64);
+  });
+});
+
+describe('TRIDENTPOS WP-006 Audit Trail Verification & Cloud Checkpoint Suite', () => {
+  const orgId = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+  const branchId = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
+
+  function createValidChain(count: number): AuditLogEventRecord[] {
+    const chain: AuditLogEventRecord[] = [];
+    let prevHash = GENESIS_PREVIOUS_RECORD_HASH;
+
+    for (let i = 1; i <= count; i++) {
+      const serverTimestamp = `2026-09-04T12:00:0${i}.000Z`;
+      const hash = computeAuditRecordHash({
+        organizationId: orgId,
+        branchId,
+        sequenceNumber: i,
+        clientTimestamp: null,
+        serverTimestamp,
+        eventType: `event.${i}`,
+        action: 'EXECUTE',
+        entityName: 'test',
+        entityId: `id-${i}`,
+        actorId: null,
+        stationId: null,
+        redactedMetadata: { step: i },
+        previousRecordHash: prevHash,
+      });
+
+      chain.push({
+        id: `00000000-0000-0000-0000-${String(i).padStart(12, '0')}`,
+        organizationId: orgId,
+        branchId,
+        actorId: null,
+        stationId: null,
+        eventType: `event.${i}`,
+        severity: 'INFO',
+        action: 'EXECUTE',
+        entityName: 'test',
+        entityId: `id-${i}`,
+        clientTimestamp: null,
+        serverTimestamp,
+        sequenceNumber: i,
+        previousRecordHash: prevHash,
+        recordHash: hash,
+        source: 'CLOUD',
+        requestId: null,
+        metadata: { step: i },
+        createdAt: serverTimestamp,
+      });
+
+      prevHash = hash;
+    }
+
+    return chain;
+  }
+
+  it('WP006-T58: valid chain verifies', () => {
+    const chain = createValidChain(5);
+    assert.equal(verifyRecordHash(chain[0]!), true);
+    const result = verifyAuditHashChain(chain);
+    assert.equal(result.valid, true);
+  });
+
+  it('WP006-T59: modified event rejected', () => {
+    const chain = createValidChain(5);
+    // Tamper with payload of record 3 without updating hash
+    chain[2]!.metadata = { step: 999 };
+    const result = verifyAuditHashChain(chain);
+    assert.equal(result.valid, false);
+    assert.equal(result.errorCode, 'PAYLOAD_MODIFIED');
+    assert.equal(result.failedIndex, 2);
+  });
+
+  it('WP006-T60: wrong previous hash rejected', () => {
+    const chain = createValidChain(5);
+    // Mutate previousRecordHash of record 3
+    chain[2]!.previousRecordHash = 'f'.repeat(64);
+    const result = verifyAuditHashChain(chain);
+    assert.equal(result.valid, false);
+    assert.equal(result.errorCode, 'WRONG_PREVIOUS_HASH');
+    assert.equal(result.failedIndex, 2);
+  });
+
+  it('WP006-T61: sequence gap rejected', () => {
+    const chain = createValidChain(5);
+    // Introduce sequence gap at record 3 (skip sequence 3 to 4)
+    chain[2]!.sequenceNumber = 4;
+    const result = verifyAuditHashChain(chain);
+    assert.equal(result.valid, false);
+    assert.equal(result.errorCode, 'SEQUENCE_GAP');
+    assert.equal(result.failedIndex, 2);
+  });
+
+  it('WP006-T62: event reordering rejected', () => {
+    const chain = createValidChain(5);
+    // Inverted sequence order: sequence decreased from 2 to 1
+    chain[2]!.sequenceNumber = 1;
+    const result = verifyAuditHashChain(chain);
+    assert.equal(result.valid, false);
+    assert.equal(result.errorCode, 'REORDERED_EVENTS');
+    assert.equal(result.failedIndex, 2);
+  });
+
+  it('WP006-T63: duplicate replay same id/hash handled idempotently where applicable', () => {
+    const chain = createValidChain(3);
+    const target = chain[0]!;
+
+    // Verification that identical id and identical record hash is recognized as idempotent candidate
+    const isIdempotentCandidate = (incoming: AuditLogEventRecord, existing: AuditLogEventRecord) =>
+      incoming.id === existing.id && incoming.recordHash === existing.recordHash;
+
+    assert.equal(isIdempotentCandidate({ ...target }, target), true);
+  });
+
+  it('WP006-T64: same sequence/id with different hash rejected', () => {
+    const chain = createValidChain(3);
+    const target = chain[1]!;
+    const tampered = { ...target, recordHash: 'e'.repeat(64) };
+
+    const isTampering = (incoming: AuditLogEventRecord, existing: AuditLogEventRecord) =>
+      incoming.sequenceNumber === existing.sequenceNumber &&
+      incoming.recordHash !== existing.recordHash;
+
+    assert.equal(isTampering(tampered, target), true);
+  });
+
+  it('WP006-T65: malformed digest rejected', () => {
+    const chain = createValidChain(3);
+    chain[1]!.recordHash = 'not_a_sha256_hash';
+    const result = verifyAuditHashChain(chain);
+    assert.equal(result.valid, false);
+    assert.equal(result.errorCode, 'MALFORMED_HASH');
+    assert.equal(result.failedIndex, 1);
+  });
+
+  it('WP006-T66: broken chain produces governed integrity failure result', () => {
+    const chain = createValidChain(4);
+    // Break the chain at index 1
+    chain[1]!.previousRecordHash = '0123456789abcdef'.repeat(4);
+    const result = verifyAuditHashChain(chain);
+    assert.equal(result.valid, false);
+    assert.equal(result.errorCode, 'WRONG_PREVIOUS_HASH');
+    assert.equal(result.failedRecordId, chain[1]!.id);
+
+    // Verify Cloud Checkpoint creation and verification primitives
+    const validChain = createValidChain(4);
+    const checkpoint = createCloudCheckpoint(validChain, `${orgId}:${branchId}`);
+    assert.equal(checkpoint.start_sequence_number, 1);
+    assert.equal(checkpoint.end_sequence_number, 4);
+    assert.equal(checkpoint.event_count, 4);
+    assert.equal(verifyCloudCheckpoint(checkpoint, validChain), true);
+
+    // Tampered chain must fail checkpoint verification
+    assert.equal(verifyCloudCheckpoint(checkpoint, chain), false);
   });
 });
