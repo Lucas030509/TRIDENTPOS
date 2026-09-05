@@ -106,7 +106,7 @@ CREATE TABLE user_roles (
     CONSTRAINT fk_user_roles_role FOREIGN KEY (organization_id, role_id) REFERENCES roles(organization_id, id) ON DELETE CASCADE
 );
 
--- Estaciones / Dispositivos Autorizados
+-- Estaciones / Dispositivos Autorizados (Platform Core Prerequisite - Owned by WP-006)
 CREATE TABLE stations (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     organization_id UUID NOT NULL REFERENCES organizations(id),
@@ -118,12 +118,21 @@ CREATE TABLE stations (
     CONSTRAINT uq_stations_org_branch_code UNIQUE (organization_id, branch_id, code),
     CONSTRAINT uq_stations_org_branch_id UNIQUE (organization_id, branch_id, id),
     CONSTRAINT uq_stations_org_id UNIQUE (organization_id, id),
-    CONSTRAINT fk_stations_branch FOREIGN KEY (organization_id, branch_id) REFERENCES branches(organization_id, id) ON DELETE CASCADE
+    CONSTRAINT fk_stations_branch FOREIGN KEY (organization_id, branch_id) REFERENCES branches(organization_id, id) ON DELETE RESTRICT
 );
+
+ALTER TABLE stations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE stations FORCE ROW LEVEL SECURITY;
+
+CREATE POLICY stations_tenant_isolation ON stations
+    FOR ALL
+    USING (organization_id = current_app_org_id())
+    WITH CHECK (organization_id = current_app_org_id());
 
 -- Bitácora de Auditoría Tamper-Evident (Cloud Audit Trail)
 -- Modelo de Inmutabilidad: TAMPER-EVIDENT / APPEND-ONLY UNDER APPLICATION TRUST BOUNDARY
 -- Operaciones ordinarias UPDATE, DELETE y TRUNCATE estrictamente denegadas a nivel de trigger y permisos DML.
+-- Referential Action Policy: ON DELETE RESTRICT en todas las referencias (branch, actor, station); la historia forense jamás se muta ni se nulifica.
 CREATE TABLE audit_log_events (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     organization_id UUID NOT NULL REFERENCES organizations(id),
@@ -147,13 +156,14 @@ CREATE TABLE audit_log_events (
     CONSTRAINT uq_audit_log_events_org_id UNIQUE (organization_id, id),
     CONSTRAINT uq_audit_log_events_seq UNIQUE NULLS NOT DISTINCT (organization_id, branch_id, sequence_number),
     CONSTRAINT uq_audit_log_events_hash UNIQUE (organization_id, record_hash),
-    CONSTRAINT fk_audit_log_events_branch FOREIGN KEY (organization_id, branch_id) REFERENCES branches(organization_id, id) ON DELETE SET NULL (branch_id),
-    CONSTRAINT fk_audit_log_events_actor FOREIGN KEY (organization_id, actor_id) REFERENCES users(organization_id, id) ON DELETE SET NULL (actor_id),
-    CONSTRAINT fk_audit_log_events_station FOREIGN KEY (organization_id, branch_id, station_id) REFERENCES stations(organization_id, branch_id, id) ON DELETE SET NULL (station_id)
+    CONSTRAINT fk_audit_log_events_branch FOREIGN KEY (organization_id, branch_id) REFERENCES branches(organization_id, id) ON DELETE RESTRICT,
+    CONSTRAINT fk_audit_log_events_actor FOREIGN KEY (organization_id, actor_id) REFERENCES users(organization_id, id) ON DELETE RESTRICT,
+    CONSTRAINT fk_audit_log_events_station FOREIGN KEY (organization_id, branch_id, station_id) REFERENCES stations(organization_id, branch_id, id) ON DELETE RESTRICT
 );
 
 -- Telemetría de Eventos de Seguridad y Detección de Incidentes (Cloud Security Telemetry)
 -- Modelo de Inmutabilidad: TAMPER-EVIDENT / APPEND-ONLY UNDER APPLICATION TRUST BOUNDARY
+-- Referential Action Policy: ON DELETE RESTRICT en todas las referencias (branch, actor, station).
 CREATE TABLE security_telemetry_events (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     organization_id UUID NOT NULL REFERENCES organizations(id),
@@ -170,9 +180,9 @@ CREATE TABLE security_telemetry_events (
     timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT uq_sec_telemetry_org_id UNIQUE (organization_id, id),
-    CONSTRAINT fk_sec_telemetry_branch FOREIGN KEY (organization_id, branch_id) REFERENCES branches(organization_id, id) ON DELETE SET NULL (branch_id),
-    CONSTRAINT fk_sec_telemetry_actor FOREIGN KEY (organization_id, actor_id) REFERENCES users(organization_id, id) ON DELETE SET NULL (actor_id),
-    CONSTRAINT fk_sec_telemetry_station FOREIGN KEY (organization_id, branch_id, station_id) REFERENCES stations(organization_id, branch_id, id) ON DELETE SET NULL (station_id)
+    CONSTRAINT fk_sec_telemetry_branch FOREIGN KEY (organization_id, branch_id) REFERENCES branches(organization_id, id) ON DELETE RESTRICT,
+    CONSTRAINT fk_sec_telemetry_actor FOREIGN KEY (organization_id, actor_id) REFERENCES users(organization_id, id) ON DELETE RESTRICT,
+    CONSTRAINT fk_sec_telemetry_station FOREIGN KEY (organization_id, branch_id, station_id) REFERENCES stations(organization_id, branch_id, id) ON DELETE RESTRICT
 );
 
 -- Función y Triggers de Inmutabilidad (Append-Only Under Application Trust Boundary)
