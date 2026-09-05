@@ -35,3 +35,7 @@ export * from './principal.js';
 export * from './jwt.js';
 export * from './rbac.js';
 export * from './pin.js';
+export * from './audit-contracts.js';
+export * from './canonicalize.js';
+export * from './redaction.js';
+export * from './hash-chain.js';
