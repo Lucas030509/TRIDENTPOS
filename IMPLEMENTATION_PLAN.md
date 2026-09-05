@@ -324,26 +324,58 @@ Edge host runtime scaffolding, embedded persistence, local LAN communication, an
 
 #### `WP-007`: Edge Host Runtime Scaffolding & Electron Security Hardening
 * **Bounded Context:** Platform Core / Native Edge
-* **Frozen Requirements:** `SOLUTION_ARCHITECTURE.md` Sec. 3; `SECURITY_ARCHITECTURE.md` Sec. 8; `ADR-003`
-* **ADRs:** `ADR-003`
-* **Data Objects:** Local configuration files (`edge-config.json`)
-* **APIs / Contracts:** IPC bridge interface (`preload.ts`)
+* **Governing Architecture:** `ACR-2026-008` (Edge Runtime SSOT Reference & Execution Boundary Correction)
+* **Frozen Requirements:**
+  - `SOLUTION_ARCHITECTURE.md` Sec. 1 (Container Model — Branch Operational Plane & Edge Host process topology)
+  - `DEPLOYMENT_TOPOLOGY.md` Sec. 1 (Edge Host deployment topology), Sec. 3 (Branch Operational Plane provisional hardware baseline)
+  - `TECH_STACK_DECISIONS.md` Sec. 1 (Edge Host Runtime baseline), Sec. 2 (Electron vs Tauri decision and certification directive)
+  - `ADR-003` Sec. 5 (Selected Baseline), Sec. 8 (Worker separation failure modes), Sec. 9 (Electron security considerations), Sec. 11 (Validation & target POS hardware requirements)
+  - `SECURITY_ARCHITECTURE.md` Sec. 9 (Electron Runtime Security Baseline)
+* **ADRs:** `ADR-003`, `ADR-011`
+* **Data Objects:** Local configuration files (`edge-config.json` — metadata only; secret-bearing material strictly prohibited)
+* **APIs / Contracts:** Typed IPC bridge interface (`preload.ts`, `contextBridge`, static channel allowlist)
 * **Builder Agent:** `16_Native_Edge_Developer`
 * **Specialist Reviewer:** `08_Security_Architect`
 * **Code Reviewer:** `11_Code_Reviewer`
 * **Prerequisites:** `WP-001`
-* **Dependencies:** Electron 30+ (`IMPLEMENTATION VERSION TO PIN`), Node.js 24 LTS (build/toolchain; embedded runtime governed by Electron per `ADR-011`).
-* **Inputs:** `ADR-003`, `SECURITY_ARCHITECTURE.md` Sec. 8
-* **Outputs:** Electron main and preload processes configured with: `contextIsolation: true`, `nodeIntegration: false`, `sandbox: true`, strict CSP headers, IPC allowlist bridge.
-* **Acceptance Criteria:** Electron window initializes without Node.js exposed to renderer; IPC messages restricted to strictly allowlisted channels; external URL navigation intercepted and blocked.
-* **Tests:** Electron security audit automated test; SAST scan of preload script; renderer remote code execution injection test.
-* **Security Debt:** `SEC-VAL-07` (Electron security hardening & IPC allowlist validation).
-* **Evidence Required:** Electron security checklist report and SAST scan output showing zero high/critical vulnerabilities.
+* **Dependencies:** Electron 30+ (`IMPLEMENTATION VERSION TO PIN` — exact version >= 30 pinned by Builder in package.json), Node.js 24 LTS (repository and build toolchain; internal embedded Node runtime governed by Electron distribution per `ADR-011`).
+* **Inputs:** `SOLUTION_ARCHITECTURE.md` Sec. 1, `DEPLOYMENT_TOPOLOGY.md` Sec. 1 & 3, `TECH_STACK_DECISIONS.md` Sec. 1 & 2, `ADR-003`, `SECURITY_ARCHITECTURE.md` Sec. 9
+* **Outputs:**
+  - Electron application package scaffold within monorepo architecture
+  - Main and preload processes configured with: `contextIsolation: true`, `nodeIntegration: false`, `sandbox: true`, `webSecurity: true`
+  - Restrictive CSP: `default-src 'self'; script-src 'self'; connect-src 'self' wss: https:;`
+  - Statically allowlisted, typed IPC bridge exposing zero raw Node.js or `ipcRenderer` objects
+  - Default-deny external navigation and popup/window creation interceptors
+  - Validated `edge-config.json` schema (non-sensitive metadata only)
+* **Implementation Scope Boundary:**
+  - *Permitted:* Electron runtime scaffold, main/preload processes, minimal proof renderer, BrowserWindow security hardening, typed IPC bridge, channel allowlist, IPC payload validation, navigation/new-window denial, automated security tests, minimal worker boundary per `ADR-003 Sec. 8`.
+  - *Prohibited:* SQLite database, SQLite WAL, SQLCipher, migrations, CachedUsers, PIN auth, Argon2, offline IAM, station enrollment, pairing QR, TLS certs, mDNS, local HTTP business APIs, WebSocket sync engine, Cloud/Edge sync, outbox, folio leases, printer drivers, ESC/POS, cash drawer, KDS logic, restaurant functional workflows, auto-update daemons, production code signing, installer release certification, Product Owner pending decisions.
+* **Acceptance Criteria:**
+  - A. Renderer Isolation: Zero Node.js integration; no access to `require()`, `process`, `fs`, `child_process`, `net`, `os`, `crypto`, or `ipcRenderer`.
+  - B. Preload Boundary: Preload exposes only explicitly declared functions via `contextBridge`; no generic `send` or `invoke`; all channels statically allowlisted; payloads validated at receiving boundary.
+  - C. Navigation Lockdown: External URL navigation intercepted and denied (`default-deny`); unauthorized window creation / `window.open` blocked.
+  - D. Content Security Policy: Restrictive CSP enforced (`default-src 'self'; script-src 'self'; connect-src 'self' wss: https:;`); no unsafe-eval or wildcard origins.
+  - E. Sandbox: Renderer sandbox enabled; no security preferences overridden dynamically.
+  - F. Fail-Closed: Unknown channels, malformed payloads, or unauthorized navigation rejected immediately.
+* **Tests (Automated Verification):**
+  1. BrowserWindow security preferences test (`contextIsolation: true`, `nodeIntegration: false`, `sandbox: true`)
+  2. Renderer Node exposure negative test (attempts to access Node primitives fail)
+  3. IPC allowlist positive test (approved typed channel executes successfully)
+  4. IPC allowlist negative test (unapproved channel rejected)
+  5. IPC payload validation negative test (malformed payload rejected at trusted boundary)
+  6. External navigation negative test (arbitrary external navigation blocked)
+  7. New-window / `window.open` negative test (unauthorized target denied)
+  8. Renderer RCE-oriented injection test (injected renderer script cannot obtain Node/Electron privileged APIs)
+  9. CSP verification test (inline/eval execution rejected)
+  10. SAST/security scan (zero HIGH or CRITICAL findings attributable to WP-007)
+  11. Existing repository tests continue to pass
+* **Security Debt:** `SEC-VAL-07` (Electron security hardening & IPC allowlist validation). All other security debt items (`SEC-VAL-03`, `SEC-VAL-02`, `SEC-VAL-08`, `SEC-VAL-06`, `DAT-04`, `DAT-08`, `RSK-08`, `RSK-11`, `RSK-15`) and `ADR-003` hardware benchmark remain `OPEN`.
+* **Evidence Required:** `evidence/EVIDENCE_SEC_VAL_07_ELECTRON_HARDENING.md` and Builder evidence report.
 * **Rollback:** Revert Electron configuration.
 * **Feature Flag:** NO
 * **Migration Impact:** None
 * **Risk:** High (Runtime security boundary)
-* **PO Dependency:** None
+* **PO Dependency:** None (All 9 PO decisions remain `PENDING PO DECISION`)
 * **Parallelizable:** NO
 * **Handoff Target:** `WP-008`, `WP-009`
 
