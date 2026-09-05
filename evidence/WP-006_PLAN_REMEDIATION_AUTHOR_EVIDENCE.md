@@ -42,7 +42,7 @@ This transaction executes purely architectural and plan remediation. Zero applic
 | **Multi-Tenant Relational Integrity** | Missing tenant-safe composite foreign keys on audit/telemetry tables. | Formalized composite foreign keys referencing `(organization_id, id)` on `branches`, `users`, and `stations`. Both tables enforce `ENABLE + FORCE ROW LEVEL SECURITY` with `current_app_org_id()`. |
 | **Cryptographic Hash & Checkpoint Contract** | Serialization and hashing parameters left unspecified. | RFC 8785 deterministic JSON canonicalization / sorted keys, standard SHA-256 (64-char hex), strictly monotonic `sequence_number`, genesis constant (64 zeroes), `audit.checkpoint.created` format, and quarantine on chain breaks. |
 | **Automatic Pre-Persistence Redaction** | Timing and depth of redaction ambiguous. | Rule: `REDACT BEFORE ANY EXTERNAL SINK`. Recursive, case-insensitive redaction of credentials (`password`, `pin`, `pin_hash`, `token`, `secret`, `authorization`, `credit_card`, `cvv`, `private_key`) and PII masking (`u***@domain.com`, `******1234`) strictly executed before database persistence or observability emission. |
-| **Multi-Column FK Delete Semantics (R2)** | Unqualified `ON DELETE SET NULL` risked attempting to NULL `organization_id NOT NULL`. | PostgreSQL 16 column-specific `ON DELETE SET NULL`: `(branch_id)` on branch FK, `(actor_id)` on user FK, and `(station_id)` on station FK. `ON DELETE CASCADE` strictly prohibited. Preserves `organization_id NOT NULL`, tenant provenance, and append-only audit history. Added integration test criteria A-F. |
+| **Multi-Column FK Delete Semantics (R2/R4)** | Unqualified `ON DELETE SET NULL` risked attempting to NULL `organization_id NOT NULL`. Initially mitigated in R2 via column-specific SET NULL, subsequently superseded in R4 by `ON DELETE RESTRICT` to preserve immutable historical audit trail without in-place mutation. | `ON DELETE RESTRICT` on all audit foreign keys; `ON DELETE CASCADE` and `SET NULL` strictly prohibited. Preserves `organization_id NOT NULL`, tenant provenance, and append-only audit history. |
 
 ---
 
@@ -58,9 +58,45 @@ This transaction executes purely architectural and plan remediation. Zero applic
 
 ---
 
-## 5. Author Conclusion & Hand-Off
+## 5. Author Conclusion & Hand-Off (R2 Review)
 
 All SSOT contradictions, data object omissions, plan ambiguities, and multi-column foreign key delete semantics for `WP-006` have been remediated with zero implementation code.
 
-**Author Verdict:**  
-`READY FOR ROLE-SEPARATED BASELINE REVIEW R2`
+**R2 Review Verdict:**  
+`PASS (Data Review R2 @ 0d7d73125fab26776172eb8e8e57372598896247, Security Review R2 @ 9de3160f83ca8b31a6b28bceea2340a0dd4e3de3)`
+
+---
+
+## 6. R3 Review History & Invalidation
+
+The previous R3 pass evaluated column-specific `SET NULL`, which has been invalidated and superseded by R4 because setting foreign keys to NULL mutates historical audit records retroactively.
+
+---
+
+## 7. R4 Final Integrity Closure & Ratification
+
+Author Subject `A4` establishes the final, immutable architecture contract for `WP-006`:
+1. **Immutable History Referential Action Policy (`ON DELETE RESTRICT`):**
+   - Prohibits both `ON DELETE CASCADE` and `ON DELETE SET NULL`.
+   - All audit foreign keys enforce `ON DELETE RESTRICT`:
+     - `fk_audit_log_events_branch` / `fk_sec_telemetry_branch`
+     - `fk_audit_log_events_actor` / `fk_sec_telemetry_actor`
+     - `fk_audit_log_events_station` / `fk_sec_telemetry_station`
+   - Physical deletion of referenced operational entities is rejected while audit rows exist.
+   - Operational retirement uses soft deactivation:
+     - `branches.is_active = false`
+     - `users.is_active = false`
+     - `stations.is_authorized = false`
+2. **Cloud Stations Table Ownership:**
+   - `WP-006` explicitly owns creation of the canonical Cloud `stations` table as a supporting Platform Core prerequisite for audit referential integrity.
+   - Enforces unique constraints: `(organization_id, branch_id, code)`, `(organization_id, branch_id, id)`, `(organization_id, id)`.
+   - Enforces tenant-aware branch foreign key (`ON DELETE RESTRICT`).
+   - Enforces `ENABLE + FORCE ROW LEVEL SECURITY` with `current_app_org_id()` default-deny isolation.
+3. **WP-009 Boundary Isolation:**
+   - `WP-009` retains exclusive ownership of `edge_hosts`, `station_credentials`, `enrollment_tokens`, mTLS/pairing, and Edge enrollment protocols. Zero edge runtime code is pulled forward into `WP-006`.
+4. **Integration Test Contract:**
+   - Implementation plan tests 8–12 updated to prove rejection of branch/user/station physical deletion, success of soft deactivation, byte-for-byte retention of audit rows, and stations RLS isolation.
+
+**Final Author Verdict (R4):**  
+`READY FOR ROLE-SEPARATED BASELINE REVIEW R4`
+

@@ -274,15 +274,15 @@ Foundational domain models, Multi-Tenant RLS isolation, IAM, and audit logging.
 * **Bounded Context:** Platform Core
 * **Frozen Requirements:** `SECURITY_LOGGING_AND_MONITORING.md` Sec. 1, 2, 3; `DATA_PROTECTION_AND_PRIVACY.md` Sec. 3; `SECURITY_ARCHITECTURE.md` Sec. 10
 * **ADRs:** `ADR-001`, `ADR-010`
-* **Data Objects:** `audit_log_events`, `security_telemetry_events`
+* **Data Objects:** `audit_log_events`, `security_telemetry_events`, `stations` (supporting Platform Core prerequisite)
 * **APIs / Contracts:** Structured audit logger interface (`logAuditEvent()`), security telemetry interface (`logSecurityTelemetryEvent()`), Cloud checkpoint verification contract (`IAuditLogger`).
 * **Builder Agent:** `13_Backend_Developer`
 * **Specialist Reviewer:** `08_Security_Architect`
 * **Code Reviewer:** `11_Code_Reviewer`
 * **Prerequisites:** `WP-004`
 * **Dependencies:** PostgreSQL 16, cryptographic hashing library (standard SHA-256 via Node.js crypto / webcrypto), RFC 8785 canonical serialization.
-* **Inputs:** `SECURITY_LOGGING_AND_MONITORING.md`, `DATA_MODEL.md` Sec. 2.1, `DATA_PROTECTION_AND_PRIVACY.md` Sec. 3, `ACR-2026-007`
-* **Outputs:** Cloud append-only audit log table (`audit_log_events`) and security telemetry table (`security_telemetry_events`) with SHA-256 hash-chaining columns (`previous_record_hash`, `record_hash`), append-only DB triggers denying UPDATE/DELETE/TRUNCATE under application trust boundary, structured logger automatically redacting prohibited secrets and masking PII before any persistence or observability emission, tenant isolation via FORCE RLS and `current_app_org_id()`, Cloud checkpoint representation and verification primitives.
+* **Inputs:** `SECURITY_LOGGING_AND_MONITORING.md`, `DATA_MODEL.md` Sec. 2.1, `DATA_PROTECTION_AND_PRIVACY.md` Sec. 3, `ACR-2026-007`, `ARCHITECTURE_CHANGE_REQUEST_WP006_FINAL_INTEGRITY_CLOSURE.md`
+* **Outputs:** Cloud append-only audit log table (`audit_log_events`), security telemetry table (`security_telemetry_events`), and canonical Cloud stations table (`stations`, supporting Platform Core prerequisite for audit referential integrity) with SHA-256 hash-chaining columns (`previous_record_hash`, `record_hash`), append-only DB triggers denying UPDATE/DELETE/TRUNCATE under application trust boundary, structured logger automatically redacting prohibited secrets and masking PII before any persistence or observability emission, tenant isolation via FORCE RLS and `current_app_org_id()`, Cloud checkpoint representation and verification primitives.
 * **Acceptance Criteria:**
   1. DDL for `audit_log_events` and `security_telemetry_events` includes composite tenant keys and foreign keys.
   2. Database triggers strictly reject any `UPDATE` or `DELETE` attempt on `audit_log_events` and `security_telemetry_events`.
@@ -292,20 +292,21 @@ Foundational domain models, Multi-Tenant RLS isolation, IAM, and audit logging.
   6. Each audit event chains the SHA-256 hash of the previous record for the stream; genesis record uses 64 zeroes; sequence numbers are strictly monotonic.
   7. Cloud checkpoint verification primitives validate contiguous incoming chain segments and flag/quarantine broken hash chains with `AUDIT_HASH_CHAIN_BREAK` telemetry.
   8. Security telemetry interface (`logSecurityTelemetryEvent()`) persists security policy default violations without pulling forward future detection engines.
-  9. Multi-column foreign keys on `audit_log_events` and `security_telemetry_events` enforce column-specific `ON DELETE SET NULL`: `ON DELETE SET NULL (branch_id)` for branch references, `ON DELETE SET NULL (actor_id)` for user references, and `ON DELETE SET NULL (station_id)` for station references. Deleting a parent branch, user, or station never attempts to NULL `organization_id`, preserves `organization_id NOT NULL`, maintains tenant provenance, and never cascade-deletes audit records.
+  9. Foreign keys on `audit_log_events` and `security_telemetry_events` enforce immutable-history semantics via `ON DELETE RESTRICT`: `ON DELETE RESTRICT` for branch references (`fk_audit_log_events_branch`, `fk_sec_telemetry_branch`), `ON DELETE RESTRICT` for user references (`fk_audit_log_events_actor`, `fk_sec_telemetry_actor`), and `ON DELETE RESTRICT` for station references (`fk_audit_log_events_station`, `fk_sec_telemetry_station`). Physical deletion of a referenced branch, user, or station is strictly rejected while historical audit rows exist. Operational decommissioning uses soft deactivation (`branches.is_active = false`, `users.is_active = false`, `stations.is_authorized = false`). `ON DELETE CASCADE` and `ON DELETE SET NULL` are strictly prohibited.
+  10. `WP-006` creates the canonical Cloud `stations` table as a supporting Platform Core prerequisite with `(organization_id, branch_id, code)` unique, `(organization_id, branch_id, id)` unique, `(organization_id, id)` unique, tenant-aware branch FK (`ON DELETE RESTRICT`), and `ENABLE + FORCE ROW LEVEL SECURITY` with `current_app_org_id()` default-deny isolation.
 * **Tests:**
   1. Negative test attempting `UPDATE` on `audit_log_events` (must fail with append-only exception).
   2. Negative test attempting `DELETE` on `audit_log_events` (must fail with append-only exception).
   3. Negative test attempting `UPDATE` or `DELETE` on `security_telemetry_events` (must fail with append-only exception).
-  4. Multi-tenant RLS isolation tests verifying tenant A cannot read or write tenant B audit records or telemetry events.
+  4. Multi-tenant RLS isolation tests verifying tenant A cannot read or write tenant B audit records, telemetry events, or stations.
   5. SHA-256 hash-chain continuity test verifying deterministic serialization, correct previous hash chaining, and detection of payload tampering.
   6. Recursive redaction test verifying prohibited credentials and PII masking across deeply nested metadata objects prior to persistence and logging.
   7. Cloud checkpoint verification test confirming valid chain acceptance and quarantine of broken/discontinuous sequence batches.
-  8. PostgreSQL integration test verifying that deleting a referenced branch sets `branch_id` to NULL without attempting to NULL `organization_id` or deleting the audit record.
-  9. PostgreSQL integration test verifying that deleting/deactivating a referenced user sets `actor_id` to NULL without changing `organization_id` or deleting the audit record.
-  10. PostgreSQL integration test verifying that deleting a station sets `station_id` to NULL without changing `organization_id` or `branch_id` or deleting the audit record.
-  11. PostgreSQL integration test proving audit records are NOT cascade-deleted and tenant provenance remains unchanged.
-  12. PostgreSQL 16 DDL execution test confirming all foreign keys with column-specific `ON DELETE SET NULL` execute cleanly.
+  8. PostgreSQL integration test verifying that deleting a referenced branch is rejected with foreign key violation (`ON DELETE RESTRICT`).
+  9. PostgreSQL integration test verifying that soft-deactivating a branch (`is_active = false`) succeeds while historical audit records remain unchanged byte-for-byte.
+  10. PostgreSQL integration test verifying that deleting a referenced user is rejected (`ON DELETE RESTRICT`), while soft-deactivating the user (`is_active = false`) succeeds.
+  11. PostgreSQL integration test verifying that deleting a referenced station is rejected (`ON DELETE RESTRICT`), while soft-deauthorizing the station (`is_authorized = false`) succeeds.
+  12. PostgreSQL integration test proving audit records are never cascade-deleted or modified, `stations` schema exists prior to audit FKs, `stations` `ENABLE + FORCE RLS` enforces default-deny isolation, and no tenant breakout is possible.
 * **Security Debt:** Staged validation: `SEC-VAL-06A` (Cloud audit integrity, append-only triggers, RLS isolation & pre-persistence redaction) verified in `WP-006`. Canonical `SEC-VAL-06` (Tamper-Evident Audit & SQLite Hash Chain with direct Edge SQLite DB alteration simulation during sync) remains `OPEN` and owned by `WP-013` / `WP-008`.
 * **Evidence Required:** Test run outputs for append-only triggers, RLS tenant isolation, SHA-256 hash chain verification, and redaction verification; `EVIDENCE_SEC_VAL_06A_CLOUD_AUDIT_INTEGRITY.md`.
 * **Rollback:** Forward-fix schema trigger / drop added tables.

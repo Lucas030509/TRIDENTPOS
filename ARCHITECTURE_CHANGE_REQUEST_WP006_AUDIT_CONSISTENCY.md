@@ -5,8 +5,8 @@
 **Workflow:** `workflows/ARCHITECTURE_CHANGE.md`  
 **Requester:** `01_Solution_Architect — WP-006 CROSS-ARCHITECTURE CONSISTENCY REMEDIATION AUTHOR`  
 **Date:** `2026-09-04`  
-**Status:** `READY FOR ROLE-SEPARATED BASELINE REVIEW`  
-**Base Commit:** `5a52fd674e9afaf15f9c5f12c695d6ce09bd25b7`  
+**Status:** `APPROVED / FROZEN — FINAL INTEGRITY CLOSURE`  
+**Base Commit:** `bdada1d389a089e05dede3a2166beeb4a529911d`  
 **Operating Mode:** `SOLO_MAINTAINER`  
 **Classification:** `PRE-IMPLEMENTATION CONSISTENCY REMEDIATION & AUDIT INTEGRITY SPECIFICATION`  
 
@@ -81,9 +81,9 @@ Repository SSOT prevails over narrative planning assumptions.
       CONSTRAINT uq_audit_log_events_org_id UNIQUE (organization_id, id),
       CONSTRAINT uq_audit_log_events_seq UNIQUE NULLS NOT DISTINCT (organization_id, branch_id, sequence_number),
       CONSTRAINT uq_audit_log_events_hash UNIQUE (organization_id, record_hash),
-      CONSTRAINT fk_audit_log_events_branch FOREIGN KEY (organization_id, branch_id) REFERENCES branches(organization_id, id) ON DELETE SET NULL (branch_id),
-      CONSTRAINT fk_audit_log_events_actor FOREIGN KEY (organization_id, actor_id) REFERENCES users(organization_id, id) ON DELETE SET NULL (actor_id),
-      CONSTRAINT fk_audit_log_events_station FOREIGN KEY (organization_id, branch_id, station_id) REFERENCES stations(organization_id, branch_id, id) ON DELETE SET NULL (station_id)
+      CONSTRAINT fk_audit_log_events_branch FOREIGN KEY (organization_id, branch_id) REFERENCES branches(organization_id, id) ON DELETE RESTRICT,
+      CONSTRAINT fk_audit_log_events_actor FOREIGN KEY (organization_id, actor_id) REFERENCES users(organization_id, id) ON DELETE RESTRICT,
+      CONSTRAINT fk_audit_log_events_station FOREIGN KEY (organization_id, branch_id, station_id) REFERENCES stations(organization_id, branch_id, id) ON DELETE RESTRICT
   );
   ```
 
@@ -111,9 +111,9 @@ Repository SSOT prevails over narrative planning assumptions.
       timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       CONSTRAINT uq_sec_telemetry_org_id UNIQUE (organization_id, id),
-      CONSTRAINT fk_sec_telemetry_branch FOREIGN KEY (organization_id, branch_id) REFERENCES branches(organization_id, id) ON DELETE SET NULL (branch_id),
-      CONSTRAINT fk_sec_telemetry_actor FOREIGN KEY (organization_id, actor_id) REFERENCES users(organization_id, id) ON DELETE SET NULL (actor_id),
-      CONSTRAINT fk_sec_telemetry_station FOREIGN KEY (organization_id, branch_id, station_id) REFERENCES stations(organization_id, branch_id, id) ON DELETE SET NULL (station_id)
+      CONSTRAINT fk_sec_telemetry_branch FOREIGN KEY (organization_id, branch_id) REFERENCES branches(organization_id, id) ON DELETE RESTRICT,
+      CONSTRAINT fk_sec_telemetry_actor FOREIGN KEY (organization_id, actor_id) REFERENCES users(organization_id, id) ON DELETE RESTRICT,
+      CONSTRAINT fk_sec_telemetry_station FOREIGN KEY (organization_id, branch_id, station_id) REFERENCES stations(organization_id, branch_id, id) ON DELETE RESTRICT
   );
   ```
 
@@ -186,26 +186,30 @@ In conformance with `DATA_PROTECTION_AND_PRIVACY.md` Sec. 3:
 All 9 Product Owner decisions (`OQ-SSOT-01` through `OQ-SSOT-07`, `OQ-ARCH-01`, `OQ-ARCH-02`) remain strictly `PENDING PO DECISION`.
 `WP-006` has zero PO dependency: the structured audit framework supports arbitrary event types associated with future business behaviors without deciding or committing those behaviors.
 
-### 3.9 Multi-Column Foreign Key Delete Semantics & Historical Integrity (Remediation R2)
-- **Defect in Prior Author Subject (`A1`):** Multi-column foreign keys on `audit_log_events` and `security_telemetry_events` referenced composite unique keys `(organization_id, id)` with unqualified `ON DELETE SET NULL`. Because `organization_id UUID NOT NULL`, unqualified `SET NULL` attempts to set all composite FK columns to NULL upon parent row deletion, violating the NOT NULL constraint on `organization_id` and threatening tenant identity.
-- **Architectural Decision (PostgreSQL 16 Column-Specific SET NULL):**
-  - Branch reference: `ON DELETE SET NULL (branch_id)`
-  - Actor reference: `ON DELETE SET NULL (actor_id)`
-  - Station reference: `ON DELETE SET NULL (station_id)`
-- **Prohibition of `ON DELETE CASCADE`:** Deleting a parent branch, user, or station entity must NEVER cascade-delete audit trail or security telemetry rows.
+### 3.9 Multi-Column Foreign Key Delete Semantics & Historical Integrity (Final R4 Policy)
+- **Defect in Prior Author Subjects (`A1`/`A2`):** `A1` referenced composite keys with unqualified `ON DELETE SET NULL`, which attempted to null `organization_id NOT NULL`. While `A2` attempted column-specific `SET NULL`, setting `branch_id`, `actor_id`, or `station_id` to NULL on parent deletion still mutates historical forensic records after the fact.
+- **Architectural Decision (Immutable History via `ON DELETE RESTRICT`):**
+  - Branch reference: `ON DELETE RESTRICT`
+  - Actor reference: `ON DELETE RESTRICT`
+  - Station reference: `ON DELETE RESTRICT`
+- **Prohibition of `ON DELETE CASCADE` and `ON DELETE SET NULL`:** Deleting a parent branch, user, or station entity must NEVER cascade-delete OR mutate/null audit trail or security telemetry rows.
+- **Operational Decommissioning Contract:**
+  - Branch: `branches.is_active = false`
+  - User: `users.is_active = false`
+  - Station: `stations.is_authorized = false`
 - **Invariants Preserved:**
   1. `organization_id NOT NULL` is unconditionally preserved.
-  2. Tenant provenance remains immutable under all referential actions.
-  3. Historical audit records remain intact and append-only.
-  4. Forensic usefulness is maximized (e.g., decommissioned stations retain branch provenance).
+  2. Historical audit records remain completely immutable byte-for-byte and field-for-field.
+  3. Physical deletion of operational entities referenced by audit records is rejected.
+  4. Operational retirement is strictly performed via soft deactivation flags.
   5. Fully valid DDL supported natively by PostgreSQL 16.
 - **Objective Acceptance Criteria Added to Plan:**
-  - A: Deleting a referenced branch does NOT attempt to NULL `organization_id`.
-  - B: Deleting / deactivating a referenced user follows actor-history policy without changing `organization_id`.
-  - C: Deleting a station follows station-history policy without changing `organization_id`.
-  - D: Audit records themselves are NOT cascade-deleted.
-  - E: Tenant provenance remains unchanged.
-  - F: DDL executes successfully on PostgreSQL 16.
+  - A: Deleting a referenced branch is rejected (`RESTRICT`).
+  - B: Soft-deactivating a referenced branch (`is_active = false`) succeeds while audit records remain unchanged.
+  - C: Deleting a referenced user is rejected (`RESTRICT`), while soft-deactivating user succeeds.
+  - D: Deleting a referenced station is rejected (`RESTRICT`), while soft-deauthorizing station succeeds.
+  - E: Audit records themselves are NOT cascade-deleted or altered.
+  - F: Tenant provenance remains unchanged and stations RLS enforces default-deny isolation.
 
 ---
 
@@ -213,12 +217,12 @@ All 9 Product Owner decisions (`OQ-SSOT-01` through `OQ-SSOT-07`, `OQ-ARCH-01`, 
 
 | Document | Nature of Change | Justification |
 |---|---|---|
-| `IMPLEMENTATION_PLAN.md` | Updated `WP-006` specification, dependencies, acceptance criteria, test cases, and staged `SEC-VAL-06A` / `SEC-VAL-06` mapping. Added `stations`, `audit_log_events`, and `security_telemetry_events` to Platform Core summary. Added integration test criteria for column-specific FK delete semantics. | Eliminates missing section citations, defines exact deliverables and test cases, prevents false PASS on `SEC-VAL-06`, verifies column-specific SET NULL. |
-| `DATA_MODEL.md` | Added composite unique constraints on `stations`, defined full DDL for `audit_log_events` and `security_telemetry_events`, append-only triggers, RLS policies, and indexes. Formalized column-specific `ON DELETE SET NULL (branch_id)`, `(actor_id)`, `(station_id)`. | Resolves Contradiction A and multi-column FK delete defect; establishes tenant-safe schema before builder activation. |
-| `DATA_DICTIONARY.md` | Added attribute-level dictionary entries for `stations`, `audit_log_events`, and `security_telemetry_events` in Section 1.1 with explicit delete semantics notes. | Aligns data dictionary with data model. |
-| `SECURITY_LOGGING_AND_MONITORING.md` | Added Section 3 defining the Cloud vs Edge split, structured logger interfaces, SHA-256 hash chaining, checkpoint format, redaction rules, append-only model, and multi-column FK delete semantics. | Resolves Contradiction B; creates the missing frozen specification for WP-006. |
+| `IMPLEMENTATION_PLAN.md` | Updated `WP-006` specification, dependencies, acceptance criteria, test cases, and staged `SEC-VAL-06A` / `SEC-VAL-06` mapping. Added `stations`, `audit_log_events`, and `security_telemetry_events` to Platform Core summary. Added integration test criteria for immutable-history `ON DELETE RESTRICT` delete semantics and soft deactivation. | Eliminates missing section citations, defines exact deliverables and test cases, prevents false PASS on `SEC-VAL-06`, verifies immutable history. |
+| `DATA_MODEL.md` | Added composite unique constraints on `stations`, defined full DDL for `audit_log_events` and `security_telemetry_events`, append-only triggers, RLS policies, and indexes. Formalized immutable-history `ON DELETE RESTRICT` on all audit parent foreign keys. | Resolves Contradiction A and mutability defects; establishes tenant-safe immutable schema before builder activation. |
+| `DATA_DICTIONARY.md` | Added attribute-level dictionary entries for `stations`, `audit_log_events`, and `security_telemetry_events` in Section 1.1 with explicit `ON DELETE RESTRICT` immutable-history semantics. | Aligns data dictionary with data model. |
+| `SECURITY_LOGGING_AND_MONITORING.md` | Added Section 3 defining the Cloud vs Edge split, structured logger interfaces, SHA-256 hash chaining, checkpoint format, redaction rules, append-only model, and immutable-history `ON DELETE RESTRICT` delete semantics. | Resolves Contradiction B; creates the missing frozen specification for WP-006. |
 | `SECURITY_RISKS.md` | Clarified staged validation for `SEC-06` (`SEC-VAL-06A` in Cloud WP-006 vs `SEC-VAL-06` in Sync WP-013). | Aligns risk matrix with staged validation framework. |
-| `evidence/WP-006_PLAN_REMEDIATION_AUTHOR_EVIDENCE.md` | Author evidence documenting remediation decisions, baseline preservation, and review readiness for R2. | Required EAAF author evidence artifact. |
+| `evidence/WP-006_PLAN_REMEDIATION_AUTHOR_EVIDENCE.md` | Author evidence documenting remediation decisions, baseline preservation, and review readiness for R4. | Required EAAF author evidence artifact. |
 
 ---
 

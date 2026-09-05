@@ -167,13 +167,19 @@ Para cumplir con `DATA_PROTECTION_AND_PRIVACY.md` Sec. 3:
    - Cláusulas `USING (organization_id = current_app_org_id())` y `WITH CHECK (organization_id = current_app_org_id())`.
    - Default Deny garantizado cuando `app.current_organization_id` no está inicializada o es nula.
    - Claves foráneas compuestas con `(organization_id, id)` en sucursales, usuarios y estaciones para impedir colisiones o suplantaciones cruzadas entre inquilinos.
-4. **Semántica de Eliminación en Claves Foráneas Compuestas (Multi-Column FK Delete Semantics):**
-   - Prohibición estricta de `ON DELETE CASCADE`: La eliminación de una entidad principal jamás debe borrar en cascada la evidencia forense ni registros de auditoría.
-   - Preservación de `organization_id NOT NULL`: Para evitar violaciones de no-nulabilidad e intentos de anular la identidad del tenant, se exige la sintaxis específica de PostgreSQL 16:
-     - `ON DELETE SET NULL (branch_id)` para sucursales.
-     - `ON DELETE SET NULL (actor_id)` para usuarios / actores.
-     - `ON DELETE SET NULL (station_id)` para terminales / estaciones.
-   - Esto preserva la procedencia del tenant (`organization_id`), la inmutabilidad histórica del registro y su utilidad forense.
+4. **Semántica de Eliminación en Claves Foráneas de Auditoría (Immutable-History Referential Actions):**
+   - **Invariante Fundamental:** Una vez insertada, una fila de `audit_log_events` o `security_telemetry_events` jamás debe ser modificada por DML de aplicación ni por acciones referenciales de claves foráneas.
+   - **Prohibición Estricta de `CASCADE` y `SET NULL`:** Queda estrictamente prohibido el uso de `ON DELETE CASCADE` y `ON DELETE SET NULL`. Ninguna eliminación de entidades operativas principales puede borrar o mutar registros históricos forenses.
+   - **Política Mandatoria `ON DELETE RESTRICT`:**
+     - `ON DELETE RESTRICT` para sucursales (`fk_audit_log_events_branch`, `fk_sec_telemetry_branch`).
+     - `ON DELETE RESTRICT` para usuarios / actores (`fk_audit_log_events_actor`, `fk_sec_telemetry_actor`).
+     - `ON DELETE RESTRICT` para estaciones / terminales (`fk_audit_log_events_station`, `fk_sec_telemetry_station`).
+   - **Rechazo de Eliminación Física:** La eliminación física de cualquier sucursal, usuario o estación que posea registros de auditoría asociados es rechazada directamente por PostgreSQL.
+   - **Mecanismo Canónico de Retiro Operacional (Soft Decommissioning):**
+     - Sucursales: `branches.is_active = false`
+     - Usuarios: `users.is_active = false`
+     - Estaciones: `stations.is_authorized = false`
+   - **Propiedad de la Tabla `stations`:** `WP-006` es propietario explícito de la creación de la tabla maestra `stations` en Cloud como prerrequisito soportante de Platform Core para garantizar la integridad referencial de auditoría (`ON DELETE RESTRICT`), sus restricciones únicas compuestas y su aislamiento mandatorio `ENABLE + FORCE ROW LEVEL SECURITY` con `current_app_org_id()`. El protocolo de enrolamiento Edge, credenciales y mTLS pertenece de forma exclusiva a `WP-009`.
 
 ---
 
