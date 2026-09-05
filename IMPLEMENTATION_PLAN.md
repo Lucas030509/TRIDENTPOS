@@ -272,26 +272,47 @@ Foundational domain models, Multi-Tenant RLS isolation, IAM, and audit logging.
 
 #### `WP-006`: Tamper-Evident Security Logging & Cloud Audit Trail
 * **Bounded Context:** Platform Core
-* **Frozen Requirements:** `SECURITY_LOGGING_AND_MONITORING.md` Sec. 2, 3; `DATA_PROTECTION_AND_PRIVACY.md`
-* **ADRs:** `ADR-001`
+* **Frozen Requirements:** `SECURITY_LOGGING_AND_MONITORING.md` Sec. 1, 2, 3; `DATA_PROTECTION_AND_PRIVACY.md` Sec. 3; `SECURITY_ARCHITECTURE.md` Sec. 10
+* **ADRs:** `ADR-001`, `ADR-010`
 * **Data Objects:** `audit_log_events`, `security_telemetry_events`
-* **APIs / Contracts:** Structured audit logger interface (`logAuditEvent()`)
+* **APIs / Contracts:** Structured audit logger interface (`logAuditEvent()`), security telemetry interface (`logSecurityTelemetryEvent()`), Cloud checkpoint verification contract (`IAuditLogger`).
 * **Builder Agent:** `13_Backend_Developer`
 * **Specialist Reviewer:** `08_Security_Architect`
 * **Code Reviewer:** `11_Code_Reviewer`
 * **Prerequisites:** `WP-004`
-* **Dependencies:** PostgreSQL 16, cryptographic hashing library (SHA-256).
-* **Inputs:** `SECURITY_LOGGING_AND_MONITORING.md`
-* **Outputs:** Append-only audit log table with hash-chaining column (`previous_record_hash`, `record_hash`); structured logger automatically redacting PII and credentials.
-* **Acceptance Criteria:** Audit table enforces append-only via DB trigger (rejects UPDATE / DELETE); each entry chains hash of preceding entry; PII / passwords automatically redacted from payload.
-* **Tests:** Test simulating UPDATE on audit table (must fail); test verifying hash-chain continuity; test verifying credential redaction.
-* **Security Debt:** `SEC-VAL-06` (Tamper-evident audit verification & log redaction).
-* **Evidence Required:** Hash-chain integrity test output and DB trigger denial logs.
-* **Rollback:** Forward-fix schema trigger.
+* **Dependencies:** PostgreSQL 16, cryptographic hashing library (standard SHA-256 via Node.js crypto / webcrypto), RFC 8785 canonical serialization.
+* **Inputs:** `SECURITY_LOGGING_AND_MONITORING.md`, `DATA_MODEL.md` Sec. 2.1, `DATA_PROTECTION_AND_PRIVACY.md` Sec. 3, `ACR-2026-007`
+* **Outputs:** Cloud append-only audit log table (`audit_log_events`) and security telemetry table (`security_telemetry_events`) with SHA-256 hash-chaining columns (`previous_record_hash`, `record_hash`), append-only DB triggers denying UPDATE/DELETE/TRUNCATE under application trust boundary, structured logger automatically redacting prohibited secrets and masking PII before any persistence or observability emission, tenant isolation via FORCE RLS and `current_app_org_id()`, Cloud checkpoint representation and verification primitives.
+* **Acceptance Criteria:**
+  1. DDL for `audit_log_events` and `security_telemetry_events` includes composite tenant keys and foreign keys.
+  2. Database triggers strictly reject any `UPDATE` or `DELETE` attempt on `audit_log_events` and `security_telemetry_events`.
+  3. Table grants for application user role deny `TRUNCATE`, `UPDATE`, and `DELETE`.
+  4. Both tables enforce `ENABLE ROW LEVEL SECURITY` and `FORCE ROW LEVEL SECURITY` with `current_app_org_id()` default-deny policies.
+  5. Structured audit logger interface (`logAuditEvent()`) automatically redacts sensitive keys (`password`, `pin`, `pin_hash`, `token`, `secret`, `authorization`, `credit_card`, `cvv`, `private_key`) recursively and case-insensitively, and masks emails (`u***@domain.com`) and phone numbers (`******1234`) BEFORE database persistence and external telemetry emission.
+  6. Each audit event chains the SHA-256 hash of the previous record for the stream; genesis record uses 64 zeroes; sequence numbers are strictly monotonic.
+  7. Cloud checkpoint verification primitives validate contiguous incoming chain segments and flag/quarantine broken hash chains with `AUDIT_HASH_CHAIN_BREAK` telemetry.
+  8. Security telemetry interface (`logSecurityTelemetryEvent()`) persists security policy default violations without pulling forward future detection engines.
+  9. Multi-column foreign keys on `audit_log_events` and `security_telemetry_events` enforce column-specific `ON DELETE SET NULL`: `ON DELETE SET NULL (branch_id)` for branch references, `ON DELETE SET NULL (actor_id)` for user references, and `ON DELETE SET NULL (station_id)` for station references. Deleting a parent branch, user, or station never attempts to NULL `organization_id`, preserves `organization_id NOT NULL`, maintains tenant provenance, and never cascade-deletes audit records.
+* **Tests:**
+  1. Negative test attempting `UPDATE` on `audit_log_events` (must fail with append-only exception).
+  2. Negative test attempting `DELETE` on `audit_log_events` (must fail with append-only exception).
+  3. Negative test attempting `UPDATE` or `DELETE` on `security_telemetry_events` (must fail with append-only exception).
+  4. Multi-tenant RLS isolation tests verifying tenant A cannot read or write tenant B audit records or telemetry events.
+  5. SHA-256 hash-chain continuity test verifying deterministic serialization, correct previous hash chaining, and detection of payload tampering.
+  6. Recursive redaction test verifying prohibited credentials and PII masking across deeply nested metadata objects prior to persistence and logging.
+  7. Cloud checkpoint verification test confirming valid chain acceptance and quarantine of broken/discontinuous sequence batches.
+  8. PostgreSQL integration test verifying that deleting a referenced branch sets `branch_id` to NULL without attempting to NULL `organization_id` or deleting the audit record.
+  9. PostgreSQL integration test verifying that deleting/deactivating a referenced user sets `actor_id` to NULL without changing `organization_id` or deleting the audit record.
+  10. PostgreSQL integration test verifying that deleting a station sets `station_id` to NULL without changing `organization_id` or `branch_id` or deleting the audit record.
+  11. PostgreSQL integration test proving audit records are NOT cascade-deleted and tenant provenance remains unchanged.
+  12. PostgreSQL 16 DDL execution test confirming all foreign keys with column-specific `ON DELETE SET NULL` execute cleanly.
+* **Security Debt:** Staged validation: `SEC-VAL-06A` (Cloud audit integrity, append-only triggers, RLS isolation & pre-persistence redaction) verified in `WP-006`. Canonical `SEC-VAL-06` (Tamper-Evident Audit & SQLite Hash Chain with direct Edge SQLite DB alteration simulation during sync) remains `OPEN` and owned by `WP-013` / `WP-008`.
+* **Evidence Required:** Test run outputs for append-only triggers, RLS tenant isolation, SHA-256 hash chain verification, and redaction verification; `EVIDENCE_SEC_VAL_06A_CLOUD_AUDIT_INTEGRITY.md`.
+* **Rollback:** Forward-fix schema trigger / drop added tables.
 * **Feature Flag:** NO
 * **Migration Impact:** Expand
 * **Risk:** Low
-* **PO Dependency:** None
+* **PO Dependency:** None (All 9 PO questions remain PENDING PO DECISION; audit framework accepts event types for unresolved business behaviors without deciding them).
 * **Parallelizable:** YES (with `WP-005`)
 * **Handoff Target:** `WP-007`
 
@@ -891,7 +912,7 @@ Disaster recovery verification, hardware performance benchmarks, chaos tests, an
 
 | Bounded Context | Work Packages Covering Context | Primary Data Entities |
 |---|---|---|
-| **Platform Core** | `WP-001`, `WP-002`, `WP-003`, `WP-004`, `WP-005`, `WP-006`, `WP-007`, `WP-009`, `WP-010`, `WP-012`, `WP-013`, `WP-024`, `WP-028` | `organizations`, `branches`, `users`, `roles`, `audit_log_events`, `OutboxQueue` |
+| **Platform Core** | `WP-001`, `WP-002`, `WP-003`, `WP-004`, `WP-005`, `WP-006`, `WP-007`, `WP-009`, `WP-010`, `WP-012`, `WP-013`, `WP-024`, `WP-028` | `organizations`, `branches`, `users`, `roles`, `stations`, `audit_log_events`, `security_telemetry_events`, `OutboxQueue` |
 | **TRIDENTPOS** | `WP-008`, `WP-010`, `WP-014`, `WP-015`, `WP-016`, `WP-025`, `WP-026` | `mesas`, `cuentas`, `ordenes`, `orden_partidas`, `kds_tickets`, `turnos_caja` |
 | **Inventory** | `WP-017`, `WP-018` | `insumos`, `almacenes`, `recetas`, `stock_actual`, `movimientos_inventario` |
 | **Procurement** | `WP-019` | `proveedores`, `ordenes_compra`, `recepciones_mercancia` |
@@ -1041,8 +1062,8 @@ Every one of the 11 cataloged Security Validation Debts is mapped to concrete Wo
 | **`SEC-VAL-02`** | Offline IAM Brute Force & Rate Limiting | `WP-010` | `16_Native_Edge_Developer` | Automated attack script submitting 100 rapid invalid PINs to verify lockout after 5 attempts. | `EVIDENCE_SEC_VAL_02_PIN_LOCKOUT.md` |
 | **`SEC-VAL-03`** | Trust Bootstrap & Rogue Edge Resistance | `WP-009` | `16_Native_Edge_Developer` | LAN spoofing test simulating rogue mDNS server presenting mismatched certificate fingerprint. | `EVIDENCE_SEC_VAL_03_ROGUE_EDGE.md` |
 | **`SEC-VAL-04`** | Lease Fencing & Zombie Edge Rejection | `WP-011` | `13_Backend_Developer` | Chaos simulation sending sync batch with outdated `fencingToken` and verifying HTTP 403 LEASE_REVOKED rejection. | `EVIDENCE_SEC_VAL_04_ZOMBIE_EDGE.md` |
-| **`SEC-VAL-05`** | Secrets & Vault Key Redaction | `WP-002`, `WP-005` | `18_DevOps_Engineer` | CI/CD Gitleaks/TruffleHog scanner and automated log redaction regex verification. | `EVIDENCE_SEC_VAL_05_SECRET_SCAN.md` |
-| **`SEC-VAL-06`** | Tamper-Evident Audit & SQLite Hash Chain | `WP-006` | `13_Backend_Developer` | Direct database alteration simulation verifying hash-chain breakage detection during sync. | `EVIDENCE_SEC_VAL_06_AUDIT_INTEGRITY.md` |
+| **`SEC-VAL-06A`** | Cloud Audit Integrity & Append-Only Controls | `WP-006` | `13_Backend_Developer` | Cloud audit table append-only trigger rejection (UPDATE/DELETE/TRUNCATE), SHA-256 hash-chain verification, recursive redaction, and multi-tenant RLS isolation. | `EVIDENCE_SEC_VAL_06A_CLOUD_AUDIT_INTEGRITY.md` |
+| **`SEC-VAL-06`** | Tamper-Evident Audit & SQLite Hash Chain (End-to-End) | `WP-013`, `WP-008` | `13_Backend_Developer` / `16_Native_Edge_Developer` | Direct database alteration simulation on Edge SQLite `local_audit_trail` verifying hash-chain breakage detection, sync quarantine, and forensic reporting during synchronization. | `EVIDENCE_SEC_VAL_06_AUDIT_INTEGRITY.md` |
 | **`SEC-VAL-07`** | Electron Security & IPC Allowlist Hardening | `WP-007` | `16_Native_Edge_Developer` | Automated SAST scan and renderer XSS exploit test attempting to access Node `child_process`. | `EVIDENCE_SEC_VAL_07_ELECTRON_HARDENING.md` |
 | **`SEC-VAL-08`** | Hardware Benchmark (Argon2id on $\le 2\text{ GB}$ RAM) | `WP-010`, `WP-028` | `16_Native_Edge_Developer` | Performance benchmark on physical or VM hardware throttled to 2 GB RAM and 2 vCPUs. | `EVIDENCE_SEC_VAL_08_HARDWARE_BENCHMARK.md` |
 | **`SEC-VAL-09`** | WAN Failure Mode & Offline Continuity | `WP-013`, `WP-027` | `13_Backend_Developer` | Continuous order entry during simulated 30-minute WAN outage followed by reconnect sync. | `EVIDENCE_SEC_VAL_09_OFFLINE_CONTINUITY.md` |
