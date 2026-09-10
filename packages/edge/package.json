@@ -21,5 +21,8 @@
     "lint": "eslint src/",
     "test": "node --test dist/index.test.js",
     "clean": "rm -rf dist"
+  },
+  "devDependencies": {
+    "electron": "44.3.0"
   }
 }
