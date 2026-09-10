@@ -1,0 +1,21 @@
+{
+  "version": "1.0.0",
+  "environment": "development",
+  "station": {
+    "code": "EDGE-STATION-01",
+    "stationType": "POS",
+    "name": "Branch Host Terminal 01"
+  },
+  "network": {
+    "host": "127.0.0.1",
+    "port": 8080
+  },
+  "logging": {
+    "level": "info"
+  },
+  "window": {
+    "width": 1280,
+    "height": 800,
+    "title": "TRIDENTPOS Edge Host"
+  }
+}

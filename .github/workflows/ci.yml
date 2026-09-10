@@ -135,7 +135,54 @@ jobs:
       - name: Deterministic dependency install
         run: npm ci
 
-      - name: Run unit test suites
-        run: npm run test
+      - name: Configure and verify Linux chrome-sandbox for Electron
+        run: |
+          # 1. Force Electron binary download and extraction prior to sandbox configuration
+          node -e "require('electron')" || true
+
+          SANDBOX_PATH=$(node -e "
+            const p = require('electron');
+            const path = require('node:path');
+            const bin = typeof p === 'string' ? p : (p.default || p);
+            console.log(path.join(path.dirname(bin), 'chrome-sandbox'));
+          ")
+
+          echo "Configuring Linux chrome-sandbox at: $SANDBOX_PATH"
+          if [ ! -f "$SANDBOX_PATH" ]; then
+            echo "FATAL: chrome-sandbox binary missing at $SANDBOX_PATH"
+            exit 1
+          fi
+
+          sudo chown root:root "$SANDBOX_PATH"
+          sudo chmod 4755 "$SANDBOX_PATH"
+
+          # 2. Diagnostic stat display
+          stat "$SANDBOX_PATH"
+
+          # 3. Deterministic verification: fail closed if root ownership or SUID bit is missing
+          node -e "
+            const fs = require('node:fs');
+            const stat = fs.statSync('$SANDBOX_PATH');
+            const isRoot = stat.uid === 0;
+            const hasSuid = (stat.mode & 0o4000) !== 0;
+            const isExecutable = (stat.mode & 0o111) !== 0;
+            console.log('chrome-sandbox diagnostics: UID=' + stat.uid + ', mode=' + (stat.mode & 0o7777).toString(8));
+            if (!isRoot) {
+              console.error('FATAL: chrome-sandbox is not owned by root (UID=' + stat.uid + ').');
+              process.exit(1);
+            }
+            if (!hasSuid) {
+              console.error('FATAL: chrome-sandbox lacks SUID bit (mode=' + (stat.mode & 0o7777).toString(8) + ').');
+              process.exit(1);
+            }
+            if (!isExecutable) {
+              console.error('FATAL: chrome-sandbox lacks executable bit.');
+              process.exit(1);
+            }
+            console.log('SUCCESS: chrome-sandbox verified with root ownership and mode 4755.');
+          "
+
+      - name: Run unit test suites and actual Electron runtime validation
+        run: xvfb-run --auto-servernum --server-args="-screen 0 1024x768x24" npm run test
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/tridentpos_test
