@@ -7,6 +7,9 @@
 - **Operating Mode:** `SOLO_MAINTAINER`
 - **Implementation Base SHA:** `898d64856c533043068614d04f6dcc55bf351f83`
 - **Feature Branch:** `feature/wp-008-edge-sqlite-wal-durability`
+- **PR:** `#26`
+- **Previous Invalidated Subject (S):** `b801d2e3ad259aa7157ba3ba0beda942f7d290e4`
+- **New Frozen Implementation Subject (S2):** (To be recorded upon commit)
 - **Governing Architecture Change Request / Baseline:**
   - `ADR/ADR-004-embedded-database-sqlite-durability.md`
   - `DATA_ARCHITECTURE.md` Sec. 3 (Branch Operational Plane Persistence)
@@ -20,7 +23,7 @@
   - Embedded SQLite Engine: `3.53.4`
   - Pinned Host Electron Runtime: `electron@44.3.0`
 - **Date:** 2026-09-10
-- **Builder Verdict:** `READY FOR ROLE-SEPARATED REVIEW`
+- **Builder Verdict:** `READY FOR ROLE-SEPARATED REVIEW (REMEDIATION R1)`
 
 ---
 
@@ -29,13 +32,14 @@
 ### 2.1 File Artifacts Added and Modified
 
 - **New Core Modules:**
-  - `packages/edge/src/db/types.ts`: Error hierarchies (`EdgeDatabaseError`, `EdgeIntegrityViolationError`, `EdgeDurabilityError`), durability modes (`NORMAL`, `FULL`), checkpoint modes, WAL alert threshold constant (50 MB), and interfaces.
+  - `packages/edge/src/db/types.ts`: Error hierarchies (`EdgeDatabaseError`, `EdgeIntegrityViolationError`, `EdgeDurabilityError`, `EdgeTransactionRollbackError`), durability modes (`NORMAL`, `FULL`), checkpoint modes, WAL alert threshold constant (50 MB), and interfaces.
   - `packages/edge/src/db/write-serializer.ts`: `WriteSerializer` providing FIFO serialized execution for competing write operations to eliminate avoidable `SQLITE_BUSY` errors without hiding errors or infinite retries.
   - `packages/edge/src/db/wal-manager.ts`: `WalCheckpointManager` providing WAL/SHM file size observability, preventative 50 MB alert threshold auditing (ADR-004 Sec. 10), and native SQLite WAL checkpoint dispatching (`PASSIVE`, `FULL`, `RESTART`, `TRUNCATE`).
-  - `packages/edge/src/db/edge-database.ts`: `EdgeDatabaseService` connection factory and lifecycle manager with strict WAL activation and readback verification, dual synchronous durability model (`setSyncPragma`, `runInDurabilityMode`, `runCriticalTransaction`), transaction coordination (`runInTransaction`), integrity checks (`verifyIntegrity`, `assertIntegrity`), and cleanup.
+  - `packages/edge/src/db/edge-database.ts`: `EdgeDatabaseService` connection factory and lifecycle manager with strict WAL activation and readback verification, dual synchronous durability model (`setSyncPragma`, `runInDurabilityMode`, `runCriticalTransaction`), transaction coordination (`runInTransaction`), integrity checks (`verifyIntegrity`, `assertIntegrity`), fail-closed durability and rollback tracking (`isDurabilityCompromised`, `isTransactionCompromised`), and cleanup.
+  - `packages/edge/src/db/test-access.ts`: Controlled test harness accessor `getTestNativeDatabase(service)` utilizing non-exported `Symbol.for('trident.edge.test.nativeDatabase')`, strictly sequestered from the production package public API.
   - `packages/edge/src/db/index.ts`: Subsystem exports.
 - **New Test Fixtures & Suites:**
-  - `packages/edge/src/database.test.ts`: Automated test suite covering `WP008-T01` through `WP008-T15`.
+  - `packages/edge/src/database.test.ts`: Automated test suite covering `WP008-T01` through `WP008-T15` and negative tests `WP008-R1-T01` through `WP008-R1-T04`.
   - `packages/edge/scripts/crash-worker-helper.cjs`: Child worker script for deterministic uncommitted transaction generation and abrupt `SIGKILL` crash simulation.
 - **Modified Packaging & Re-Exports:**
   - `packages/edge/package.json`: Added exact dependency `"better-sqlite3": "13.0.3"` and devDependency `"@types/better-sqlite3": "9.6.0"`; updated `test:unit` to include `dist/database.test.js`.
@@ -68,7 +72,7 @@ Per ADR-004:
 2. **Financial / Fiscal Critical Transactions:**
    - Supported via `setSyncPragma('FULL')` and `runCriticalTransaction(fn)` / `runInDurabilityMode('FULL', fn)`.
    - Forces fsync barriers (`PRAGMA synchronous = FULL;`, SQLite integer value `2`).
-   - Guaranteed restoration: A `finally` block ensures that regardless of whether the critical transaction succeeds or throws an exception, `synchronous` mode is safely restored to `NORMAL`.
+   - Guaranteed restoration: A `finally` block restores mode to `NORMAL`. If restoration fails, the service transitions to a fail-closed compromised state (`isDurabilityCompromised = true`) and throws an explicit `EdgeDurabilityError` preserving cause contexts.
    - Rejects any unauthorized durability modes (e.g. `OFF`, `EXTRA`, arbitrary SQL injection).
 
 ### 2.5 Write Serialization Strategy
@@ -93,7 +97,7 @@ Per ADR-004:
 
 ---
 
-## 3. Test Evidence Matrix (WP008-T01..T15)
+## 3. Test Evidence Matrix (WP008-T01..T15 & WP008-R1-T01..T04)
 
 Command executed:
 ```bash
@@ -101,9 +105,9 @@ npm run test --workspace=@trident/edge
 ```
 
 Output Summary:
-- Total unit tests executed: 37 (22 WP-007 + 15 WP-008)
+- Total unit tests executed: 41 (22 WP-007 + 19 WP-008)
 - Actual Electron runtime tests executed: 9 (WP007-E01..E09)
-- Total passed: 46
+- Total passed: 50
 - Total failed: 0
 - Total skipped: 0
 
@@ -124,6 +128,10 @@ Output Summary:
 | **WP008-T13** | Abrupt process termination recovery | Terminate child process during uncommitted transaction with `SIGKILL`; reopen database | Reopened cleanly; `integrity_check` returns `ok`; committed records valid; incomplete transaction absent | **PASS** |
 | **WP008-T14** | Repeated recovery stress | Deterministically survives repeated crash/recovery cycles (5 iterations) | All 5 cycles pass integrity assertions; committed count matches iteration; zero leaked records | **PASS** |
 | **WP008-T15** | Existing regression suite | Core Edge package info and pre-existing APIs remain intact | Service lifecycle and metadata verified cleanly; all 22 WP-007 tests pass | **PASS** |
+| **WP008-R1-T01** | Durability restoration failure | Restoration failure fails closed with `EdgeDurabilityError`, never returns success, locks service into fail-closed state | Throws `EdgeDurabilityError`; subsequent queries rejected | **PASS** |
+| **WP008-R1-T02** | Operation failure + restoration failure | Both primary operation error and restoration error preserved in cause | Throws `EdgeDurabilityError`; cause contains both `operationError` and `restorationError` | **PASS** |
+| **WP008-R1-T03** | Rollback failure handling | Failure during `ROLLBACK` fails closed with `EdgeTransactionRollbackError`, locks service into fail-closed state | Throws `EdgeTransactionRollbackError`; subsequent operations fail closed | **PASS** |
+| **WP008-R1-T04** | Native escape-hatch boundary | `getNativeDatabase` is not exposed on production service instance or prototype; test harness retains access | `service.getNativeDatabase === undefined`; prototype does not have property; test harness accesses native SQLite | **PASS** |
 
 ---
 
@@ -175,7 +183,8 @@ An exhaustive search across the entire WP-008 changeset yielded zero bypasses or
 | `@ts-ignore` / `@ts-nocheck` | **0 occurrences** | Strict TypeScript enforced (`skipLibCheck = false`) |
 | `continue-on-error` / `allow-failure` | **0 occurrences** | None in CI or test configs |
 | `|| true` | **0 occurrences** | None in WP-008 changes |
-| Swallowed promise errors (`.catch(() => {})`) | **0 occurrences** | All errors propagate or fail closed |
+| Gate-relevant swallowed failures | **0 occurrences** | All operational and transaction failures propagate or fail closed |
+| Non-gate test teardown cleanup exceptions | **Documented (harmless)** | `cleanupTempDb` in `database.test.ts` uses empty catch to ignore non-critical unlinking errors of temporary SQLite scratch folders during test teardown |
 | Unconditional mocks replacing SQLite engine | **0 occurrences** | Real `better-sqlite3@13.0.3` (SQLite 3.53.4) executed |
 | In-memory only databases in durability tests | **0 occurrences** | All durability, WAL, and crash tests use isolated disk files |
 
@@ -208,8 +217,51 @@ The implementation strictly honors the WP-008 boundaries. The following prohibit
 
 ---
 
-## 8. Builder Conclusion & Next Steps
+## 8. Remediation R1: Fail-Closed Durability + Controlled SQLite Boundary
 
-WP-008 implementation is complete, objectively verified by 15 dedicated tests and 31 pre-existing regression tests, and complies with all EAAF v1.2.0 rules.
+### 8.1 Remediation Context
 
-The feature branch is ready for commit, PR creation, implementation subject freeze, and independent role-separated reviews by `03_Data_Architect` and `11_Code_Reviewer`.
+- **Previous Subject:** `S = b801d2e3ad259aa7157ba3ba0beda942f7d290e4`
+- **Invalidation Rationale:** Failed external Quick Integrity Check due to two implementation/control inconsistencies:
+  1. Durability mode restoration failure was swallowed into a `console.error` and returned normal success.
+  2. Rollback failure during transaction abort was swallowed into a `console.error` before rethrowing the original error without marking the connection untrusted.
+  3. Exposure of `public getNativeDatabase(): Database.Database` allowed arbitrary consumers to bypass transaction guards, write serialization, and durability pragmas.
+
+### 8.2 Exact Defects Corrected
+
+1. **R1-A — Durability Restoration Fail-Closed (`EdgeDatabaseService.runInDurabilityMode`):**
+   - Implemented `isDurabilityCompromised` state flag.
+   - If restoring the prior durability mode throws:
+     - Sets `isDurabilityCompromised = true`.
+     - Preserves original operation error (if any) and restoration error in `cause`.
+     - Throws typed `EdgeDurabilityError`.
+     - Never returns successful operation status.
+   - `assertOpen()` checks `isDurabilityCompromised` and rejects any subsequent queries fail-closed.
+
+2. **R1-B — Rollback Failure Fail-Closed (`EdgeDatabaseService.runInTransaction`):**
+   - Implemented `isTransactionCompromised` state flag.
+   - If `ROLLBACK` fails:
+     - Sets `isTransactionCompromised = true`.
+     - Preserves original operation error and rollback error in `cause`.
+     - Throws typed `EdgeTransactionRollbackError` (subclass of `EdgeDatabaseError`).
+     - Never claims transaction or connection is healthy.
+   - `assertOpen()` checks `isTransactionCompromised` and rejects subsequent queries fail-closed.
+
+3. **R1-C — Native Escape-Hatch Boundary Encapsulation:**
+   - Removed `public getNativeDatabase(): Database.Database` from production API and prototype.
+   - Created test-only harness in `packages/edge/src/db/test-access.ts` utilizing `TEST_DB_SYMBOL = Symbol.for('trident.edge.test.nativeDatabase')`.
+   - `test-access.ts` is strictly omitted from package entry points (`src/index.ts` and `src/db/index.ts`).
+   - Production consumers cannot access unrestricted SQLite native instances.
+
+### 8.3 New Negative Tests Added
+
+- **`WP008-R1-T01` (Durability restoration failure):** Simulates restoration failure; verifies caller receives `EdgeDurabilityError`, no success value is returned, and subsequent operations are rejected fail-closed.
+- **`WP008-R1-T02` (Operation failure + restoration failure):** Injects failure in both the primary operation and durability restoration; verifies both contexts are preserved in `err.cause` and `EdgeDurabilityError` is surfaced.
+- **`WP008-R1-T03` (Rollback failure handling):** Injects SQLite failure during `ROLLBACK`; verifies `EdgeTransactionRollbackError` is thrown with dual cause, and subsequent operations are rejected fail-closed.
+- **`WP008-R1-T04` (Native escape-hatch boundary):** Verifies `getNativeDatabase` is undefined on production service instances and prototypes, while empirical SQLite inspection remains accessible through the test-only harness.
+
+---
+
+## 9. Builder Conclusion & Next Steps
+
+Remediation R1 is complete. All 19 WP-008 automated tests and 31 pre-existing regression tests pass cleanly (128 total across the monorepo). The implementation subject is ready for commit to PR `#26` and freeze at new subject `S2`.

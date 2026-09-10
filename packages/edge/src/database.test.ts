@@ -1,7 +1,8 @@
 /**
  * TRIDENTPOS WP-008: Edge Local Database (SQLite WAL) & Durability Manager Test Suite
  * Validates SQLite WAL activation, dual durability modes (NORMAL/FULL), transaction boundaries,
- * concurrent reads, write serialization, WAL checkpoints, integrity checks, and crash recovery.
+ * concurrent reads, write serialization, WAL checkpoints, integrity checks, crash recovery,
+ * and fail-closed durability restoration / rollback / controlled test boundaries.
  */
 
 import test from 'node:test';
@@ -17,9 +18,11 @@ import {
   EdgeDatabaseError,
   EdgeDurabilityError,
   EdgeIntegrityViolationError,
+  EdgeTransactionRollbackError,
   DurabilityMode,
   DEFAULT_WAL_ALERT_THRESHOLD_BYTES,
 } from './index.js';
+import { getTestNativeDatabase } from './db/test-access.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -53,8 +56,8 @@ test('WP008-T01: WAL activation — verifies PRAGMA journal_mode returns wal', (
 
     assert.equal(journalMode, 'wal', 'Effective journal_mode must be wal');
 
-    // Query native connection directly to confirm
-    const native = service.getNativeDatabase();
+    // Query native connection directly to confirm via test harness
+    const native = getTestNativeDatabase(service);
     const rawMode = native.pragma('journal_mode', { simple: true });
     assert.equal(String(rawMode).toLowerCase(), 'wal', 'Native pragma must return wal');
 
@@ -76,7 +79,7 @@ test('WP008-T02: Default operational synchronous mode — verifies PRAGMA synchr
     assert.equal(syncMode, 'NORMAL', 'Default operational durability mode must be NORMAL');
 
     // Native pragma verification: in SQLite NORMAL is integer 1
-    const native = service.getNativeDatabase();
+    const native = getTestNativeDatabase(service);
     const rawSync = native.pragma('synchronous', { simple: true });
     assert.equal(rawSync, 1, 'SQLite native synchronous value for NORMAL must be 1');
 
@@ -97,7 +100,7 @@ test('WP008-T03: Critical FULL durability mode — verifies controlled switch to
     service.setSyncPragma('FULL');
     assert.equal(service.getSynchronousMode(), 'FULL', 'Synchronous mode must be FULL');
 
-    const native = service.getNativeDatabase();
+    const native = getTestNativeDatabase(service);
     const rawSync = native.pragma('synchronous', { simple: true });
     assert.equal(rawSync, 2, 'SQLite native synchronous value for FULL must be 2');
 
@@ -121,7 +124,7 @@ test('WP008-T04: Durability mode restoration — restores NORMAL after critical 
   const dbPath = getTempDbPath('t04');
   try {
     const service = new EdgeDatabaseService({ databasePath: dbPath });
-    const native = service.getNativeDatabase();
+    const native = getTestNativeDatabase(service);
 
     native.exec('CREATE TABLE financial_log (id INTEGER PRIMARY KEY, note TEXT);');
 
@@ -154,7 +157,7 @@ test('WP008-T05: Durability restoration after exception — restores NORMAL on f
   const dbPath = getTempDbPath('t05');
   try {
     const service = new EdgeDatabaseService({ databasePath: dbPath });
-    const native = service.getNativeDatabase();
+    const native = getTestNativeDatabase(service);
 
     native.exec('CREATE TABLE financial_log (id INTEGER PRIMARY KEY, note TEXT);');
 
@@ -210,7 +213,7 @@ test('WP008-T06: Transaction commit — runInTransaction commits changes atomica
   const dbPath = getTempDbPath('t06');
   try {
     const service = new EdgeDatabaseService({ databasePath: dbPath });
-    const native = service.getNativeDatabase();
+    const native = getTestNativeDatabase(service);
 
     native.exec('CREATE TABLE floor_orders (id INTEGER PRIMARY KEY, table_no TEXT, total REAL);');
 
@@ -241,7 +244,7 @@ test('WP008-T07: Transaction rollback — failure causes zero partial transactio
   const dbPath = getTempDbPath('t07');
   try {
     const service = new EdgeDatabaseService({ databasePath: dbPath });
-    const native = service.getNativeDatabase();
+    const native = getTestNativeDatabase(service);
 
     native.exec('CREATE TABLE floor_orders (id INTEGER PRIMARY KEY, table_no TEXT, total REAL);');
     native.exec("INSERT INTO floor_orders (table_no, total) VALUES ('PRE_EXISTING', 10.00);");
@@ -273,14 +276,14 @@ test('WP008-T08: Concurrent reader during writer — reader reads committed snap
   const dbPath = getTempDbPath('t08');
   try {
     const writerService = new EdgeDatabaseService({ databasePath: dbPath });
-    const writerNative = writerService.getNativeDatabase();
+    const writerNative = getTestNativeDatabase(writerService);
 
     writerNative.exec('CREATE TABLE menu_items (id INTEGER PRIMARY KEY, name TEXT, price REAL);');
     writerNative.exec("INSERT INTO menu_items (name, price) VALUES ('Tacos al Pastor', 85.00);");
 
     // Open a second, independent connection as a concurrent reader
     const readerService = new EdgeDatabaseService({ databasePath: dbPath, readOnly: true });
-    const readerNative = readerService.getNativeDatabase();
+    const readerNative = getTestNativeDatabase(readerService);
 
     // 1. Writer begins an explicit immediate write transaction
     writerNative.exec('BEGIN IMMEDIATE;');
@@ -321,7 +324,7 @@ test('WP008-T09: Competing writes — write serializer maintains integrity and s
   const dbPath = getTempDbPath('t09');
   try {
     const service = new EdgeDatabaseService({ databasePath: dbPath });
-    const native = service.getNativeDatabase();
+    const native = getTestNativeDatabase(service);
 
     native.exec('CREATE TABLE seq_log (id INTEGER PRIMARY KEY, step INTEGER, tag TEXT);');
 
@@ -371,7 +374,7 @@ test('WP008-T10: WAL checkpoint — executes WAL checkpoint successfully', () =>
   const dbPath = getTempDbPath('t10');
   try {
     const service = new EdgeDatabaseService({ databasePath: dbPath });
-    const native = service.getNativeDatabase();
+    const native = getTestNativeDatabase(service);
 
     native.exec('CREATE TABLE test_data (id INTEGER PRIMARY KEY, content TEXT);');
 
@@ -410,7 +413,7 @@ test('WP008-T11: WAL observability — observes WAL size and evaluates 50 MB ale
       databasePath: dbPath,
       walAlertThresholdBytes: 1024, // 1 KB for test observability
     });
-    const native = service.getNativeDatabase();
+    const native = getTestNativeDatabase(service);
 
     native.exec('CREATE TABLE test_wal (id INTEGER PRIMARY KEY, val TEXT);');
 
@@ -451,7 +454,7 @@ test('WP008-T12: Integrity check — verifies PRAGMA integrity_check returns ok 
   const dbPath = getTempDbPath('t12');
   try {
     const service = new EdgeDatabaseService({ databasePath: dbPath });
-    const native = service.getNativeDatabase();
+    const native = getTestNativeDatabase(service);
 
     native.exec('CREATE TABLE accounts (id INTEGER PRIMARY KEY, balance REAL);');
     native.exec('INSERT INTO accounts (balance) VALUES (1000.0), (2500.5);');
@@ -500,7 +503,7 @@ test('WP008-T13: Abrupt process termination recovery — recovers cleanly after 
   try {
     // 1. Parent pre-seeds database with committed transactions
     const preService = new EdgeDatabaseService({ databasePath: dbPath });
-    const preNative = preService.getNativeDatabase();
+    const preNative = getTestNativeDatabase(preService);
     preNative.exec(
       'CREATE TABLE crash_test (id INTEGER PRIMARY KEY, marker TEXT, committed INTEGER);',
     );
@@ -534,7 +537,7 @@ test('WP008-T13: Abrupt process termination recovery — recovers cleanly after 
 
     // 4. Reopen the database from parent process
     const recoveryService = new EdgeDatabaseService({ databasePath: dbPath });
-    const recoveryNative = recoveryService.getNativeDatabase();
+    const recoveryNative = getTestNativeDatabase(recoveryService);
 
     // Verify integrity is intact
     const integrity = recoveryService.verifyIntegrity();
@@ -574,7 +577,7 @@ test('WP008-T14: Repeated recovery stress — deterministically survives repeate
   try {
     // Pre-seed
     const initService = new EdgeDatabaseService({ databasePath: dbPath });
-    const initNative = initService.getNativeDatabase();
+    const initNative = getTestNativeDatabase(initService);
     initNative.exec(
       'CREATE TABLE crash_test (id INTEGER PRIMARY KEY, marker TEXT, committed INTEGER);',
     );
@@ -585,7 +588,7 @@ test('WP008-T14: Repeated recovery stress — deterministically survives repeate
     for (let i = 1; i <= iterations; i++) {
       // 1. Commit one legitimate record
       const parentService = new EdgeDatabaseService({ databasePath: dbPath });
-      const parentNative = parentService.getNativeDatabase();
+      const parentNative = getTestNativeDatabase(parentService);
       parentService.runInTransaction(() => {
         parentNative
           .prepare('INSERT INTO crash_test (marker, committed) VALUES (?, 1);')
@@ -613,7 +616,7 @@ test('WP008-T14: Repeated recovery stress — deterministically survives repeate
 
       // 4. Reopen and verify integrity and committed count
       const verifyService = new EdgeDatabaseService({ databasePath: dbPath });
-      const verifyNative = verifyService.getNativeDatabase();
+      const verifyNative = getTestNativeDatabase(verifyService);
 
       assert.doesNotThrow(() => {
         verifyService.assertIntegrity();
@@ -648,6 +651,206 @@ test('WP008-T15: Existing regression suite — verifies core edge package info r
     assert.equal(service.isOpen(), true, 'Database service must be open');
     service.close();
     assert.equal(service.isOpen(), false, 'Database service must report closed after close()');
+  } finally {
+    cleanupTempDb(dbPath);
+  }
+});
+
+// ============================================================================
+// REMEDIATION R1 NEGATIVE TESTS
+// ============================================================================
+
+// ----------------------------------------------------------------------------
+// WP008-R1-T01: Durability restoration failure
+// ----------------------------------------------------------------------------
+test('WP008-R1-T01: Durability restoration failure — must fail closed with EdgeDurabilityError and reject subsequent queries', () => {
+  const dbPath = getTempDbPath('r1_t01');
+  try {
+    const service = new EdgeDatabaseService({ databasePath: dbPath });
+    assert.equal(service.getSynchronousMode(), 'NORMAL');
+
+    // Intercept setSyncPragma to simulate failure specifically during restoration
+    const originalSetSyncPragma = service.setSyncPragma.bind(service);
+    let calls = 0;
+    service.setSyncPragma = (mode: DurabilityMode) => {
+      calls++;
+      if (calls === 2) {
+        // Second call is the restoration back to prior mode
+        throw new Error('Simulated SQLite disk/pragma failure during restoration');
+      }
+      return originalSetSyncPragma(mode);
+    };
+
+    // Caller must NOT receive normal success; typed durability failure must be surfaced
+    assert.throws(
+      () => {
+        service.runInDurabilityMode('FULL', () => {
+          return 'operational_payload';
+        });
+      },
+      (err: unknown) => {
+        assert(err instanceof EdgeDurabilityError, 'Must throw EdgeDurabilityError');
+        assert.match((err as Error).message, /Durability restoration failed/);
+        return true;
+      },
+    );
+
+    // Verify database state is treated fail-closed: service must reject subsequent operations
+    assert.throws(
+      () => {
+        service.runInTransaction(() => {});
+      },
+      (err: unknown) => {
+        assert(
+          err instanceof EdgeDurabilityError,
+          'Must reject operations once durability is compromised',
+        );
+        return true;
+      },
+    );
+
+    service.close();
+  } finally {
+    cleanupTempDb(dbPath);
+  }
+});
+
+// ----------------------------------------------------------------------------
+// WP008-R1-T02: Operation failure + restoration failure
+// ----------------------------------------------------------------------------
+test('WP008-R1-T02: Operation failure + restoration failure — preserves both failure contexts in cause', () => {
+  const dbPath = getTempDbPath('r1_t02');
+  try {
+    const service = new EdgeDatabaseService({ databasePath: dbPath });
+    const originalSetSyncPragma = service.setSyncPragma.bind(service);
+    let calls = 0;
+    service.setSyncPragma = (mode: DurabilityMode) => {
+      calls++;
+      if (calls === 2) {
+        throw new Error('Simulated restoration failure');
+      }
+      return originalSetSyncPragma(mode);
+    };
+
+    assert.throws(
+      () => {
+        service.runInDurabilityMode('FULL', () => {
+          throw new Error('Primary operation failed');
+        });
+      },
+      (err: unknown) => {
+        assert(err instanceof EdgeDurabilityError, 'Must throw EdgeDurabilityError');
+        assert.match((err as Error).message, /Durability restoration failed/);
+
+        // Verify cause preserves both failure contexts
+        const cause = (err as EdgeDurabilityError).cause as
+          { operationError?: Error; restorationError?: Error } | undefined;
+        assert(cause, 'Must have cause containing dual failure context');
+        assert.match(String(cause.operationError?.message), /Primary operation failed/);
+        assert.match(String(cause.restorationError?.message), /Simulated restoration failure/);
+        return true;
+      },
+    );
+
+    service.close();
+  } finally {
+    cleanupTempDb(dbPath);
+  }
+});
+
+// ----------------------------------------------------------------------------
+// WP008-R1-T03: Rollback failure handling
+// ----------------------------------------------------------------------------
+test('WP008-R1-T03: Rollback failure handling — fails closed and surfaces EdgeTransactionRollbackError', () => {
+  const dbPath = getTempDbPath('r1_t03');
+  try {
+    const service = new EdgeDatabaseService({ databasePath: dbPath });
+    const native = getTestNativeDatabase(service);
+
+    // Intercept native.exec to simulate failure during ROLLBACK
+    const originalExec = native.exec.bind(native);
+    native.exec = ((sql: string) => {
+      if (typeof sql === 'string' && sql.toUpperCase().includes('ROLLBACK')) {
+        throw new Error('Simulated SQLite disk I/O failure during ROLLBACK');
+      }
+      return originalExec(sql);
+    }) as typeof native.exec;
+
+    assert.throws(
+      () => {
+        service.runInTransaction(() => {
+          throw new Error('Business operation failure triggers rollback');
+        });
+      },
+      (err: unknown) => {
+        assert(
+          err instanceof EdgeTransactionRollbackError,
+          'Must throw EdgeTransactionRollbackError',
+        );
+        assert.match((err as Error).message, /Transaction rollback failed/);
+
+        const cause = (err as EdgeTransactionRollbackError).cause as
+          { operationError?: Error; rollbackError?: Error } | undefined;
+        assert(cause, 'Must preserve both operationError and rollbackError in cause');
+        assert.match(
+          String(cause.operationError?.message),
+          /Business operation failure triggers rollback/,
+        );
+        assert.match(
+          String(cause.rollbackError?.message),
+          /Simulated SQLite disk I\/O failure during ROLLBACK/,
+        );
+        return true;
+      },
+    );
+
+    // Subsequent use must fail closed because transactional state is compromised
+    assert.throws(
+      () => {
+        service.runInTransaction(() => {});
+      },
+      (err: unknown) => {
+        assert(
+          err instanceof EdgeTransactionRollbackError,
+          'Must fail closed on subsequent operations',
+        );
+        return true;
+      },
+    );
+
+    service.close();
+  } finally {
+    cleanupTempDb(dbPath);
+  }
+});
+
+// ----------------------------------------------------------------------------
+// WP008-R1-T04: Native escape-hatch boundary
+// ----------------------------------------------------------------------------
+test('WP008-R1-T04: Native escape-hatch boundary — production API does not expose getNativeDatabase', () => {
+  const dbPath = getTempDbPath('r1_t04');
+  try {
+    const service = new EdgeDatabaseService({ databasePath: dbPath });
+
+    // Verify getNativeDatabase is NOT a property on instance or prototype
+    assert.equal(
+      (service as unknown as Record<string, unknown>).getNativeDatabase,
+      undefined,
+      'Production service must not expose getNativeDatabase method',
+    );
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(EdgeDatabaseService.prototype, 'getNativeDatabase'),
+      false,
+      'EdgeDatabaseService prototype must not have getNativeDatabase',
+    );
+
+    // Verify test-only harness can still access native database for empirical testing
+    const testNative = getTestNativeDatabase(service);
+    assert(testNative, 'Test harness must be able to access native SQLite instance for assertions');
+    const row = testNative.prepare('SELECT 42 as answer;').get() as { answer: number };
+    assert.equal(row.answer, 42);
+
+    service.close();
   } finally {
     cleanupTempDb(dbPath);
   }

@@ -4,8 +4,8 @@
  */
 
 export class EdgeDatabaseError extends Error {
-  constructor(message: string) {
-    super(`[EDGE-DATABASE-ERROR] ${message}`);
+  constructor(message: string, options?: ErrorOptions) {
+    super(`[EDGE-DATABASE-ERROR] ${message}`, options);
     this.name = 'EdgeDatabaseError';
   }
 }
@@ -14,16 +14,24 @@ export class EdgeIntegrityViolationError extends EdgeDatabaseError {
   constructor(
     message: string,
     public readonly details: string[] = [],
+    options?: ErrorOptions,
   ) {
-    super(`[INTEGRITY-VIOLATION] ${message}: ${details.join('; ')}`);
+    super(`[INTEGRITY-VIOLATION] ${message}: ${details.join('; ')}`, options);
     this.name = 'EdgeIntegrityViolationError';
   }
 }
 
 export class EdgeDurabilityError extends EdgeDatabaseError {
-  constructor(message: string) {
-    super(`[DURABILITY-ERROR] ${message}`);
+  constructor(message: string, options?: ErrorOptions) {
+    super(`[DURABILITY-ERROR] ${message}`, options);
     this.name = 'EdgeDurabilityError';
+  }
+}
+
+export class EdgeTransactionRollbackError extends EdgeDatabaseError {
+  constructor(message: string, options?: ErrorOptions) {
+    super(`[ROLLBACK-ERROR] ${message}`, options);
+    this.name = 'EdgeTransactionRollbackError';
   }
 }
 

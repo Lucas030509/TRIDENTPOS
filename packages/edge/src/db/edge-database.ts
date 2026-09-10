@@ -14,6 +14,7 @@ import {
   EdgeDatabaseOptions,
   EdgeDurabilityError,
   EdgeIntegrityViolationError,
+  EdgeTransactionRollbackError,
   IntegrityCheckResult,
   TransactionOptions,
   WalCheckpointMode,
@@ -22,6 +23,7 @@ import {
 } from './types.js';
 import { WriteSerializer } from './write-serializer.js';
 import { WalCheckpointManager } from './wal-manager.js';
+import { TEST_DB_SYMBOL } from './test-access.js';
 
 export class EdgeDatabaseService {
   private readonly db: Database.Database;
@@ -30,6 +32,8 @@ export class EdgeDatabaseService {
   private readonly walManager: WalCheckpointManager;
   private currentDurabilityMode: DurabilityMode = 'NORMAL';
   private closed = false;
+  private isDurabilityCompromised = false;
+  private isTransactionCompromised = false;
 
   constructor(options: EdgeDatabaseOptions = {}) {
     // 1. Resolve controlled database path
@@ -117,7 +121,11 @@ export class EdgeDatabaseService {
     return !this.closed && this.db.open;
   }
 
-  public getNativeDatabase(): Database.Database {
+  /**
+   * Test-only accessor for empirical SQLite verification in test suites.
+   * Bound via private Symbol; not exposed in production public types.
+   */
+  [TEST_DB_SYMBOL](): Database.Database {
     this.assertOpen();
     return this.db;
   }
@@ -183,6 +191,8 @@ export class EdgeDatabaseService {
   /**
    * Temporarily executes a callback within the specified durability mode.
    * Guarantees safe restoration of the prior mode in all cases (success or exception).
+   * Fails closed if durability restoration fails, ensuring callers never receive
+   * a false-green success when durability state is compromised.
    */
   public runInDurabilityMode<T>(mode: DurabilityMode, fn: () => T): T {
     this.assertOpen();
@@ -192,20 +202,41 @@ export class EdgeDatabaseService {
       this.setSyncPragma(mode);
     }
 
+    let opError: unknown = null;
+    let result: T | undefined;
     try {
-      return fn();
-    } finally {
-      if (this.currentDurabilityMode !== priorMode && this.isOpen()) {
-        try {
-          this.setSyncPragma(priorMode);
-        } catch (restoreErr) {
-          // Log or throw durability restoration failure
-          console.error(
-            `[FATAL] Failed to restore durability mode to '${priorMode}': ${(restoreErr as Error).message}`,
-          );
-        }
+      result = fn();
+    } catch (err) {
+      opError = err;
+    }
+
+    let restoreError: unknown = null;
+    if (this.currentDurabilityMode !== priorMode && this.isOpen()) {
+      try {
+        this.setSyncPragma(priorMode);
+      } catch (rErr) {
+        restoreError = rErr;
+        this.isDurabilityCompromised = true;
       }
     }
+
+    if (restoreError) {
+      const msg = opError
+        ? `Durability restoration failed: unable to restore prior mode '${priorMode}' (currently '${this.currentDurabilityMode}'). Database durability state is compromised. Original operation also failed: ${(opError as Error).message}`
+        : `Durability restoration failed: unable to restore prior mode '${priorMode}' (currently '${this.currentDurabilityMode}'). Database durability state is compromised.`;
+
+      throw new EdgeDurabilityError(msg, {
+        cause: opError
+          ? { operationError: opError, restorationError: restoreError }
+          : { restorationError: restoreError },
+      });
+    }
+
+    if (opError) {
+      throw opError;
+    }
+
+    return result as T;
   }
 
   /**
@@ -213,8 +244,8 @@ export class EdgeDatabaseService {
    * Guarantees:
    * - Commit on success
    * - Automatic rollback on exception
-   * - Error propagation
-   * - Connection remains fully usable after rollback
+   * - Fail closed if rollback itself fails, preventing continued use of a compromised connection
+   * - Error propagation preserving both operation and rollback failures
    * - Optional durability mode override (e.g. 'FULL' for financial/fiscal boundaries)
    */
   public runInTransaction<T>(fn: () => T, options: TransactionOptions = {}): T {
@@ -224,20 +255,26 @@ export class EdgeDatabaseService {
     const executeTx = () => {
       // Use explicit BEGIN / COMMIT / ROLLBACK semantics
       this.db.exec(`BEGIN ${behavior};`);
+      let result: T;
       try {
-        const result = fn();
-        this.db.exec('COMMIT;');
-        return result;
-      } catch (err) {
+        result = fn();
+      } catch (opErr) {
         try {
           if (this.db.inTransaction) {
             this.db.exec('ROLLBACK;');
           }
         } catch (rollbackErr) {
-          console.error(`[WARN] Transaction rollback error: ${(rollbackErr as Error).message}`);
+          this.isTransactionCompromised = true;
+          const msg = `Transaction rollback failed: unable to rollback aborted transaction. Connection transactional state is compromised. Original error: ${(opErr as Error).message}. Rollback error: ${(rollbackErr as Error).message}`;
+          throw new EdgeTransactionRollbackError(msg, {
+            cause: { operationError: opErr, rollbackError: rollbackErr },
+          });
         }
-        throw err;
+        throw opErr;
       }
+
+      this.db.exec('COMMIT;');
+      return result;
     };
 
     if (options.durabilityMode && options.durabilityMode !== this.currentDurabilityMode) {
@@ -337,6 +374,16 @@ export class EdgeDatabaseService {
   private assertOpen(): void {
     if (this.closed || !this.db.open) {
       throw new EdgeDatabaseError('Database connection is closed');
+    }
+    if (this.isDurabilityCompromised) {
+      throw new EdgeDurabilityError(
+        'Database service is in an untrusted durability state following restoration failure. Reconnection required.',
+      );
+    }
+    if (this.isTransactionCompromised) {
+      throw new EdgeTransactionRollbackError(
+        'Database connection is in an untrusted transactional state following rollback failure. Reconnection required.',
+      );
     }
   }
 }
