@@ -135,6 +135,13 @@ jobs:
       - name: Deterministic dependency install
         run: npm ci
 
+      - name: Configure Linux chrome-sandbox for Electron
+        run: |
+          if [ -f node_modules/electron/dist/chrome-sandbox ]; then
+            sudo chown root:root node_modules/electron/dist/chrome-sandbox
+            sudo chmod 4755 node_modules/electron/dist/chrome-sandbox
+          fi
+
       - name: Run unit test suites and actual Electron runtime validation
         run: xvfb-run --auto-servernum --server-args="-screen 0 1024x768x24" npm run test
         env:

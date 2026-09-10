@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
@@ -19,11 +20,29 @@ if (!electronBinary) {
 let command = electronBinary;
 let args = [testScript];
 
+// On Linux, verify SUID sandbox configuration or provide OS process-level fallback
+if (process.platform === 'linux') {
+  const chromeSandbox = path.join(path.dirname(electronBinary), 'chrome-sandbox');
+  let hasValidSuid = false;
+  try {
+    const stat = fs.statSync(chromeSandbox);
+    // mode 4755: SUID bit (0o4000) and owned by root (uid 0)
+    hasValidSuid = stat.uid === 0 && (stat.mode & 0o4000) !== 0;
+  } catch {
+    hasValidSuid = false;
+  }
+
+  if (!hasValidSuid) {
+    console.log('[LINUX SANDBOX NOTICE]: Root SUID chrome-sandbox not configured; adding --no-sandbox for OS process.');
+    args.unshift('--no-sandbox');
+  }
+}
+
 // On Linux CI/headless environments without DISPLAY, wrap execution with xvfb-run
 if (process.platform === 'linux' && !process.env.DISPLAY) {
   console.log('[HEADLESS LINUX DETECTED]: Wrapping Electron execution with xvfb-run...');
   command = 'xvfb-run';
-  args = ['--auto-servernum', '--server-args=-screen 0 1024x768x24', electronBinary, testScript];
+  args = ['--auto-servernum', '--server-args=-screen 0 1024x768x24', electronBinary, ...args];
 }
 
 console.log(`[EXECUTING ACTUAL ELECTRON BINARY]: ${command} ${args.join(' ')}`);
