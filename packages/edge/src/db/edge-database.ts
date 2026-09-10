@@ -23,32 +23,32 @@ import {
 } from './types.js';
 import { WriteSerializer } from './write-serializer.js';
 import { WalCheckpointManager } from './wal-manager.js';
-import { TEST_DB_SYMBOL } from './test-access.js';
+import { registerTestNativeDatabase } from './test-access.js';
 
 export class EdgeDatabaseService {
-  private readonly db: Database.Database;
-  private readonly resolvedPath: string;
-  private readonly writeSerializer: WriteSerializer;
-  private readonly walManager: WalCheckpointManager;
-  private currentDurabilityMode: DurabilityMode = 'NORMAL';
-  private closed = false;
-  private isDurabilityCompromised = false;
-  private isTransactionCompromised = false;
+  readonly #db: Database.Database;
+  readonly #resolvedPath: string;
+  readonly #writeSerializer: WriteSerializer;
+  readonly #walManager: WalCheckpointManager;
+  #currentDurabilityMode: DurabilityMode = 'NORMAL';
+  #closed = false;
+  #isDurabilityCompromised = false;
+  #isTransactionCompromised = false;
 
   constructor(options: EdgeDatabaseOptions = {}) {
     // 1. Resolve controlled database path
     if (options.databasePath) {
-      this.resolvedPath = path.resolve(options.databasePath);
+      this.#resolvedPath = path.resolve(options.databasePath);
     } else if (process.env.TRIDENT_EDGE_DB_PATH) {
-      this.resolvedPath = path.resolve(process.env.TRIDENT_EDGE_DB_PATH);
+      this.#resolvedPath = path.resolve(process.env.TRIDENT_EDGE_DB_PATH);
     } else {
       const defaultDir = path.resolve(process.cwd(), 'data');
-      this.resolvedPath = path.join(defaultDir, DEFAULT_EDGE_DB_FILENAME);
+      this.#resolvedPath = path.join(defaultDir, DEFAULT_EDGE_DB_FILENAME);
     }
 
     // Ensure parent directory exists for file-backed databases
-    if (this.resolvedPath !== ':memory:') {
-      const parentDir = path.dirname(this.resolvedPath);
+    if (this.#resolvedPath !== ':memory:') {
+      const parentDir = path.dirname(this.#resolvedPath);
       if (!fs.existsSync(parentDir)) {
         fs.mkdirSync(parentDir, { recursive: true });
       }
@@ -58,27 +58,30 @@ export class EdgeDatabaseService {
 
     // 2. Instantiate native SQLite connection
     try {
-      this.db = new Database(this.resolvedPath, {
+      this.#db = new Database(this.#resolvedPath, {
         timeout: busyTimeout,
         readonly: options.readOnly ?? false,
         fileMustExist: options.fileMustExist ?? false,
       });
     } catch (err) {
       throw new EdgeDatabaseError(
-        `Failed to open SQLite database at '${this.resolvedPath}': ${(err as Error).message}`,
+        `Failed to open SQLite database at '${this.#resolvedPath}': ${(err as Error).message}`,
       );
     }
+
+    // Register in module-private test registry (not reachable from instance/prototype reflection)
+    registerTestNativeDatabase(this, this.#db);
 
     // 3. Configure baseline PRAGMAs
     try {
       // Enforce foreign key constraints
-      this.db.pragma('foreign_keys = ON');
+      this.#db.pragma('foreign_keys = ON');
 
       // Enforce busy timeout to avoid immediate SQLITE_BUSY
-      this.db.pragma(`busy_timeout = ${busyTimeout}`);
+      this.#db.pragma(`busy_timeout = ${busyTimeout}`);
 
       // 4. Activate and rigorously verify WAL mode
-      const configuredJournalMode = this.db.pragma('journal_mode = WAL', {
+      const configuredJournalMode = this.#db.pragma('journal_mode = WAL', {
         simple: true,
       }) as string;
 
@@ -95,39 +98,30 @@ export class EdgeDatabaseService {
     } catch (err) {
       // Clean up connection on bootstrap failure
       try {
-        this.db.close();
+        this.#db.close();
       } catch {
         // ignore secondary close error
       }
-      this.closed = true;
+      this.#closed = true;
       throw err instanceof EdgeDatabaseError
         ? err
         : new EdgeDatabaseError(`Database initialization error: ${(err as Error).message}`);
     }
 
     // 6. Initialize auxiliary managers
-    this.writeSerializer = new WriteSerializer();
-    this.walManager = new WalCheckpointManager(this.db, this.resolvedPath, {
+    this.#writeSerializer = new WriteSerializer();
+    this.#walManager = new WalCheckpointManager(this.#db, this.#resolvedPath, {
       alertThresholdBytes: options.walAlertThresholdBytes,
       logger: options.logger,
     });
   }
 
   public getDatabasePath(): string {
-    return this.resolvedPath;
+    return this.#resolvedPath;
   }
 
   public isOpen(): boolean {
-    return !this.closed && this.db.open;
-  }
-
-  /**
-   * Test-only accessor for empirical SQLite verification in test suites.
-   * Bound via private Symbol; not exposed in production public types.
-   */
-  [TEST_DB_SYMBOL](): Database.Database {
-    this.assertOpen();
-    return this.db;
+    return !this.#closed && this.#db.open;
   }
 
   /**
@@ -135,7 +129,7 @@ export class EdgeDatabaseService {
    */
   public getJournalMode(): string {
     this.assertOpen();
-    const mode = this.db.pragma('journal_mode', { simple: true });
+    const mode = this.#db.pragma('journal_mode', { simple: true });
     return String(mode).toLowerCase();
   }
 
@@ -145,7 +139,7 @@ export class EdgeDatabaseService {
    */
   public getSynchronousMode(): DurabilityMode {
     this.assertOpen();
-    const syncVal = this.db.pragma('synchronous', { simple: true });
+    const syncVal = this.#db.pragma('synchronous', { simple: true });
     if (syncVal === 1 || String(syncVal).toLowerCase() === 'normal') {
       return 'NORMAL';
     }
@@ -171,7 +165,7 @@ export class EdgeDatabaseService {
     }
 
     try {
-      this.db.pragma(`synchronous = ${mode}`);
+      this.#db.pragma(`synchronous = ${mode}`);
     } catch (err) {
       throw new EdgeDurabilityError(
         `Failed to set synchronous pragma to '${mode}': ${(err as Error).message}`,
@@ -185,7 +179,7 @@ export class EdgeDatabaseService {
       );
     }
 
-    this.currentDurabilityMode = mode;
+    this.#currentDurabilityMode = mode;
   }
 
   /**
@@ -196,7 +190,7 @@ export class EdgeDatabaseService {
    */
   public runInDurabilityMode<T>(mode: DurabilityMode, fn: () => T): T {
     this.assertOpen();
-    const priorMode = this.currentDurabilityMode;
+    const priorMode = this.#currentDurabilityMode;
 
     if (mode !== priorMode) {
       this.setSyncPragma(mode);
@@ -211,19 +205,19 @@ export class EdgeDatabaseService {
     }
 
     let restoreError: unknown = null;
-    if (this.currentDurabilityMode !== priorMode && this.isOpen()) {
+    if (this.#currentDurabilityMode !== priorMode && this.isOpen()) {
       try {
         this.setSyncPragma(priorMode);
       } catch (rErr) {
         restoreError = rErr;
-        this.isDurabilityCompromised = true;
+        this.#isDurabilityCompromised = true;
       }
     }
 
     if (restoreError) {
       const msg = opError
-        ? `Durability restoration failed: unable to restore prior mode '${priorMode}' (currently '${this.currentDurabilityMode}'). Database durability state is compromised. Original operation also failed: ${(opError as Error).message}`
-        : `Durability restoration failed: unable to restore prior mode '${priorMode}' (currently '${this.currentDurabilityMode}'). Database durability state is compromised.`;
+        ? `Durability restoration failed: unable to restore prior mode '${priorMode}' (currently '${this.#currentDurabilityMode}'). Database durability state is compromised. Original operation also failed: ${(opError as Error).message}`
+        : `Durability restoration failed: unable to restore prior mode '${priorMode}' (currently '${this.#currentDurabilityMode}'). Database durability state is compromised.`;
 
       throw new EdgeDurabilityError(msg, {
         cause: opError
@@ -243,9 +237,10 @@ export class EdgeDatabaseService {
    * Executes a callback within an explicit atomic transaction boundary.
    * Guarantees:
    * - Commit on success
-   * - Automatic rollback on exception
+   * - Automatic rollback on operation exception
    * - Fail closed if rollback itself fails, preventing continued use of a compromised connection
-   * - Error propagation preserving both operation and rollback failures
+   * - Fail closed if commit fails, attempting rollback and transitioning connection to untrusted state
+   * - Error propagation preserving dual error contexts
    * - Optional durability mode override (e.g. 'FULL' for financial/fiscal boundaries)
    */
   public runInTransaction<T>(fn: () => T, options: TransactionOptions = {}): T {
@@ -254,17 +249,17 @@ export class EdgeDatabaseService {
     const behavior = options.behavior ?? 'IMMEDIATE';
     const executeTx = () => {
       // Use explicit BEGIN / COMMIT / ROLLBACK semantics
-      this.db.exec(`BEGIN ${behavior};`);
+      this.#db.exec(`BEGIN ${behavior};`);
       let result: T;
       try {
         result = fn();
       } catch (opErr) {
         try {
-          if (this.db.inTransaction) {
-            this.db.exec('ROLLBACK;');
+          if (this.#db.inTransaction) {
+            this.#db.exec('ROLLBACK;');
           }
         } catch (rollbackErr) {
-          this.isTransactionCompromised = true;
+          this.#isTransactionCompromised = true;
           const msg = `Transaction rollback failed: unable to rollback aborted transaction. Connection transactional state is compromised. Original error: ${(opErr as Error).message}. Rollback error: ${(rollbackErr as Error).message}`;
           throw new EdgeTransactionRollbackError(msg, {
             cause: { operationError: opErr, rollbackError: rollbackErr },
@@ -273,11 +268,34 @@ export class EdgeDatabaseService {
         throw opErr;
       }
 
-      this.db.exec('COMMIT;');
+      try {
+        this.#db.exec('COMMIT;');
+      } catch (commitErr) {
+        this.#isTransactionCompromised = true;
+        let rollbackErr: unknown = null;
+        try {
+          if (this.#db.inTransaction) {
+            this.#db.exec('ROLLBACK;');
+          }
+        } catch (rbErr) {
+          rollbackErr = rbErr;
+        }
+
+        const msg = rollbackErr
+          ? `Transaction commit failed and subsequent rollback also failed: ${(commitErr as Error).message}. Rollback error: ${(rollbackErr as Error).message}. Connection transactional state is compromised.`
+          : `Transaction commit failed: ${(commitErr as Error).message}. Connection transactional state is compromised.`;
+
+        throw new EdgeTransactionRollbackError(msg, {
+          cause: rollbackErr
+            ? { commitError: commitErr, rollbackError: rollbackErr }
+            : { commitError: commitErr },
+        });
+      }
+
       return result;
     };
 
-    if (options.durabilityMode && options.durabilityMode !== this.currentDurabilityMode) {
+    if (options.durabilityMode && options.durabilityMode !== this.#currentDurabilityMode) {
       return this.runInDurabilityMode(options.durabilityMode, executeTx);
     }
 
@@ -302,7 +320,7 @@ export class EdgeDatabaseService {
    */
   public runSerializedWrite<T>(operation: () => Promise<T> | T): Promise<T> {
     this.assertOpen();
-    return this.writeSerializer.serialize(operation);
+    return this.#writeSerializer.serialize(operation);
   }
 
   /**
@@ -310,7 +328,7 @@ export class EdgeDatabaseService {
    */
   public checkpoint(mode: WalCheckpointMode = 'PASSIVE'): WalCheckpointResult {
     this.assertOpen();
-    return this.walManager.checkpoint(mode);
+    return this.#walManager.checkpoint(mode);
   }
 
   /**
@@ -318,7 +336,7 @@ export class EdgeDatabaseService {
    */
   public getWalStats(): WalStats {
     this.assertOpen();
-    return this.walManager.getWalStats();
+    return this.#walManager.getWalStats();
   }
 
   /**
@@ -329,7 +347,7 @@ export class EdgeDatabaseService {
     this.assertOpen();
 
     try {
-      const rows = this.db.pragma('integrity_check') as Array<{ integrity_check: string }>;
+      const rows = this.#db.pragma('integrity_check') as Array<{ integrity_check: string }>;
       const details = rows.map((r) => r.integrity_check);
       const healthy = details.length === 1 && details[0] === 'ok';
 
@@ -364,25 +382,25 @@ export class EdgeDatabaseService {
    * Closes the database connection cleanly.
    */
   public close(): void {
-    if (!this.closed) {
-      this.writeSerializer.clear();
-      this.db.close();
-      this.closed = true;
+    if (!this.#closed) {
+      this.#writeSerializer.clear();
+      this.#db.close();
+      this.#closed = true;
     }
   }
 
   private assertOpen(): void {
-    if (this.closed || !this.db.open) {
+    if (this.#closed || !this.#db.open) {
       throw new EdgeDatabaseError('Database connection is closed');
     }
-    if (this.isDurabilityCompromised) {
+    if (this.#isDurabilityCompromised) {
       throw new EdgeDurabilityError(
         'Database service is in an untrusted durability state following restoration failure. Reconnection required.',
       );
     }
-    if (this.isTransactionCompromised) {
+    if (this.#isTransactionCompromised) {
       throw new EdgeTransactionRollbackError(
-        'Database connection is in an untrusted transactional state following rollback failure. Reconnection required.',
+        'Database connection is in an untrusted transactional state following transaction failure. Reconnection required.',
       );
     }
   }

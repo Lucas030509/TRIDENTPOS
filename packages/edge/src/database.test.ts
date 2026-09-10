@@ -855,3 +855,244 @@ test('WP008-R1-T04: Native escape-hatch boundary — production API does not exp
     cleanupTempDb(dbPath);
   }
 });
+
+// ============================================================================
+// REMEDIATION R2 NEGATIVE TESTS
+// ============================================================================
+
+// ----------------------------------------------------------------------------
+// WP008-R2-T01: Runtime native SQLite boundary
+// ----------------------------------------------------------------------------
+test('WP008-R2-T01: Runtime native SQLite boundary — normal production consumer cannot obtain native handle', async () => {
+  const dbPath = getTempDbPath('r2_t01');
+  try {
+    const service = new EdgeDatabaseService({ databasePath: dbPath });
+
+    // 1. getNativeDatabase does not exist on instance or prototype
+    assert.equal(
+      (service as unknown as Record<string, unknown>).getNativeDatabase,
+      undefined,
+      'getNativeDatabase must not exist on service instance',
+    );
+    assert.equal(
+      (EdgeDatabaseService.prototype as unknown as Record<string, unknown>).getNativeDatabase,
+      undefined,
+      'getNativeDatabase must not exist on EdgeDatabaseService prototype',
+    );
+
+    // 2. No globally recoverable TEST_DB_SYMBOL accessor exists (Symbol.for cannot retrieve database)
+    const globalSym = Symbol.for('trident.edge.test.nativeDatabase');
+    assert.equal(
+      (service as unknown as Record<symbol, unknown>)[globalSym],
+      undefined,
+      'Global Symbol.for must not be an accessor on service instance',
+    );
+    assert.equal(
+      (EdgeDatabaseService.prototype as unknown as Record<symbol, unknown>)[globalSym],
+      undefined,
+      'Global Symbol.for must not be an accessor on EdgeDatabaseService prototype',
+    );
+
+    // 3. The production service prototype exposes no symbol accessors at all
+    const protoSymbols = Object.getOwnPropertySymbols(EdgeDatabaseService.prototype);
+    assert.equal(
+      protoSymbols.length,
+      0,
+      'EdgeDatabaseService prototype must have zero symbol properties/methods',
+    );
+
+    // 4. Instance exposes zero symbol properties
+    const instanceSymbols = Object.getOwnPropertySymbols(service);
+    assert.equal(
+      instanceSymbols.length,
+      0,
+      'EdgeDatabaseService instance must have zero symbol properties',
+    );
+
+    // 5. Ordinary reflection over instance does not expose native db property (true ECMAScript #private state)
+    assert.equal(
+      (service as unknown as Record<string, unknown>).db,
+      undefined,
+      'service.db must be undefined',
+    );
+    const instanceNames = Object.getOwnPropertyNames(service);
+    assert.equal(
+      instanceNames.includes('db'),
+      false,
+      'Object.getOwnPropertyNames must not include db or any private state',
+    );
+    const ownKeys = Reflect.ownKeys(service);
+    assert.equal(ownKeys.includes('db'), false, 'Reflect.ownKeys must not include db');
+
+    // 6. Ordinary public package exports do not expose native SQLite, test symbols, or test accessors
+    const publicExports = await import('./index.js');
+    assert.equal(
+      (publicExports as Record<string, unknown>).getTestNativeDatabase,
+      undefined,
+      'Public package must not export getTestNativeDatabase',
+    );
+    assert.equal(
+      (publicExports as Record<string, unknown>).TEST_DB_SYMBOL,
+      undefined,
+      'Public package must not export TEST_DB_SYMBOL',
+    );
+    assert.equal(
+      (publicExports as Record<string, unknown>).registerTestNativeDatabase,
+      undefined,
+      'Public package must not export registerTestNativeDatabase',
+    );
+    assert.equal(
+      (publicExports as Record<string, unknown>).Database,
+      undefined,
+      'Public package must not export Database constructor',
+    );
+
+    service.close();
+  } finally {
+    cleanupTempDb(dbPath);
+  }
+});
+
+// ----------------------------------------------------------------------------
+// WP008-R2-T02: COMMIT failure
+// ----------------------------------------------------------------------------
+test('WP008-R2-T02: COMMIT failure — fails closed, surfaces typed error, and rejects subsequent operations', () => {
+  const dbPath = getTempDbPath('r2_t02');
+  try {
+    const service = new EdgeDatabaseService({ databasePath: dbPath });
+    const native = getTestNativeDatabase(service);
+
+    native.exec('CREATE TABLE commit_test (id INTEGER PRIMARY KEY, note TEXT);');
+
+    // Intercept native.exec to simulate failure during COMMIT
+    const originalExec = native.exec.bind(native);
+    native.exec = ((sql: string) => {
+      if (typeof sql === 'string' && /^\s*COMMIT\b/i.test(sql)) {
+        throw new Error('Simulated SQLite disk I/O failure during COMMIT');
+      }
+      return originalExec(sql);
+    }) as typeof native.exec;
+
+    // Must NOT return success; typed error is surfaced
+    assert.throws(
+      () => {
+        service.runInTransaction(() => {
+          native.exec("INSERT INTO commit_test (note) VALUES ('should_not_commit');");
+          return 'false_success_payload';
+        });
+      },
+      (err: unknown) => {
+        assert(
+          err instanceof EdgeTransactionRollbackError,
+          'Must throw EdgeTransactionRollbackError on COMMIT failure',
+        );
+        assert.match((err as Error).message, /Transaction commit failed/);
+        const cause = (err as EdgeTransactionRollbackError).cause as
+          { commitError?: Error; rollbackError?: Error } | undefined;
+        assert(cause, 'Must have cause containing commitError');
+        assert.match(
+          String(cause.commitError?.message),
+          /Simulated SQLite disk I\/O failure during COMMIT/,
+        );
+        return true;
+      },
+    );
+
+    // Restore exec to verify transaction is NOT reported as committed on disk
+    native.exec = originalExec;
+    const row = native.prepare('SELECT COUNT(*) as c FROM commit_test;').get() as { c: number };
+    assert.equal(row.c, 0, 'Transaction must not have committed any rows');
+
+    // Unsafe connection state cannot continue normal operations: subsequent operations fail closed
+    assert.throws(
+      () => {
+        service.runInTransaction(() => {});
+      },
+      (err: unknown) => {
+        assert(
+          err instanceof EdgeTransactionRollbackError,
+          'Must fail closed on subsequent operations',
+        );
+        return true;
+      },
+    );
+
+    service.close();
+  } finally {
+    cleanupTempDb(dbPath);
+  }
+});
+
+// ----------------------------------------------------------------------------
+// WP008-R2-T03: COMMIT failure + recovery/rollback failure
+// ----------------------------------------------------------------------------
+test('WP008-R2-T03: COMMIT failure + recovery/rollback failure — preserves dual causes and transitions fail-closed', () => {
+  const dbPath = getTempDbPath('r2_t03');
+  try {
+    const service = new EdgeDatabaseService({ databasePath: dbPath });
+    const native = getTestNativeDatabase(service);
+
+    native.exec('CREATE TABLE commit_rb_test (id INTEGER PRIMARY KEY, note TEXT);');
+
+    // Intercept native.exec to simulate failure during both COMMIT and subsequent ROLLBACK
+    const originalExec = native.exec.bind(native);
+    native.exec = ((sql: string) => {
+      if (typeof sql === 'string' && /^\s*COMMIT\b/i.test(sql)) {
+        throw new Error('Simulated SQLite disk I/O failure during COMMIT');
+      }
+      if (typeof sql === 'string' && /^\s*ROLLBACK\b/i.test(sql)) {
+        throw new Error('Simulated secondary failure during recovery ROLLBACK');
+      }
+      return originalExec(sql);
+    }) as typeof native.exec;
+
+    assert.throws(
+      () => {
+        service.runInTransaction(() => {
+          native.exec("INSERT INTO commit_rb_test (note) VALUES ('dual_failure_entry');");
+        });
+      },
+      (err: unknown) => {
+        assert(
+          err instanceof EdgeTransactionRollbackError,
+          'Must throw EdgeTransactionRollbackError on dual failure',
+        );
+        assert.match(
+          (err as Error).message,
+          /Transaction commit failed and subsequent rollback also failed/,
+        );
+        const cause = (err as EdgeTransactionRollbackError).cause as
+          { commitError?: Error; rollbackError?: Error } | undefined;
+        assert(cause, 'Must preserve both commitError and rollbackError in cause');
+        assert.match(
+          String(cause.commitError?.message),
+          /Simulated SQLite disk I\/O failure during COMMIT/,
+        );
+        assert.match(
+          String(cause.rollbackError?.message),
+          /Simulated secondary failure during recovery ROLLBACK/,
+        );
+        return true;
+      },
+    );
+
+    // Unsafe connection state: service must transition to fail-closed state
+    assert.throws(
+      () => {
+        service.runInTransaction(() => {});
+      },
+      (err: unknown) => {
+        assert(
+          err instanceof EdgeTransactionRollbackError,
+          'Must fail closed on subsequent operations',
+        );
+        return true;
+      },
+    );
+
+    native.exec = originalExec;
+    service.close();
+  } finally {
+    cleanupTempDb(dbPath);
+  }
+});
