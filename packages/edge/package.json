@@ -16,10 +16,12 @@
     "@trident/core": "*"
   },
   "scripts": {
-    "build": "tsc -b",
+    "build": "tsc -b && node -e \"import('node:fs').then(fs => { fs.copyFileSync('src/index.html', 'dist/index.html'); fs.copyFileSync('src/preload.cjs', 'dist/preload.cjs'); })\"",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src/",
-    "test": "node --test dist/index.test.js",
+    "test:unit": "node --test dist/index.test.js",
+    "test:electron": "node scripts/run-electron-tests.mjs",
+    "test": "npm run test:unit && npm run test:electron",
     "clean": "rm -rf dist"
   },
   "devDependencies": {

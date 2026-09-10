@@ -135,7 +135,7 @@ jobs:
       - name: Deterministic dependency install
         run: npm ci
 
-      - name: Run unit test suites
-        run: npm run test
+      - name: Run unit test suites and actual Electron runtime validation
+        run: xvfb-run --auto-servernum --server-args="-screen 0 1024x768x24" npm run test
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/tridentpos_test

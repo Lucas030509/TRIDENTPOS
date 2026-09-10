@@ -10,6 +10,7 @@
 - **Canonical Errata Reference:** `GOVERNANCE_ERRATA_WP007_ACR_ID.md`
 - **Implementation Base SHA:** `0ab4cf993970795844fcd7b746d31d3c3c252485`
 - **Feature Branch:** `feature/wp-007-edge-runtime-electron-hardening`
+- **PR:** `#24`
 - **Governed Toolchain & Pinned Versions:**
   - Host Node.js LTS Toolchain: `24.20.0`
   - Host npm: `11.19.0`
@@ -19,24 +20,49 @@
   - Embedded Node.js Runtime in Electron: `24.20.0`
   - Embedded V8 Engine: `15.2.124.19`
 - **Date:** 2026-09-10
+- **Remediation Iteration:** R1 (Actual Electron Runtime Security Validation)
 - **Builder Verdict:** `READY FOR ROLE-SEPARATED REVIEW`
+- **SEC-VAL-07 Control Status:** `IMPLEMENTATION CONTROLS PRESENT — PENDING ROLE-SEPARATED SECURITY VALIDATION`
 
 ---
 
-## 2. Trust Boundary & Security Architecture Controls Implemented
+## 2. Prior Quick Integrity Blocker & Remediation
 
-WP-007 implements the complete Edge Host desktop scaffolding with strict multi-layered isolation, honoring `SECURITY_ARCHITECTURE.md Sec. 9`, `SOLUTION_ARCHITECTURE.md Sec. 1`, `DEPLOYMENT_TOPOLOGY.md Sec. 1 & 3`, `TECH_STACK_DECISIONS.md Sec. 1 & 2`, `ADR-003`, and `ADR-011`.
+### 2.1 Blocker Identified
+During initial external Quick Integrity Check of subject `S1` (`04bf722a20c2cf6afcdb57e78caaf60ac5494c94`), one blocking issue was identified:
+> "SEC-VAL-07 currently relies primarily on Node.js unit/simulation tests and does NOT objectively exercise the hardened boundary inside an actual Electron runtime."
+
+### 2.2 Remediation Executed
+1. **Preserved Unit-Level Defense:** Kept existing test suite `WP007-T01` through `WP007-T22` (22 tests) validating static invariants, payload parsers, configuration boundaries, and dispatch guards under pure Node.js.
+2. **Added Actual Electron Integration Suite:** Implemented `packages/edge/src/electron.test.ts` executing inside the real pinned `electron@44.3.0` binary without mocks.
+3. **Real Electron Harness Validation Points:**
+   - Real BrowserWindow effective preferences verified via `webContents.getLastWebPreferences()`.
+   - Real renderer execution verified via `webContents.executeJavaScript()`.
+   - Real preload script loaded inside the production window, exposing `window.tridentBridge`.
+   - Real IPC round-trip verified end-to-end (`renderer -> contextBridge -> preload -> ipcRenderer -> ipcMain -> handler -> response`).
+   - Arbitrary IPC negative test proving unexposed escape hatches.
+   - Real `will-navigate` lifecycle interception blocking external navigation while remaining on the local origin.
+   - Real `setWindowOpenHandler` default-deny blocking popup/new-window creation.
+   - Real Content Security Policy enforcement verified in live renderer (dynamic `eval()` blocked).
+4. **Deterministic Headless Linux Execution:**
+   - Implemented `packages/edge/scripts/run-electron-tests.mjs` which detects headless Linux environments and wraps Electron in `xvfb-run`.
+   - Modified `.github/workflows/ci.yml` `unit-tests` job to run under `xvfb-run --auto-servernum --server-args="-screen 0 1024x768x24" npm run test`.
+5. **Transitive npm Scripts:** Configured `test:unit`, `test:electron`, and composite `test: npm run test:unit && npm run test:electron`.
+
+---
+
+## 3. Trust Boundary & Security Architecture Controls Implemented
 
 ```
 +-----------------------------------------------------------------------------------------+
 |                                    RENDERER CONTEXT                                     |
 |                                                                                         |
-|  [ Minimal Proof HTML / UI Scripts ]                                                    |
+|  [ Production HTML / Scripts ]                                                          |
 |  - contextIsolation: true                                                               |
 |  - nodeIntegration: false                                                               |
 |  - sandbox: true                                                                        |
 |  - webSecurity: true                                                                    |
-|  - Zero Node primitives (require, process, Buffer, fs, child_process, crypto = undefined)|
+|  - Zero Node primitives (require, process, Buffer, fs, child_process = undefined)       |
 |  - Content Security Policy: default-src 'self'; script-src 'self';                      |
 |                            connect-src 'self' wss: https:;                              |
 +-----------------------------------------------------------------------------------------+
@@ -48,7 +74,6 @@ WP-007 implements the complete Edge Host desktop scaffolding with strict multi-l
 |                                                                                         |
 |  [ contextBridge.exposeInMainWorld('tridentBridge', ...) ]                              |
 |  - Statically defined API: ping(), getSystemMetadata(), getHealthStatus()               |
-|  - Local request validation before forwarding                                           |
 |  - Zero raw ipcRenderer exposed                                                         |
 |  - Zero generic send() or invoke() proxying                                             |
 +-----------------------------------------------------------------------------------------+
@@ -91,47 +116,81 @@ WP-007 implements the complete Edge Host desktop scaffolding with strict multi-l
 
 ---
 
-## 3. Detailed Security Obligations Verification Matrix
+## 4. Actual Electron Runtime Test Matrix (WP007-E01..E08)
 
-| Obligation ID | Test ID | Description | Result | Evidence / Details |
+Command: `npm run test:electron` (executed with real pinned `electron@44.3.0` binary).
+
+| Test ID | Test Name | Verification Method | Result | Notes |
 |---|---|---|---|---|
-| **OBL-01** | `WP007-T02`–`T06` | BrowserWindow security preferences enforce `contextIsolation: true`, `nodeIntegration: false`, `sandbox: true`, `webSecurity: true`, and reject weakening. | **PASS** | Validated positive default baseline and 4 negative failure modes throwing `ElectronSecurityViolationError`. |
-| **OBL-02** | `WP007-T07`–`T08` | Renderer Node exposure negative test proves zero Node.js primitives leak into renderer context. | **PASS** | `auditRendererIsolation` verifies clean scope passes and contaminated scope detects all 9 prohibited primitives. |
-| **OBL-03** | `WP007-T09`–`T10` | Static IPC allowlist positive verification. | **PASS** | Approved typed channel `trident:ping` executes successfully through `IpcDispatchGuard`. |
-| **OBL-04** | `WP007-T11` | Static IPC allowlist negative verification: unapproved channels rejected fail-closed. | **PASS** | Registration and dispatch of unapproved channels (`evil:execute-shell`, `ELECTRON_BROWSER_REQUIRE`) rejected fail-closed. |
-| **OBL-05** | `WP007-T12` | Trusted boundary payload validation: malformed inputs rejected. | **PASS** | Rejects missing nonce, non-string nonce, oversized nonce (>64 chars), and unexpected arguments to zero-argument channels. |
-| **OBL-06** | `WP007-T13`–`T14` | Navigation lockdown: external, remote, and script URLs blocked. | **PASS** | Intercepts navigation attempts to `https://evil-attacker.com`, `javascript:`, `data:`, and calls `preventDefault()`. |
-| **OBL-07** | `WP007-T15` | Window Open / Popup lockdown: `window.open` default-denied. | **PASS** | `createWindowOpenHandler` returns `{ action: 'deny' }` unconditionally across all URLs. |
-| **OBL-08** | `WP007-T16` | Renderer RCE injection resistance test. | **PASS** | Proves simulated injected script in renderer context cannot access `require`, `process`, `Buffer`, or `rawIpc`. |
-| **OBL-09** | `WP007-T17`–`T18` | Content Security Policy compliance and negative test. | **PASS** | Frozen CSP matches `SECURITY_ARCHITECTURE.md Sec. 9`. Negative test rejects `'unsafe-inline'`, `'unsafe-eval'`, and wildcards `*`. |
-| **OBL-10** | `WP007-T19`–`T21` | Configuration schema validation and secret-leakage prevention. | **PASS** | `loadEdgeConfigFile` validates metadata. `assertNoProhibitedSecrets` fails closed on passwords, PINs, tokens, keys. |
-| **OBL-11** | `WP007-T22` | Worker process separation scaffold per `ADR-003 Sec. 8`. | **PASS** | `EdgeWorkerSupervisor` manages task queue and heartbeats without blocking the main event loop. |
+| **WP007-E01** | Production BrowserWindow Effective Preferences | `webContents.getLastWebPreferences()` | **PASS** | `contextIsolation: true`, `nodeIntegration: false`, `sandbox: true`, `webSecurity: true`. Negative test confirms `assertHardenedWebPreferences` rejects weakened preferences. |
+| **WP007-E02** | Real Renderer Node Isolation | `webContents.executeJavaScript()` in live renderer | **PASS** | Confirmed `require`, `process`, `Buffer`, `ipcRenderer`, `child_process`, `fs` are `undefined`. Direct `require('node:fs')` call blocked. |
+| **WP007-E03** | Real Preload / contextBridge Surface | Audited `window.tridentBridge` inside real renderer | **PASS** | Strictly exposes `ping`, `getSystemMetadata`, `getHealthStatus`. Confirmed `send`, `invoke`, `on`, and raw `ipcRenderer` are absent. |
+| **WP007-E04** | Approved IPC Actual E2E Round Trip | Live call through `window.tridentBridge.ping(...)`, `getSystemMetadata()`, `getHealthStatus()` | **PASS** | Full round trip through contextBridge -> preload -> ipcRenderer -> ipcMain -> IpcDispatchGuard -> handler -> response. Nonce and metadata verified. |
+| **WP007-E05** | Arbitrary IPC Escape Hatch Negative Proof | Inspected renderer execution scope | **PASS** | Raw `ipcRenderer` absent, generic send/invoke methods absent, arbitrary channel calls impossible. |
+| **WP007-E06** | External Navigation Blocked | Live navigation attempt via `window.location.href = 'https://unauthorized-external-test.tridentpos.invalid/'` | **PASS** | `will-navigate` intercepted and cancelled the event; window remained on authorized local origin. |
+| **WP007-E07** | Window Open / Popup Blocked | Live execution of `window.open(...)` from renderer | **PASS** | `setWindowOpenHandler` denied creation; window count remained 1. |
+| **WP007-E08** | Effective CSP Enforcement in Real Renderer | DOM inspection and dynamic `eval()` execution attempt in live renderer | **PASS** | Strict CSP meta tag validated (`default-src 'self'`); dynamic `eval()` rejected by browser engine. |
+
+**Runtime Test Summary:** 8 total | 8 passed | 0 failed | 0 skipped.
 
 ---
 
-## 4. Supply Chain & SAST Scan Results
+## 5. Pure Unit Test Matrix (WP007-T01..T22)
+
+Command: `npm run test:unit` (`node --test dist/index.test.js`).
+
+| Test ID | Description | Result |
+|---|---|---|
+| `WP007-T01` | Package metadata and `@trident/core` dependency | **PASS** |
+| `WP007-T02` | `HARDENED_WEB_PREFERENCES` invariant defaults | **PASS** |
+| `WP007-T03` | [Negative] Fails closed on disabled `contextIsolation` | **PASS** |
+| `WP007-T04` | [Negative] Fails closed on enabled `nodeIntegration` | **PASS** |
+| `WP007-T05` | [Negative] Fails closed on disabled `sandbox` | **PASS** |
+| `WP007-T06` | [Negative] Fails closed on insecure content or worker node integration | **PASS** |
+| `WP007-T07` | `auditRendererIsolation` clean scope verification | **PASS** |
+| `WP007-T08` | [Negative] `auditRendererIsolation` detects leaked Node primitives | **PASS** |
+| `WP007-T09` | Authoritative static channel allowlist | **PASS** |
+| `WP007-T10` | Approved typed channel execution through `IpcDispatchGuard` | **PASS** |
+| `WP007-T11` | [Negative] Unapproved IPC channel rejected fail-closed | **PASS** |
+| `WP007-T12` | [Negative] Malformed payloads rejected at trusted boundary | **PASS** |
+| `WP007-T13` | [Negative] External and malicious URLs blocked | **PASS** |
+| `WP007-T14` | `handleNavigationAttempt` calls `preventDefault` | **PASS** |
+| `WP007-T15` | [Negative] `createWindowOpenHandler` strictly returns `{ action: 'deny' }` | **PASS** |
+| `WP007-T16` | [Negative] Simulated injected script cannot reach Node APIs | **PASS** |
+| `WP007-T17` | `FROZEN_CSP_DIRECTIVE` adherence to SSOT | **PASS** |
+| `WP007-T18` | [Negative] Rejects `'unsafe-inline'`, `'unsafe-eval'`, and wildcards `*` | **PASS** |
+| `WP007-T19` | `edge-config.json` loading and schema validation | **PASS** |
+| `WP007-T20` | [Negative] Rejects secret-bearing configuration keys | **PASS** |
+| `WP007-T21` | [Negative] Fails closed on malformed configuration | **PASS** |
+| `WP007-T22` | `EdgeWorkerSupervisor` background task decoupling | **PASS** |
+
+**Unit Test Summary:** 22 total | 22 passed | 0 failed | 0 skipped.
+
+---
+
+## 6. Supply Chain & SAST Scan Results
 
 - **Trivy Vulnerability Scan (SCA):**
-  - Command: `trivy fs --config trivy.yaml --scanners vuln --severity HIGH,CRITICAL --exit-code 1 .`
-  - Scanned Targets: `package-lock.json`
+  - Targets: `package-lock.json`
   - Findings: **0 HIGH, 0 CRITICAL** (Clean)
 - **TruffleHog Secret Scan:**
-  - Scanned Commits: Base to Feature Branch HEAD
   - Findings: **0 Verified Secrets, 0 Unverified Secrets** (Clean)
 - **Static Security Analysis (ESLint & Strict TypeScript):**
   - `npm run lint`: **0 errors, 0 warnings**
   - `npm run typecheck`: **7/7 packages successful, 0 errors** (`skipLibCheck = false`)
 - **CycloneDX SBOM Generation:**
-  - Validated JSON structure with `bomFormat = CycloneDX`.
-  - Confirmed presence of `typescript`, `eslint`, `prettier`, `turbo`, and pinned `electron@44.3.0`.
+  - Validated JSON structure with `electron@44.3.0`.
 
 ---
 
-## 5. Security Debt Governance & Boundaries
+## 7. Security Debt Governance & Boundaries
 
 Per `ACR-2026-009 Sec. 7` and `IMPLEMENTATION_PLAN.md`:
 
-1. **`SEC-VAL-07` Status:** Fully implemented and validated with 22 automated tests.
+1. **`SEC-VAL-07` Status:**
+   - Implementation controls present and validated by 22 unit tests and 8 actual Electron runtime tests.
+   - Status remains: **`IMPLEMENTATION CONTROLS PRESENT — PENDING ROLE-SEPARATED SECURITY VALIDATION`**.
+   - Builder MUST NOT mark it CLOSED; awaiting independent security review.
 2. **Unrelated Security Debt Items (Strictly Preserved as OPEN):**
    - `SEC-VAL-03` (Station Pairing & Trust Bootstrap): Owned by `WP-009` — **OPEN**
    - `SEC-VAL-02` (Offline IAM Brute Force Resistance): Owned by `WP-010` — **OPEN**
@@ -139,11 +198,11 @@ Per `ACR-2026-009 Sec. 7` and `IMPLEMENTATION_PLAN.md`:
    - `SEC-VAL-06` (Edge SQLite & Sync Tamper-Evidence): Owned by `WP-013` / `WP-008` — **OPEN**
    - `DAT-04` / `RSK-08` (SQLite Power-Loss Durability): Owned by `WP-008` — **OPEN**
    - `RSK-11` (Low-Memory Target POS Hardware Certification): Owned by `WP-026` / `WP-028` — **OPEN**
-   - `ADR-003 Target Hardware Benchmark`: **OPEN** (Final hardware certification requires physical target device benchmark).
+   - `ADR-003 Target Hardware Benchmark`: **OPEN**
 
 ---
 
-## 6. Prohibited Scope Verification
+## 8. Prohibited Scope Verification
 
 The implementation was audited to confirm zero premature feature creep:
 - Zero SQLite connections or SQLCipher references

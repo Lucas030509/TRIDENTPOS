@@ -3,10 +3,10 @@
  * Authoritative implementation per SECURITY_ARCHITECTURE.md Sec. 9 and ACR-2026-009.
  */
 
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import electronModule from 'electron';
-import type Electron from 'electron';
+
 import {
   HARDENED_WEB_PREFERENCES,
   assertHardenedWebPreferences,
@@ -24,16 +24,30 @@ import {
 } from './ipc-channels.js';
 import { handleNavigationAttempt, createWindowOpenHandler } from './navigation-lock.js';
 import { loadEdgeConfigFile, EdgeRuntimeConfig } from './config.js';
+import * as electronModule from 'electron';
+import type Electron from 'electron';
 
-const electron =
-  typeof electronModule === 'object' && electronModule !== null
-    ? (electronModule as unknown as typeof Electron)
-    : ({} as unknown as typeof Electron);
+interface ElectronNamespace {
+  app?: typeof Electron.app;
+  BrowserWindow?: typeof Electron.BrowserWindow;
+  ipcMain?: typeof Electron.ipcMain;
+  session?: typeof Electron.session;
+  default?: ElectronNamespace;
+}
 
-const app = electron.app;
-const BrowserWindow = electron.BrowserWindow;
-const ipcMain = electron.ipcMain;
-const session = electron.session;
+const electronResolved: ElectronNamespace =
+  typeof (electronModule as unknown as ElectronNamespace).default === 'object' &&
+  (electronModule as unknown as ElectronNamespace).default !== null
+    ? ((electronModule as unknown as ElectronNamespace).default as ElectronNamespace)
+    : (electronModule as unknown as ElectronNamespace);
+
+const app = electronResolved.app ?? (electronModule as unknown as ElectronNamespace).app;
+const BrowserWindow =
+  electronResolved.BrowserWindow ?? (electronModule as unknown as ElectronNamespace).BrowserWindow;
+const ipcMain =
+  electronResolved.ipcMain ?? (electronModule as unknown as ElectronNamespace).ipcMain;
+const session =
+  electronResolved.session ?? (electronModule as unknown as ElectronNamespace).session;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -42,6 +56,7 @@ export interface EdgeAppBootstrapOptions {
   configPath?: string;
   allowedOrigins?: string[];
   preloadPath?: string;
+  htmlPath?: string;
 }
 
 export class EdgeApplicationHost {
@@ -50,12 +65,16 @@ export class EdgeApplicationHost {
   private mainWindow: Electron.BrowserWindow | null = null;
   private allowedOrigins: string[];
   private preloadPath: string;
+  private htmlPath: string;
 
   constructor(options: EdgeAppBootstrapOptions = {}) {
     const defaultCfgPath = path.resolve(__dirname, '../edge-config.json');
     this.config = loadEdgeConfigFile(options.configPath ?? defaultCfgPath);
     this.allowedOrigins = options.allowedOrigins ?? ['file:'];
-    this.preloadPath = options.preloadPath ?? path.join(__dirname, 'preload.js');
+    const cjsPreload = path.join(__dirname, 'preload.cjs');
+    const jsPreload = path.join(__dirname, 'preload.js');
+    this.preloadPath = options.preloadPath ?? (fs.existsSync(cjsPreload) ? cjsPreload : jsPreload);
+    this.htmlPath = options.htmlPath ?? path.join(__dirname, 'index.html');
     this.setupIpcHandlers();
   }
 
@@ -94,7 +113,7 @@ export class EdgeApplicationHost {
     // Wire up with Electron ipcMain if running inside Electron runtime
     if (ipcMain && typeof ipcMain.handle === 'function') {
       for (const channel of this.ipcGuard.getRegisteredChannels()) {
-        ipcMain.handle(channel, async (event, rawPayload) => {
+        ipcMain.handle(channel, async (event: unknown, rawPayload: unknown) => {
           return this.ipcGuard.dispatch(channel, event, rawPayload);
         });
       }
@@ -131,14 +150,17 @@ export class EdgeApplicationHost {
     });
 
     // 1. Navigation Lockdown (will-navigate)
-    win.webContents.on('will-navigate', (event, targetUrl) => {
-      handleNavigationAttempt(event, targetUrl, {
-        allowedOrigins: this.allowedOrigins,
-        onViolation: (url, reason) => {
-          console.warn(`[SECURITY VIOLATION] Denied navigation to '${url}': ${reason}`);
-        },
-      });
-    });
+    win.webContents.on(
+      'will-navigate',
+      (event: { preventDefault: () => void; defaultPrevented?: boolean }, targetUrl: string) => {
+        handleNavigationAttempt(event, targetUrl, {
+          allowedOrigins: this.allowedOrigins,
+          onViolation: (url, reason) => {
+            console.warn(`[SECURITY VIOLATION] Denied navigation to '${url}': ${reason}`);
+          },
+        });
+      },
+    );
 
     // 2. Window Open / Popup Lockdown (default-deny)
     win.webContents.setWindowOpenHandler(
@@ -149,14 +171,25 @@ export class EdgeApplicationHost {
 
     // 3. CSP Enforcement on Session Headers
     if (session && session.defaultSession) {
-      session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
-        const securityHeaders = getHardenedSecurityHeaders();
-        callback({
-          responseHeaders: {
-            ...details.responseHeaders,
-            ...securityHeaders,
-          },
-        });
+      session.defaultSession.webRequest.onHeadersReceived(
+        (
+          details: Electron.OnHeadersReceivedListenerDetails,
+          callback: (headersReceivedResponse: Electron.HeadersReceivedResponse) => void,
+        ) => {
+          const securityHeaders = getHardenedSecurityHeaders();
+          callback({
+            responseHeaders: {
+              ...details.responseHeaders,
+              ...securityHeaders,
+            },
+          });
+        },
+      );
+    }
+
+    if (this.htmlPath && fs.existsSync(this.htmlPath)) {
+      win.loadFile(this.htmlPath).catch((err: Error) => {
+        console.warn(`[WARN] Failed to load HTML file '${this.htmlPath}': ${err.message}`);
       });
     }
 
