@@ -20,29 +20,35 @@ if (!electronBinary) {
 let command = electronBinary;
 let args = [testScript];
 
-// On Linux, verify SUID sandbox configuration or provide OS process-level fallback
+// On Linux, verify SUID sandbox configuration; fail closed if invalid
 if (process.platform === 'linux') {
   const chromeSandbox = path.join(path.dirname(electronBinary), 'chrome-sandbox');
-  let hasValidSuid = false;
-  try {
-    const stat = fs.statSync(chromeSandbox);
-    // mode 4755: SUID bit (0o4000) and owned by root (uid 0)
-    hasValidSuid = stat.uid === 0 && (stat.mode & 0o4000) !== 0;
-  } catch {
-    hasValidSuid = false;
+  if (!fs.existsSync(chromeSandbox)) {
+    console.error(`FATAL: chrome-sandbox binary missing at ${chromeSandbox}. Failing closed.`);
+    process.exit(1);
+  }
+  const stat = fs.statSync(chromeSandbox);
+  const isRoot = stat.uid === 0;
+  const hasSuid = (stat.mode & 0o4000) !== 0;
+  const isExecutable = (stat.mode & 0o111) !== 0;
+
+  if (!isRoot || !hasSuid || !isExecutable) {
+    console.error(
+      `FATAL: chrome-sandbox at ${chromeSandbox} is not configured with root SUID (mode 4755, owner root:root). Current UID: ${stat.uid}, mode: ${(stat.mode & 0o7777).toString(8)}. Refusing to execute with disabled sandbox.`,
+    );
+    process.exit(1);
   }
 
-  if (!hasValidSuid) {
-    console.log('[LINUX SANDBOX NOTICE]: Root SUID chrome-sandbox not configured; adding --no-sandbox for OS process.');
-    args.unshift('--no-sandbox');
-  }
+  console.log(
+    `[LINUX SUID SANDBOX VERIFIED]: ${chromeSandbox} (UID=${stat.uid}, mode=${(stat.mode & 0o7777).toString(8)})`,
+  );
 }
 
 // On Linux CI/headless environments without DISPLAY, wrap execution with xvfb-run
 if (process.platform === 'linux' && !process.env.DISPLAY) {
   console.log('[HEADLESS LINUX DETECTED]: Wrapping Electron execution with xvfb-run...');
   command = 'xvfb-run';
-  args = ['--auto-servernum', '--server-args=-screen 0 1024x768x24', electronBinary, ...args];
+  args = ['--auto-servernum', '--server-args=-screen 0 1024x768x24', electronBinary, testScript];
 }
 
 console.log(`[EXECUTING ACTUAL ELECTRON BINARY]: ${command} ${args.join(' ')}`);

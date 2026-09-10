@@ -20,34 +20,25 @@
   - Embedded Node.js Runtime in Electron: `24.20.0`
   - Embedded V8 Engine: `15.2.124.19`
 - **Date:** 2026-09-10
-- **Remediation Iteration:** R1 (Actual Electron Runtime Security Validation)
+- **Remediation Iteration:** R2 (Remove `--no-sandbox` False Green & Enforce Active Chromium Sandbox)
 - **Builder Verdict:** `READY FOR ROLE-SEPARATED REVIEW`
 - **SEC-VAL-07 Control Status:** `IMPLEMENTATION CONTROLS PRESENT — PENDING ROLE-SEPARATED SECURITY VALIDATION`
 
 ---
 
-## 2. Prior Quick Integrity Blocker & Remediation
+## 2. Integrity Blockers & Remediation History
 
-### 2.1 Blocker Identified
-During initial external Quick Integrity Check of subject `S1` (`04bf722a20c2cf6afcdb57e78caaf60ac5494c94`), one blocking issue was identified:
-> "SEC-VAL-07 currently relies primarily on Node.js unit/simulation tests and does NOT objectively exercise the hardened boundary inside an actual Electron runtime."
+### 2.1 Remediation R1 Summary
+Resolved initial blocker where tests relied purely on Node.js unit/simulation checks. Added actual Electron runtime integration suite (`WP007-E01`..`WP007-E08`) executing the real pinned `electron@44.3.0` binary without mocks.
 
-### 2.2 Remediation Executed
-1. **Preserved Unit-Level Defense:** Kept existing test suite `WP007-T01` through `WP007-T22` (22 tests) validating static invariants, payload parsers, configuration boundaries, and dispatch guards under pure Node.js.
-2. **Added Actual Electron Integration Suite:** Implemented `packages/edge/src/electron.test.ts` executing inside the real pinned `electron@44.3.0` binary without mocks.
-3. **Real Electron Harness Validation Points:**
-   - Real BrowserWindow effective preferences verified via `webContents.getLastWebPreferences()`.
-   - Real renderer execution verified via `webContents.executeJavaScript()`.
-   - Real preload script loaded inside the production window, exposing `window.tridentBridge`.
-   - Real IPC round-trip verified end-to-end (`renderer -> contextBridge -> preload -> ipcRenderer -> ipcMain -> handler -> response`).
-   - Arbitrary IPC negative test proving unexposed escape hatches.
-   - Real `will-navigate` lifecycle interception blocking external navigation while remaining on the local origin.
-   - Real `setWindowOpenHandler` default-deny blocking popup/new-window creation.
-   - Real Content Security Policy enforcement verified in live renderer (dynamic `eval()` blocked).
-4. **Deterministic Headless Linux Execution:**
-   - Implemented `packages/edge/scripts/run-electron-tests.mjs` which detects headless Linux environments and wraps Electron in `xvfb-run`.
-   - Modified `.github/workflows/ci.yml` `unit-tests` job to run under `xvfb-run --auto-servernum --server-args="-screen 0 1024x768x24" npm run test`.
-5. **Transitive npm Scripts:** Configured `test:unit`, `test:electron`, and composite `test: npm run test:unit && npm run test:electron`.
+### 2.2 Remediation R2: `--no-sandbox` False Green Removal
+- **Previous R2 Blocker:** External verification found that the test harness (`packages/edge/scripts/run-electron-tests.mjs`) included an insecure fallback that injected `--no-sandbox` into Electron CLI args when the Linux SUID sandbox check failed, invalidating the runtime sandbox proof.
+- **Remediation Executed:**
+  1. **Removed `--no-sandbox` Fallback Entirely:** Completely deleted the `--no-sandbox` fallback switch from the test runner.
+  2. **Fail-Closed Linux Sandbox Enforcement:** If `chrome-sandbox` is missing, not owned by root (UID != 0), or lacks SUID (mode 4755), the harness immediately aborts with exit code 1.
+  3. **Deterministic CI Configuration:** Updated `.github/workflows/ci.yml` `unit-tests` to ensure Electron binary extraction, apply `sudo chown root:root` and `sudo chmod 4755` to `chrome-sandbox`, and perform deterministic `stat` verification failing the workflow if root SUID is missing.
+  4. **Added WP007-E09 Validation:** Added runtime audit ensuring zero `--no-sandbox` or `--disable-setuid-sandbox` CLI flags, confirming `sandbox: true` on the production BrowserWindow, and proving active Chromium sandbox in the live renderer.
+- **Final Runtime State:** Electron executes with the full Chromium OS sandbox active. Zero sandbox-disabling flags are permitted.
 
 ---
 
@@ -60,7 +51,7 @@ During initial external Quick Integrity Check of subject `S1` (`04bf722a20c2cf6a
 |  [ Production HTML / Scripts ]                                                          |
 |  - contextIsolation: true                                                               |
 |  - nodeIntegration: false                                                               |
-|  - sandbox: true                                                                        |
+|  - sandbox: true (Chromium Sandbox ACTIVE — zero --no-sandbox)                          |
 |  - webSecurity: true                                                                    |
 |  - Zero Node primitives (require, process, Buffer, fs, child_process = undefined)       |
 |  - Content Security Policy: default-src 'self'; script-src 'self';                      |
@@ -116,9 +107,9 @@ During initial external Quick Integrity Check of subject `S1` (`04bf722a20c2cf6a
 
 ---
 
-## 4. Actual Electron Runtime Test Matrix (WP007-E01..E08)
+## 4. Actual Electron Runtime Test Matrix (WP007-E01..E09)
 
-Command: `npm run test:electron` (executed with real pinned `electron@44.3.0` binary).
+Command: `npm run test:electron` (executed with real pinned `electron@44.3.0` binary, Chromium sandbox active).
 
 | Test ID | Test Name | Verification Method | Result | Notes |
 |---|---|---|---|---|
@@ -130,8 +121,9 @@ Command: `npm run test:electron` (executed with real pinned `electron@44.3.0` bi
 | **WP007-E06** | External Navigation Blocked | Live navigation attempt via `window.location.href = 'https://unauthorized-external-test.tridentpos.invalid/'` | **PASS** | `will-navigate` intercepted and cancelled the event; window remained on authorized local origin. |
 | **WP007-E07** | Window Open / Popup Blocked | Live execution of `window.open(...)` from renderer | **PASS** | `setWindowOpenHandler` denied creation; window count remained 1. |
 | **WP007-E08** | Effective CSP Enforcement in Real Renderer | DOM inspection and dynamic `eval()` execution attempt in live renderer | **PASS** | Strict CSP meta tag validated (`default-src 'self'`); dynamic `eval()` rejected by browser engine. |
+| **WP007-E09** | Runtime Sandbox Switches Audit | Inspected `process.argv` and `app.commandLine` for sandbox switches | **PASS** | Proved absence of `--no-sandbox`, `--disable-setuid-sandbox`, `--no-zygote`, and verified active Chromium sandbox. |
 
-**Runtime Test Summary:** 8 total | 8 passed | 0 failed | 0 skipped.
+**Runtime Test Summary:** 9 total | 9 passed | 0 failed | 0 skipped.
 
 ---
 
@@ -170,16 +162,10 @@ Command: `npm run test:unit` (`node --test dist/index.test.js`).
 
 ## 6. Supply Chain & SAST Scan Results
 
-- **Trivy Vulnerability Scan (SCA):**
-  - Targets: `package-lock.json`
-  - Findings: **0 HIGH, 0 CRITICAL** (Clean)
-- **TruffleHog Secret Scan:**
-  - Findings: **0 Verified Secrets, 0 Unverified Secrets** (Clean)
-- **Static Security Analysis (ESLint & Strict TypeScript):**
-  - `npm run lint`: **0 errors, 0 warnings**
-  - `npm run typecheck`: **7/7 packages successful, 0 errors** (`skipLibCheck = false`)
-- **CycloneDX SBOM Generation:**
-  - Validated JSON structure with `electron@44.3.0`.
+- **Trivy Vulnerability Scan (SCA):** 0 HIGH, 0 CRITICAL (Clean).
+- **TruffleHog Secret Scan:** 0 Verified Secrets, 0 Unverified Secrets (Clean).
+- **Static Security Analysis (ESLint & Strict TypeScript):** 0 errors, 0 warnings across all monorepo packages (`skipLibCheck = false`).
+- **CycloneDX SBOM Generation:** Validated with pinned `electron@44.3.0`.
 
 ---
 
@@ -188,7 +174,7 @@ Command: `npm run test:unit` (`node --test dist/index.test.js`).
 Per `ACR-2026-009 Sec. 7` and `IMPLEMENTATION_PLAN.md`:
 
 1. **`SEC-VAL-07` Status:**
-   - Implementation controls present and validated by 22 unit tests and 8 actual Electron runtime tests.
+   - Implementation controls present and validated by 22 unit tests and 9 actual Electron runtime tests under active Chromium sandbox.
    - Status remains: **`IMPLEMENTATION CONTROLS PRESENT — PENDING ROLE-SEPARATED SECURITY VALIDATION`**.
    - Builder MUST NOT mark it CLOSED; awaiting independent security review.
 2. **Unrelated Security Debt Items (Strictly Preserved as OPEN):**

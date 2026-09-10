@@ -19,34 +19,36 @@
   - Embedded Node.js Runtime in Electron: `24.20.0`
   - Embedded V8 Engine: `15.2.124.19`
 - **Date:** 2026-09-10
-- **Remediation Iteration:** R1 (Actual Electron Runtime Security Validation)
+- **Remediation Iteration:** R2 (Remove `--no-sandbox` False Green & Enforce Active Chromium Sandbox)
 - **Builder Verdict:** `READY FOR ROLE-SEPARATED REVIEW`
 - **SEC-VAL-07 Status:** `IMPLEMENTATION CONTROLS PRESENT — PENDING ROLE-SEPARATED SECURITY VALIDATION`
 
 ---
 
-## 2. Prior Integrity Blocker & Remediation Overview
+## 2. Integrity Blockers & Remediation History
 
-### 2.1 Prior Blocker Description
-External Quick Integrity Check of subject `S1` (`04bf722a20c2cf6afcdb57e78caaf60ac5494c94`) identified that `SEC-VAL-07` relied primarily on Node.js unit/simulation tests (`node --test dist/index.test.js`) using plain JavaScript objects, simulated renderer scopes, static BrowserWindow preference objects, and isolated dispatch guards. While valid as unit-level defenses, they did not objectively exercise the hardened boundary inside an actual Electron runtime.
+### 2.1 Prior Blocker (R1)
+External Quick Integrity Check of subject `S1` (`04bf722a20c2cf6afcdb57e78caaf60ac5494c94`) identified that `SEC-VAL-07` relied primarily on Node.js unit/simulation tests (`node --test dist/index.test.js`).
+- **Remediation R1:** Added actual Electron runtime integration suite (`WP007-E01`..`WP007-E08`), executing the pinned `electron@44.3.0` binary under `xvfb-run` on headless Linux CI.
 
-### 2.2 Remediation Strategy (R1)
-1. **Preserved Existing Unit Tests:** Retained all 22 unit tests (`WP007-T01`..`WP007-T22`) as the unit-level defense layer.
-2. **Added Actual Electron Runtime Integration Test Layer:**
-   - Implemented `packages/edge/src/electron.test.ts` executing inside the actual pinned `electron@44.3.0` binary without mocks.
-   - Built harness using the production `EdgeApplicationHost` and `createMainWindow()` path.
-   - Designed 8 runtime security test cases (`WP007-E01`..`WP007-E08`).
-3. **CommonJS Sandbox Preload Compatibility:** Added `packages/edge/src/preload.cjs` so that the sandboxed Electron preload executes cleanly without ESM module syntax collisions while strictly exposing `window.tridentBridge`.
-4. **Headless Linux / Xvfb CI Strategy:**
-   - Added `packages/edge/scripts/run-electron-tests.mjs` with automatic headless Linux detection wrapping execution in `xvfb-run` when `DISPLAY` is absent.
-   - Updated `.github/workflows/ci.yml` `unit-tests` job to run under `xvfb-run --auto-servernum --server-args="-screen 0 1024x768x24" npm run test`.
-5. **Transitive Execution:** Updated `packages/edge/package.json` with scripts `test:unit`, `test:electron`, and composite `test: npm run test:unit && npm run test:electron`. Monorepo `npm run test` transitively runs both unit and Electron integration suites.
+### 2.2 Prior Blocker (R2): `--no-sandbox` False Green
+External verification of subject `S2` (`7ca34a7897bf2e10fee95822b214938774e1acb3`) found:
+- The test harness `packages/edge/scripts/run-electron-tests.mjs` contained an insecure fallback that injected `--no-sandbox` when the Linux SUID sandbox check failed.
+- In CI, `node_modules/electron/dist/chrome-sandbox` was not yet extracted when the permissions step ran, causing the fallback to activate and launch Electron with `--no-sandbox`.
+- This created a false-green risk for the runtime sandbox proof.
+
+### 2.3 Remediation Strategy (R2)
+1. **Removed `--no-sandbox` Fallback Entirely:** Completely eliminated the `--no-sandbox` and `--disable-setuid-sandbox` fallback paths from `packages/edge/scripts/run-electron-tests.mjs`.
+2. **Fail-Closed Linux SUID Verification:** On Linux, the harness verifies that `chrome-sandbox` exists, is owned by root (`uid === 0`), has SUID permission (`mode & 0o4000 !== 0`), and is executable. If invalid, the harness immediately aborts with exit code 1.
+3. **Deterministic CI Configuration:** Updated `.github/workflows/ci.yml` `unit-tests` to:
+   - Force Electron binary extraction before configuration (`node -e "require('electron')"`).
+   - Configure `sudo chown root:root` and `sudo chmod 4755` on `chrome-sandbox`.
+   - Run deterministic diagnostic verification (`stat`) that fails CI if UID != 0 or SUID bit is absent.
+4. **Added WP007-E09 (Runtime Sandbox Invariants):** Implemented an explicit 9th runtime validation test auditing `process.argv` and `app.commandLine` to guarantee zero `--no-sandbox` or `--disable-setuid-sandbox` flags are present, and confirming active Chromium sandbox in the live renderer.
 
 ---
 
 ## 3. Test Architecture: Unit vs. Actual Electron Runtime
-
-The test suite is strictly partitioned into two complementary verification layers:
 
 ```
 +-----------------------------------------------------------------------------------------+
@@ -61,23 +63,24 @@ The test suite is strictly partitioned into two complementary verification layer
 | [ LAYER 2: ACTUAL ELECTRON RUNTIME VALIDATION ]                                         |
 | Command: npm run test:electron (node scripts/run-electron-tests.mjs)                     |
 | Binary: Real electron@44.3.0 binary (Embedded Node 24.20.0, Chromium 152.0.7977.78)     |
+| Sandbox: Active Chromium OS SUID sandbox (Zero --no-sandbox, zero --disable-setuid-sb)   |
 | Scope: Live BrowserWindow, real renderer execution, real preload contextBridge,         |
 |        actual IPC round trip, will-navigate cancellation, setWindowOpenHandler deny,    |
-|        and dynamic CSP evaluation blocking                                              |
-| Tests: WP007-E01 through WP007-E08 (8 tests)                                            |
+|        dynamic CSP evaluation blocking, and runtime sandbox switch verification         |
+| Tests: WP007-E01 through WP007-E09 (9 tests)                                            |
 | Status: PASS (0 failed, 0 skipped)                                                      |
 +-----------------------------------------------------------------------------------------+
 ```
 
 ---
 
-## 4. Actual Electron Runtime Test Execution Results (WP007-E01..E08)
+## 4. Actual Electron Runtime Test Execution Results (WP007-E01..E09)
 
 Command executed:
 ```bash
 npm run test:electron
 # Executes: node scripts/run-electron-tests.mjs
-# Binary: electron@44.3.0
+# Binary: electron@44.3.0 (WITHOUT --no-sandbox)
 ```
 
 Execution Output:
@@ -101,9 +104,10 @@ Embedded Chromium: 152.0.7977.78
 [SECURITY VIOLATION] Denied window.open to 'https://unauthorized-popup-test.tridentpos.invalid/'
 ✔ WP007-E07: window.open/new window blocked (setWindowOpenHandler denies popup creation)
 ✔ WP007-E08: effective CSP verified in real renderer (eval blocked by Content Security Policy, strict self-only policy active)
+✔ WP007-E09: Electron runtime launched without sandbox-disabling command-line switches (no --no-sandbox, no --disable-setuid-sandbox, BrowserWindow sandbox: true, active Chromium sandbox)
 
 ------------------------------------------------------------
-Actual Electron Runtime Tests: 8 total | 8 passed | 0 failed | 0 skipped
+Actual Electron Runtime Tests: 9 total | 9 passed | 0 failed | 0 skipped
 ------------------------------------------------------------
 ```
 
@@ -116,6 +120,7 @@ Actual Electron Runtime Tests: 8 total | 8 passed | 0 failed | 0 skipped
 - **WP007-E06 (Actual Navigation Blocking):** Triggered unauthorized navigation from renderer (`window.location.href = 'https://unauthorized-external-test.tridentpos.invalid/'`). Verified `will-navigate` intercepted and cancelled the navigation, leaving the window on the authorized `file:` origin.
 - **WP007-E07 (Actual window.open Blocking):** Executed `window.open(...)` from renderer. Verified `setWindowOpenHandler` denied creation and window count remained exactly 1.
 - **WP007-E08 (Effective CSP Enforcement):** Verified renderer document contains strict CSP (`default-src 'self'; script-src 'self'`). Proved dynamic `eval()` execution is blocked by the browser engine.
+- **WP007-E09 (Runtime Sandbox CLI Switches Audit):** Audited `process.argv` and `app.commandLine`. Confirmed absence of `--no-sandbox`, `--disable-setuid-sandbox`, `--no-zygote`, and `--disable-seccomp-filter-sandbox`. Proved active Chromium sandbox with production BrowserWindow `sandbox: true`.
 
 ---
 

@@ -477,6 +477,92 @@ async function runElectronRuntimeTests(): Promise<void> {
   }
 
   // --------------------------------------------------------------------------
+  // WP007-E09: Electron runtime launched without sandbox-disabling command-line switches
+  // --------------------------------------------------------------------------
+  try {
+    // 1. Prohibit sandbox-disabling flags on process.argv
+    const rawArgv = process.argv;
+    const prohibitedSwitches = [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--no-zygote',
+      '--disable-seccomp-filter-sandbox',
+    ];
+
+    for (const sw of prohibitedSwitches) {
+      if (rawArgv.includes(sw)) {
+        throw new Error(`Prohibited sandbox-disabling switch detected in process.argv: '${sw}'`);
+      }
+    }
+
+    // 2. Prohibit switches on app.commandLine
+    if (app.commandLine.hasSwitch('no-sandbox')) {
+      throw new Error(
+        "app.commandLine.hasSwitch('no-sandbox') is true. Chromium sandbox is disabled!",
+      );
+    }
+    if (app.commandLine.hasSwitch('disable-setuid-sandbox')) {
+      throw new Error(
+        "app.commandLine.hasSwitch('disable-setuid-sandbox') is true. Chromium SUID sandbox is disabled!",
+      );
+    }
+
+    // 3. Confirm production BrowserWindow enforces sandbox === true
+    const wcAny = win.webContents as unknown as {
+      getLastWebPreferences?: () => Record<string, unknown>;
+      webPreferences?: Record<string, unknown>;
+    };
+    const webPrefs = (
+      typeof wcAny.getLastWebPreferences === 'function'
+        ? wcAny.getLastWebPreferences()
+        : wcAny.webPreferences
+    ) as Record<string, unknown> | null;
+
+    if (!webPrefs || webPrefs.sandbox !== true) {
+      throw new Error(`BrowserWindow sandbox is not true: ${String(webPrefs?.sandbox)}`);
+    }
+
+    // 4. Verify actual renderer execution succeeds under active sandbox
+    const rendererSandboxAudit = (await win.webContents.executeJavaScript(`
+      (() => {
+        return {
+          windowExists: typeof window !== 'undefined',
+          documentExists: typeof document !== 'undefined',
+          nodeProcessMissing: typeof process === 'undefined',
+          bridgeAvailable: typeof window.tridentBridge?.ping === 'function'
+        };
+      })()
+    `)) as {
+      windowExists: boolean;
+      documentExists: boolean;
+      nodeProcessMissing: boolean;
+      bridgeAvailable: boolean;
+    };
+
+    if (
+      !rendererSandboxAudit.windowExists ||
+      !rendererSandboxAudit.documentExists ||
+      !rendererSandboxAudit.nodeProcessMissing ||
+      !rendererSandboxAudit.bridgeAvailable
+    ) {
+      throw new Error(
+        `Renderer sandbox execution failed invariants: ${JSON.stringify(rendererSandboxAudit)}`,
+      );
+    }
+
+    recordPass(
+      'WP007-E09',
+      'Electron runtime launched without sandbox-disabling command-line switches (no --no-sandbox, no --disable-setuid-sandbox, BrowserWindow sandbox: true, active Chromium sandbox)',
+    );
+  } catch (err) {
+    recordFail(
+      'WP007-E09',
+      'Electron runtime launched without sandbox-disabling command-line switches',
+      (err as Error).message,
+    );
+  }
+
+  // --------------------------------------------------------------------------
   // Summary & Teardown
   // --------------------------------------------------------------------------
   console.log('\n------------------------------------------------------------');
