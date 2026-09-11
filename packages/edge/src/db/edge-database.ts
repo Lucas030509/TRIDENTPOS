@@ -303,6 +303,37 @@ export class EdgeDatabaseService {
   }
 
   /**
+   * Convenience alias for runInTransaction.
+   */
+  public transaction<T>(fn: () => T, options: TransactionOptions = {}): T {
+    return this.runInTransaction(fn, options);
+  }
+
+  /**
+   * Executes raw DDL or batch SQL statements with fail-closed connection check.
+   */
+  public exec(sql: string): void {
+    this.assertOpen();
+    this.#db.exec(sql);
+  }
+
+  /**
+   * Executes a parameterized DML statement (INSERT, UPDATE, DELETE).
+   */
+  public run(sql: string, params: unknown[] = []): Database.RunResult {
+    this.assertOpen();
+    return this.#db.prepare(sql).run(...params);
+  }
+
+  /**
+   * Executes a parameterized query and returns all matching rows.
+   */
+  public query<T = unknown>(sql: string, params: unknown[] = []): T[] {
+    this.assertOpen();
+    return this.#db.prepare(sql).all(...params) as T[];
+  }
+
+  /**
    * Convenience execution helper for financial/fiscal critical transactions (e.g. Corte Z, shift close).
    * Runs inside an explicit transaction with PRAGMA synchronous = FULL,
    * automatically restoring PRAGMA synchronous = NORMAL afterwards.
