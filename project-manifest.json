@@ -123,9 +123,7 @@
   "wp009_governance_pr": 29,
   "wp009_post_merge_ci_run": 34623903266,
   "wp009_post_merge_security_run": 34623903190,
-  "wp009_invalidated_subjects": [
-    "6b7fc1982e04872fa9255a701cb978380376807d"
-  ],
+  "wp009_invalidated_subjects": ["6b7fc1982e04872fa9255a701cb978380376807d"],
   "wp009_builder": "16_Native_Edge_Developer",
   "wp009_security_reviewer": "08_Security_Architect",
   "wp009_code_reviewer": "11_Code_Reviewer",
