@@ -1,10 +1,15 @@
 # IMPLEMENTATION PLAN — ERP RESTAURANTES / TRIDENTPOS
 
+> [!NOTE]
+> **ACR-2026-011 PRODUCT OWNER APPROVED OVERLAY — PENDING MERGE TO MAIN**
+> 
+> The additions and test specifications in this document relating to WP-009 (`DATA-INV-WP009-01`, `StationPinStore`, `EdgeSecureStore`, `edge_security_audit`, exact test obligations) represent governance overlays approved by Product Owner. They become canonical upon merge to main. The underlying baseline remains `APPROVED / FROZEN — 2026-09-03`.
+
 **Document ID:** `PLAN-IMP-001`  
-**Version:** `1.1 REMEDIATED DRAFT (R1)`  
-**Status:** `READY FOR INDEPENDENT IMPLEMENTATION READINESS REVIEW`  
+**Version:** `1.1 APPROVED OVERLAY` (ACR-2026-011 Product Owner Approved)  
+**Status:** `READY FOR INDEPENDENT IMPLEMENTATION READINESS REVIEW` (`ACR-2026-011 PRODUCT OWNER APPROVED — PENDING MERGE TO MAIN`)  
 **Date:** `2026-09-03`  
-**Author Agent:** `01_Solution_Architect — IMPLEMENTATION READINESS REMEDIATION AUTHOR`  
+**Author Agent:** `01_Solution_Architect — IMPLEMENTATION READINESS REMEDIATION AUTHOR` (Overlay Synthesis: `01_Solution_Architect`)  
 **Target Gate:** `gates/IMPLEMENTATION_READINESS_GATE.md`  
 **Governing Framework:** `EAAF v1.2.0 @ 7e036f43240b3dc28ccb996e350263598275b2cd`  
 **Immutable Architecture Baseline Commit:** `6c31b64c435d50177e192fc6c5b7e83e18ffd87f`  
@@ -408,18 +413,60 @@ Edge host runtime scaffolding, embedded persistence, local LAN communication, an
 * **Bounded Context:** Platform Core / Security
 * **Frozen Requirements:** `SECURITY_ARCHITECTURE.md` Sec. 3; `IAM_SECURITY_MODEL.md` Sec. 5
 * **ADRs:** `ADR-005`
-* **Data Objects:** `edge_hosts`, `station_credentials`, `enrollment_tokens`
-* **APIs / Contracts:** Mutual enrollment TLS handshake (`/api/v1/edge/enroll`)
+* **Data Objects:** `edge_hosts`, `station_credentials`, `enrollment_tokens`, `edge_security_audit`
+* **APIs / Contracts:** Mutual enrollment TLS handshake (`/api/v1/edge/enroll`), internal package-private `EnrollmentPersistence`, `EdgeSecureStore`, `StationPinStore`.
 * **Builder Agent:** `16_Native_Edge_Developer`
 * **Specialist Reviewer:** `08_Security_Architect`
 * **Code Reviewer:** `11_Code_Reviewer`
 * **Prerequisites:** `WP-005`, `WP-007`
 * **Dependencies:** mDNS (Bonjour), Node `crypto` (TLS certificate generation, SHA-256 fingerprinting).
-* **Inputs:** `SECURITY_ARCHITECTURE.md` Sec. 3, `R2F-01`
-* **Outputs:** QR generator on Edge Host containing `{ branchId, edgeId, edgePublicKeyFingerprint, pairingId, expiresAt, pairingSecret }`; station enrollment client verifying TLS cert fingerprint before transmitting secret; one-time consumption token store.
-* **Acceptance Criteria:** Station verifies Edge TLS certificate against QR fingerprint prior to sending secret; rogue Edge with mismatched fingerprint rejected before secret exposure; secret invalidated immediately upon single use; terminal issued authenticated station token.
-* **Tests:** Simulated rogue Edge mDNS spoofing attack (must fail); replay attack with expired pairing token (must fail); successful end-to-end enrollment.
-* **Security Debt:** `SEC-VAL-03` (Trust bootstrap, rogue Edge mDNS spoofing and relay resistance).
+* **Inputs:** `SECURITY_ARCHITECTURE.md` Sec. 3, `R2F-01`, `DATA_MODEL.md` Sec. 3, `SECRETS_AND_KEY_MANAGEMENT.md` Sec. 4
+* **Outputs:** QR generator on Edge Host containing `{ branchId, edgeId, edgePublicKeyFingerprint, pairingId, expiresAt, pairingSecret }` with timestamps strictly in Unix epoch seconds; station enrollment client verifying TLS cert fingerprint before transmitting secret; durable client-side `StationPinStore` persisting fingerprint prior to secret revelation; `EdgeSecureStore` protecting TLS private key and exact 32-byte HMAC key via OS Keyring (fail-closed); internal encapsulated one-time consumption token store, durable station credential repository, and append-only local `edge_security_audit` log executed within a single atomic SQLite WAL transaction (`DATA-INV-WP009-01`).
+* **Acceptance Criteria:**
+  1. Station discovers candidate and performs initial zero-application-data TLS probe to extract candidate cert DER and calculate SHA-256 fingerprint.
+  2. Mismatched fingerprint aborts connection immediately without disclosing pairing secret.
+  3. Verified fingerprint is persisted in governed `StationPinStore` prior to establishing second TLS connection (`PIN STORE FAILURE => ZERO SECRET DISCLOSURE + ZERO SERVER MUTATION`).
+  4. Second TLS connection is strictly pinned to proven certificate (`ca: [provenCertDer]`).
+  5. Edge validates context (`organization_id`, `branch_id`, `edge_id`), checks trusted time, and verifies pairing secret in constant time.
+  6. Station Token (HS256, 12-hour lifetime) is prepared and signed in memory prior to database transaction; if signing fails, zero database mutation occurs.
+  7. Single atomic SQLite WAL transaction (`BEGIN IMMEDIATE ... COMMIT`) executes: token re-read and context validation, atomic CAS consumption (`consumed_at = now`), `station_credentials` insertion, pairing binding, and append-only insertion of forensic audit record `TerminalEnrolada / SUCCESS` into `edge_security_audit`.
+  8. Invariant `ALL COMMIT OR NONE COMMIT`: If credential insertion OR security audit insertion fails, the entire transaction rolls back, `consumed_at` remains NULL, no credentials or success audit rows are committed, and no Station Token is returned.
+  9. Edge TLS private key and exact 32-byte HMAC signing key are persisted in `EdgeSecureStore` backed by OS Keyring (Windows DPAPI, macOS Keychain, Linux Secret Service; Linux `basic_text` fallback strictly prohibited; fail-closed on startup if unavailable or corrupt).
+  10. Trusted time is computed as `Tcloud + monotonicElapsedSince(M0)` using `process.hrtime.bigint()`; anchor persisted in SQLite; wall clock rollback > 5 minutes (300 seconds) triggers `CLOCK_ROLLBACK_LOCKED`, blocks token generation, and records critical audit.
+  11. Timestamps consistently normalized to `UNIX EPOCH SECONDS`.
+  12. Zero public persistence escape hatches; zero policy-weakening public overrides (`tokenTtlSeconds`, `initialPin`, `customCa` prohibited in production); generic WAN sync outbox tables absent (reserved for WP-012).
+* **Tests:** Full test suite with zero `.skip`, `.only`, `.todo`, fake providers, or false-green substitutes, explicitly verifying:
+  - Simulated rogue Edge mDNS spoofing attack rejected before secret exposure.
+  - Replay attack with expired pairing token rejected.
+  - Zero application bytes transmitted on initial TLS inspection probe.
+  - Exact certificate pin enforced on second connection.
+  - `StationPinStore` persistence verified before secret transmission.
+  - Invariant `PIN STORE FAILURE => ZERO SECRET DISCLOSURE + ZERO SERVER MUTATION`.
+  - `StationPinStore` persistence survives client restart.
+  - Atomic transaction rollback test: CAS + credential + audit committed together.
+  - Credential insertion failure injection test (proves rollback and `consumed_at` remains NULL).
+  - Audit failure injection test (proves rollback, `consumed_at` remains NULL, and no token issued).
+  - Token remains unconsumed and retryable in both failure modes.
+  - Cross-tenant (`organization_id`) mismatch rejected.
+  - Cross-branch (`branch_id`) mismatch rejected.
+  - Cross-edge (`edge_id`) mismatch rejected.
+  - Zero public `EnrollmentPersistence` escape (strictly module-internal).
+  - Edge TLS private key persists across process restarts.
+  - Missing or corrupt TLS private key fails closed on startup (`EdgeTlsKeyMissingOrCorrupted`).
+  - Zero silent TLS identity regeneration on active node.
+  - Persistent exact-32-byte HMAC signing key survives process restart.
+  - Keys shorter or longer than exactly 32 bytes rejected.
+  - 12-hour Station Token issued with HS256 signature.
+  - No `station_token_hash` stored in durable `station_credentials`.
+  - Same-process monotonic trusted-time calculation (`process.hrtime.bigint()`).
+  - Post-restart trusted-anchor rollback test.
+  - Backward clock rollback > 5 minutes (300 seconds) triggers `CLOCK_ROLLBACK_LOCKED`.
+  - `ClockRollbackDetected` critical audit record emitted with sensitive parameters redacted.
+  - Linux `basic_text` insecure safeStorage backend rejected (fails closed).
+  - TLS private key and HMAC key inaccessible through public package exports or IPC.
+  - Generic sync infrastructure and `outbox_queue` absent in WP-009.
+  - Successful end-to-end enrollment flow.
+* **Security Debt:** `SEC-VAL-03` (Trust bootstrap, rogue Edge mDNS spoofing and relay resistance — software algorithms closed in WP-009, hardware LAN evidence required in WP-028).
 * **Evidence Required:** Enrollment test trace demonstrating TLS certificate verification before secret disclosure.
 * **Rollback:** Invalidate enrolled station token.
 * **Feature Flag:** NO
@@ -1093,7 +1140,7 @@ Every one of the 11 cataloged Security Validation Debts is mapped to concrete Wo
 |---|---|---|---|---|---|
 | **`SEC-VAL-01`** | Multi-Tenant Isolation (RLS bypass & tenant breakout) | `WP-004` | `17_Database_Engineer` | Automated SQL penetration test executing cross-tenant SELECT/UPDATE queries without session context. | `EVIDENCE_SEC_VAL_01_RLS_BREAKOUT.md` |
 | **`SEC-VAL-02`** | Offline IAM Brute Force & Rate Limiting | `WP-010` | `16_Native_Edge_Developer` | Automated attack script submitting 100 rapid invalid PINs to verify lockout after 5 attempts. | `EVIDENCE_SEC_VAL_02_PIN_LOCKOUT.md` |
-| **`SEC-VAL-03`** | Trust Bootstrap & Rogue Edge Resistance | `WP-009` | `16_Native_Edge_Developer` | LAN spoofing test simulating rogue mDNS server presenting mismatched certificate fingerprint. | `EVIDENCE_SEC_VAL_03_ROGUE_EDGE.md` |
+| **`SEC-VAL-03`** | Trust Bootstrap & Rogue Edge Resistance | `WP-009`, `WP-028` | `16_Native_Edge_Developer` | Software verification in WP-009; physical LAN rogue hardware and multicast validation in WP-028. | `EVIDENCE_SEC_VAL_03_ROGUE_EDGE.md` |
 | **`SEC-VAL-04`** | Lease Fencing & Zombie Edge Rejection | `WP-011` | `13_Backend_Developer` | Chaos simulation sending sync batch with outdated `fencingToken` and verifying HTTP 403 LEASE_REVOKED rejection. | `EVIDENCE_SEC_VAL_04_ZOMBIE_EDGE.md` |
 | **`SEC-VAL-06A`** | Cloud Audit Integrity & Append-Only Controls | `WP-006` | `13_Backend_Developer` | Cloud audit table append-only trigger rejection (UPDATE/DELETE/TRUNCATE), SHA-256 hash-chain verification, recursive redaction, and multi-tenant RLS isolation. | `EVIDENCE_SEC_VAL_06A_CLOUD_AUDIT_INTEGRITY.md` |
 | **`SEC-VAL-06`** | Tamper-Evident Audit & SQLite Hash Chain (End-to-End) | `WP-013`, `WP-008` | `13_Backend_Developer` / `16_Native_Edge_Developer` | Direct database alteration simulation on Edge SQLite `local_audit_trail` verifying hash-chain breakage detection, sync quarantine, and forensic reporting during synchronization. | `EVIDENCE_SEC_VAL_06_AUDIT_INTEGRITY.md` |
