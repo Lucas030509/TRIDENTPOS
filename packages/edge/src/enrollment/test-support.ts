@@ -8,7 +8,7 @@
  */
 
 import crypto from 'node:crypto';
-import { SecureStorageBackend } from './secure-store.js';
+import { SecureStorageBackend, SECURE_LINUX_STORAGE_BACKENDS } from './secure-store.js';
 import { EdgeSecureStoreError } from './types.js';
 
 /**
@@ -22,16 +22,19 @@ export class TestIsolatedSecureStorageBackend implements SecureStorageBackend {
   #available: boolean;
   #simulateEncryptFailure = false;
   #simulateDecryptFailure = false;
+  #simulatedPlatform?: NodeJS.Platform;
 
   constructor(
     options: {
       masterKey?: Buffer;
       simulatedBackendName?: string;
       available?: boolean;
+      platform?: NodeJS.Platform;
     } = {},
   ) {
     this.#available = options.available ?? true;
     this.#simulatedBackendName = options.simulatedBackendName ?? 'test_isolated_double';
+    this.#simulatedPlatform = options.platform;
 
     if (options.masterKey) {
       if (options.masterKey.length !== 32) {
@@ -47,7 +50,11 @@ export class TestIsolatedSecureStorageBackend implements SecureStorageBackend {
   }
 
   public isAvailable(): boolean {
-    return this.#available;
+    if (!this.#available) return false;
+    if (this.#simulatedPlatform === 'linux') {
+      return SECURE_LINUX_STORAGE_BACKENDS.has(this.#simulatedBackendName);
+    }
+    return true;
   }
 
   public setAvailable(available: boolean): void {
@@ -62,6 +69,10 @@ export class TestIsolatedSecureStorageBackend implements SecureStorageBackend {
     this.#simulatedBackendName = name;
   }
 
+  public setSimulatedPlatform(platform: NodeJS.Platform | undefined): void {
+    this.#simulatedPlatform = platform;
+  }
+
   public setSimulateEncryptFailure(fail: boolean): void {
     this.#simulateEncryptFailure = fail;
   }
@@ -74,7 +85,17 @@ export class TestIsolatedSecureStorageBackend implements SecureStorageBackend {
     if (this.#simulateEncryptFailure) {
       throw new EdgeSecureStoreError('Simulated secure storage encryption failure');
     }
-    if (!this.#available) {
+    if (!this.isAvailable()) {
+      if (this.#simulatedPlatform === 'linux') {
+        if (this.#simulatedBackendName === 'basic_text') {
+          throw new EdgeSecureStoreError(
+            "Insecure storage backend 'basic_text' on Linux is strictly prohibited. Failing closed.",
+          );
+        }
+        throw new EdgeSecureStoreError(
+          `Linux storage backend '${this.#simulatedBackendName}' is not an authorized secure OS keyring. Failing closed.`,
+        );
+      }
       throw new EdgeSecureStoreError('Secure storage encryption is not available on this host');
     }
     if (this.#simulatedBackendName === 'basic_text') {
@@ -96,7 +117,17 @@ export class TestIsolatedSecureStorageBackend implements SecureStorageBackend {
     if (this.#simulateDecryptFailure) {
       throw new EdgeSecureStoreError('Simulated secure storage decryption failure');
     }
-    if (!this.#available) {
+    if (!this.isAvailable()) {
+      if (this.#simulatedPlatform === 'linux') {
+        if (this.#simulatedBackendName === 'basic_text') {
+          throw new EdgeSecureStoreError(
+            "Insecure storage backend 'basic_text' on Linux is strictly prohibited. Failing closed.",
+          );
+        }
+        throw new EdgeSecureStoreError(
+          `Linux storage backend '${this.#simulatedBackendName}' is not an authorized secure OS keyring. Failing closed.`,
+        );
+      }
       throw new EdgeSecureStoreError('Secure storage encryption is not available on this host');
     }
     if (this.#simulatedBackendName === 'basic_text') {

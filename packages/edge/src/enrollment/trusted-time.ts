@@ -73,6 +73,7 @@ export class TrustedTimeManager {
   }
 
   #loadPersistedAnchor(): void {
+    const hasKey = this.#secureStore.hasSecret('trusted_time_anchor_hmac_key');
     const row = this.#db.prepare('SELECT * FROM trusted_time_anchors WHERE id = 1').get() as
       | {
           id: number;
@@ -84,15 +85,26 @@ export class TrustedTimeManager {
         }
       | undefined;
 
+    const currentWallTime = Math.floor(Date.now() / 1000);
+
+    // Case 1 & 2: Database anchor row is missing
     if (!row) {
+      if (hasKey) {
+        // Active node integrity key exists, but DB anchor row is missing (deleted) -> FAIL CLOSED
+        this.#triggerRollbackLock(
+          'Active Edge node trusted time anchor row missing from database while integrity key is present. Anchor deletion or tampering detected. Failing closed.',
+          0,
+          currentWallTime,
+          0,
+        );
+        return;
+      }
+      // Fresh bootstrap allowed ONLY when NEITHER anchor row NOR integrity key exists
       return;
     }
 
-    const currentWallTime = Math.floor(Date.now() / 1000);
-
-    // Cryptographic integrity verification (QI-TIME-05)
-    if (!this.#secureStore.hasSecret('trusted_time_anchor_hmac_key')) {
-      // Active node has persisted anchor, but missing integrity key in secure store: FAIL CLOSED
+    // Case 3: DB anchor row exists, but integrity key is missing in EdgeSecureStore -> FAIL CLOSED
+    if (!hasKey) {
       this.#triggerRollbackLock(
         'Active Edge node trusted time anchor missing cryptographic integrity key in EdgeSecureStore. Failing closed.',
         row.last_known_cloud_time,

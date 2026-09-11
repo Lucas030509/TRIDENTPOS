@@ -19,7 +19,11 @@ import {
   assertHardenedWebPreferences,
   ElectronSecurityViolationError,
 } from './security-profile.js';
-import { ElectronSafeStorageBackend } from './enrollment/secure-store.js';
+import {
+  ElectronSafeStorageBackend,
+  EdgeSecureStore,
+  SECURE_LINUX_STORAGE_BACKENDS,
+} from './enrollment/secure-store.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -570,27 +574,20 @@ async function runElectronRuntimeTests(): Promise<void> {
     const backend = new ElectronSafeStorageBackend(safeStorage);
     const isAvailable = backend.isAvailable();
     const selectedBackend = backend.getSelectedStorageBackend();
+    const isLinux = process.platform === 'linux';
 
     console.log(
-      `[Electron safeStorage]: isEncryptionAvailable=${isAvailable}, backend=${selectedBackend}`,
+      `[Electron safeStorage]: platform=${process.platform}, isAvailable=${isAvailable}, backend=${selectedBackend}`,
     );
 
-    if (isAvailable) {
-      if (selectedBackend === 'basic_text') {
-        // On Linux if basic_text is active, must fail closed
-        let failedClosed = false;
-        try {
-          backend.encrypt(Buffer.from('secret', 'utf8'));
-        } catch (err) {
-          failedClosed = (err as Error).message.includes('basic_text');
-        }
-        if (!failedClosed) {
+    if (isLinux) {
+      if (isAvailable) {
+        // Outcome A on Linux: positively identified secure Linux keyring (gnome_libsecret, kwallet, kwallet5, kwallet6)
+        if (!SECURE_LINUX_STORAGE_BACKENDS.has(selectedBackend)) {
           throw new Error(
-            'Expected basic_text backend to fail closed, but encrypt did not fail properly',
+            `Linux safeStorage backend '${selectedBackend}' was marked available but is not in authorized secure allowlist`,
           );
         }
-      } else {
-        // OS keyring available (macOS Keychain, Windows DPAPI, or Linux Secret Service)
         const plaintext = Buffer.from('TRIDENTPOS_PRODUCTION_OS_KEYRING_VALIDATION_SECRET', 'utf8');
         const ciphertext = backend.encrypt(plaintext);
 
@@ -607,24 +604,126 @@ async function runElectronRuntimeTests(): Promise<void> {
         if (!decrypted.equals(plaintext)) {
           throw new Error('Decrypted plaintext does not match original plaintext');
         }
+
+        recordPass(
+          'WP009-E01',
+          `Outcome A: Linux secure OS-backed keyring (${selectedBackend}) positively verified with encryption/decryption round-trip`,
+        );
+      } else if (selectedBackend === 'basic_text') {
+        // Outcome B on Linux: basic_text MUST fail closed
+        let failedClosed = false;
+        try {
+          backend.encrypt(Buffer.from('secret', 'utf8'));
+        } catch (err) {
+          failedClosed = (err as Error).message.includes('basic_text');
+        }
+        if (!failedClosed) {
+          throw new Error(
+            'Expected Linux basic_text backend to fail closed, but encrypt did not fail properly',
+          );
+        }
+
+        let storeFailedClosed = false;
+        try {
+          new EdgeSecureStore({
+            storageDir: path.join(__dirname, 'tmp-sec-test'),
+            backend,
+          });
+        } catch (err) {
+          storeFailedClosed = (err as Error).message.includes('basic_text');
+        }
+        if (!storeFailedClosed) {
+          throw new Error(
+            'Expected EdgeSecureStore constructor to fail closed on Linux basic_text backend',
+          );
+        }
+
+        recordPass(
+          'WP009-E01',
+          'Outcome B: Linux basic_text insecure storage backend correctly failed closed in production backend and constructor',
+        );
+      } else {
+        // Outcome C on Linux: unavailable or unknown backend MUST fail closed
+        let failedClosed = false;
+        try {
+          backend.encrypt(Buffer.from('secret', 'utf8'));
+        } catch (err) {
+          failedClosed =
+            (err as Error).message.includes('not an authorized secure OS keyring') ||
+            (err as Error).message.includes('not available') ||
+            (err as Error).message.includes('Secure storage encryption is not available');
+        }
+        if (!failedClosed) {
+          throw new Error(
+            `Expected Linux '${selectedBackend}' backend to fail closed on encrypt(), but did not fail properly`,
+          );
+        }
+
+        let storeFailedClosed = false;
+        try {
+          new EdgeSecureStore({
+            storageDir: path.join(__dirname, 'tmp-sec-test'),
+            backend,
+          });
+        } catch (err) {
+          storeFailedClosed =
+            (err as Error).message.includes('not an authorized secure OS keyring') ||
+            (err as Error).message.includes('unavailable');
+        }
+        if (!storeFailedClosed) {
+          throw new Error(
+            `Expected EdgeSecureStore constructor to fail closed on Linux '${selectedBackend}' backend`,
+          );
+        }
+
+        recordPass(
+          'WP009-E01',
+          `Outcome C: Linux '${selectedBackend}' backend correctly rejected and failed closed (insecure fallback prohibited)`,
+        );
       }
     } else {
-      // If unavailable, verify fail-closed
-      let failedClosed = false;
-      try {
-        backend.encrypt(Buffer.from('secret', 'utf8'));
-      } catch (err) {
-        failedClosed = (err as Error).message.includes('not available');
-      }
-      if (!failedClosed) {
-        throw new Error('Expected encrypt to fail closed when safeStorage is unavailable');
+      // macOS (Keychain) or Windows (DPAPI)
+      if (isAvailable) {
+        // Outcome A on macOS / Windows: OS keyring positively available
+        const plaintext = Buffer.from('TRIDENTPOS_PRODUCTION_OS_KEYRING_VALIDATION_SECRET', 'utf8');
+        const ciphertext = backend.encrypt(plaintext);
+
+        if (ciphertext.equals(plaintext)) {
+          throw new Error('Encrypted ciphertext equals plaintext — zero encryption protection!');
+        }
+        if (
+          ciphertext.toString('utf8').includes('TRIDENTPOS_PRODUCTION_OS_KEYRING_VALIDATION_SECRET')
+        ) {
+          throw new Error('Encrypted ciphertext leaks plaintext secret!');
+        }
+
+        const decrypted = backend.decrypt(ciphertext);
+        if (!decrypted.equals(plaintext)) {
+          throw new Error('Decrypted plaintext does not match original plaintext');
+        }
+
+        recordPass(
+          'WP009-E01',
+          `Outcome A: OS-backed secure storage positively verified on ${process.platform} (Keychain/DPAPI active and verified)`,
+        );
+      } else {
+        // Host OS encryption unavailable: verify fail-closed
+        let failedClosed = false;
+        try {
+          backend.encrypt(Buffer.from('secret', 'utf8'));
+        } catch (err) {
+          failedClosed = (err as Error).message.includes('not available');
+        }
+        if (!failedClosed) {
+          throw new Error('Expected encrypt to fail closed when safeStorage is unavailable');
+        }
+
+        recordPass(
+          'WP009-E01',
+          `Host OS secure storage unavailable on ${process.platform} — fail-closed verified`,
+        );
       }
     }
-
-    recordPass(
-      'WP009-E01',
-      `Actual Electron safeStorage integration verified (available: ${isAvailable}, backend: ${selectedBackend}, fail-closed: verified)`,
-    );
   } catch (err) {
     recordFail(
       'WP009-E01',

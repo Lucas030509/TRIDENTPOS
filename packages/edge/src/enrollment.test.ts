@@ -1,6 +1,6 @@
 /**
- * TRIDENTPOS WP-009 Automated Test Suite — S9-R3
- * Implements all 27 governed automated test obligations + S9-R3 remediation test obligations (QI-SEC-01 through QI-TEST-06).
+ * TRIDENTPOS WP-009 Automated Test Suite — S9-R4
+ * Implements all 27 governed automated test obligations + S9-R3/S9-R4 remediation test obligations.
  * Zero .skip, .only, .todo, fake providers, or placeholder substitutes.
  * Real SQLite WAL, real TLS sockets, real Node crypto, real OS keyring abstraction, real persistence.
  */
@@ -24,7 +24,7 @@ import {
   ClockRollbackLockError,
 } from './index.js';
 
-import { EdgeSecureStore } from './enrollment/secure-store.js';
+import { EdgeSecureStore, ElectronSafeStorageBackend } from './enrollment/secure-store.js';
 import { EdgeTlsIdentityManager } from './enrollment/tls-identity.js';
 import { EdgePairingStore } from './enrollment/pairing-store.js';
 import { TrustedTimeManager } from './enrollment/trusted-time.js';
@@ -1321,57 +1321,79 @@ test('WP009-T30: StationPinStore persists pins in platform secure storage (ciphe
 });
 
 // ---------------------------------------------------------------------------
-// TEST OBLIGATION 31: StationPinStore normal code cannot overwrite existing pin; admin reset requires authorization
+// TEST OBLIGATION 31: StationPinStore cannot replace existing pin, has no reset/overwrite bypass, and survives restart
 // ---------------------------------------------------------------------------
-test('WP009-T31: StationPinStore normal code cannot overwrite existing pin; admin reset requires authorization', () => {
+test('WP009-T31: StationPinStore cannot replace existing pin, has no reset/overwrite bypass, and survives restart', () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wp009_t31_'));
   const pinPath = path.join(tempDir, 'station_pins.enc');
-  const backend = new TestIsolatedSecureStorageBackend();
+  const masterKey = crypto.randomBytes(32);
+  const backend = new TestIsolatedSecureStorageBackend({ masterKey });
 
   try {
     const store = new StationPinStore({ storeFilePath: pinPath, backend });
-    // Initial pin
+    // 1. Initial pin establishment succeeds
     const pinned = store.verifyOrPin('br-1', 'edge-1', 'SHA256:ORIGINAL');
-    assert.equal(pinned, true);
+    assert.equal(pinned, true, 'Initial pin establishment must succeed');
 
-    // Attempt to verify with matching fingerprint -> true
-    assert.equal(store.verifyOrPin('br-1', 'edge-1', 'SHA256:ORIGINAL'), true);
+    // 2. Matching fingerprint returns true
+    assert.equal(
+      store.verifyOrPin('br-1', 'edge-1', 'SHA256:ORIGINAL'),
+      true,
+      'Matching fingerprint must verify',
+    );
 
-    // Attempt normal runtime overwrite with mismatching candidate -> fails closed (false)
+    // 3. Mismatched candidate remains rejected (fails closed)
     const mismatch = store.verifyOrPin('br-1', 'edge-1', 'SHA256:ATTACKER_REPLACEMENT');
     assert.equal(mismatch, false, 'Candidate mismatch must fail closed');
 
-    // Verify original pin remains authoritative and unmutated
+    // 4. Established pin cannot be replaced by normal runtime calls
     const pinAfterAttempt = store.getPin('br-1', 'edge-1');
     assert.ok(pinAfterAttempt);
     assert.equal(
       pinAfterAttempt.edgePublicKeyFingerprint,
       'SHA256:ORIGINAL',
-      'Normal runtime code must NOT overwrite authoritative pin',
+      'Established pin must NOT be replaced or modified',
     );
 
-    // Supervised admin reset with empty/invalid token -> fails closed
-    assert.throws(
-      () => {
-        store.supervisedAdministrativeResetPin('br-1', 'edge-1', 'SHA256:NEW_ADMIN_PIN', {
-          supervisedAdminToken: '',
-        });
-      },
-      (err: Error) => {
-        assert.ok(err instanceof StationPinStoreError);
-        assert.match(err.message, /administrative authorization token/i);
-        return true;
-      },
+    // 5. Zero reset/overwrite bypass: verify no reset methods exist on StationPinStore
+    const storeAny = store as unknown as Record<string, unknown>;
+    assert.equal(
+      typeof storeAny.supervisedAdministrativeResetPin,
+      'undefined',
+      'supervisedAdministrativeResetPin MUST NOT exist on StationPinStore',
+    );
+    assert.equal(
+      typeof storeAny.resetPin,
+      'undefined',
+      'resetPin MUST NOT exist on StationPinStore',
+    );
+    assert.equal(
+      typeof storeAny.overwritePin,
+      'undefined',
+      'overwritePin MUST NOT exist on StationPinStore',
+    );
+    assert.equal(
+      typeof storeAny.clearPin,
+      'undefined',
+      'clearPin MUST NOT exist on StationPinStore',
     );
 
-    // Supervised admin reset with valid token -> succeeds
-    store.supervisedAdministrativeResetPin('br-1', 'edge-1', 'SHA256:NEW_ADMIN_PIN', {
-      supervisedAdminToken: 'ADMIN-PHYSICAL-SUPERVISION-TOKEN-999',
-    });
+    // 6. Restart does not reset the pin
+    const storeAfterRestart = new StationPinStore({ storeFilePath: pinPath, backend });
+    const pinAfterRestart = storeAfterRestart.getPin('br-1', 'edge-1');
+    assert.ok(pinAfterRestart, 'Pin must survive process restart');
+    assert.equal(pinAfterRestart.edgePublicKeyFingerprint, 'SHA256:ORIGINAL');
 
-    const pinAfterReset = store.getPin('br-1', 'edge-1');
-    assert.ok(pinAfterReset);
-    assert.equal(pinAfterReset.edgePublicKeyFingerprint, 'SHA256:NEW_ADMIN_PIN');
+    const mismatchAfterRestart = storeAfterRestart.verifyOrPin(
+      'br-1',
+      'edge-1',
+      'SHA256:ATTACKER_AFTER_RESTART',
+    );
+    assert.equal(mismatchAfterRestart, false, 'Mismatch after restart must remain rejected');
+    assert.equal(
+      storeAfterRestart.getPin('br-1', 'edge-1')?.edgePublicKeyFingerprint,
+      'SHA256:ORIGINAL',
+    );
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -1658,44 +1680,126 @@ test('WP009-T35: Tampered trusted-time anchor values fail closed (triggers CLOCK
 });
 
 // ---------------------------------------------------------------------------
-// TEST OBLIGATION 36: Corrupted integrity tag or missing integrity key on active node fails closed
+// TEST OBLIGATION 36: Trusted time integrity verification and anchor deletion fail-closed behavior
 // ---------------------------------------------------------------------------
-test('WP009-T36: Corrupted integrity tag or missing integrity key on active node fails closed', () => {
+test('WP009-T36: Trusted time integrity verification and anchor deletion fail-closed behavior', () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wp009_t36_'));
   const dbPath = path.join(tempDir, 'edge.db');
   const secureDir = path.join(tempDir, 'secure');
   const masterKey = crypto.randomBytes(32);
 
   try {
-    const backend = new TestIsolatedSecureStorageBackend({ masterKey });
-    const edgeDb1 = new EdgeDatabaseService({ databasePath: dbPath });
-    const secureStore1 = new EdgeSecureStore({ storageDir: secureDir, backend });
-    const time1 = new TrustedTimeManager({
-      db: getTestNativeDatabase(edgeDb1),
-      secureStore: secureStore1,
+    // 1. Fresh node: no row + no key => bootstrap allowed
+    const backendFresh = new TestIsolatedSecureStorageBackend({ masterKey });
+    const edgeDbFresh = new EdgeDatabaseService({ databasePath: dbPath });
+    const secureStoreFresh = new EdgeSecureStore({ storageDir: secureDir, backend: backendFresh });
+    const timeFresh = new TrustedTimeManager({
+      db: getTestNativeDatabase(edgeDbFresh),
+      secureStore: secureStoreFresh,
     });
+    assert.equal(
+      timeFresh.isLocked(),
+      false,
+      'Fresh bootstrap without row and without key must be allowed',
+    );
     const nowEpoch = Math.floor(Date.now() / 1000);
-    time1.syncCloudTime(nowEpoch);
-    edgeDb1.close();
+    timeFresh.syncCloudTime(nowEpoch);
+    assert.equal(timeFresh.isLocked(), false);
+    assert.equal(secureStoreFresh.hasSecret('trusted_time_anchor_hmac_key'), true);
+    edgeDbFresh.close();
 
-    // Case A: Corrupt integrity_tag
-    const edgeDb2 = new EdgeDatabaseService({ databasePath: dbPath });
-    const nativeDb2 = getTestNativeDatabase(edgeDb2);
-    nativeDb2
+    // 2. Row + valid key => restart allowed
+    const edgeDbValid = new EdgeDatabaseService({ databasePath: dbPath });
+    const timeValid = new TrustedTimeManager({
+      db: getTestNativeDatabase(edgeDbValid),
+      secureStore: secureStoreFresh,
+    });
+    assert.equal(
+      timeValid.isLocked(),
+      false,
+      'Restart with matching DB anchor and integrity key must succeed',
+    );
+    assert.ok(timeValid.getTrustedEffectiveTime() >= nowEpoch);
+    edgeDbValid.close();
+
+    // 3. Row + missing key => fail closed
+    const edgeDbMissingKey = new EdgeDatabaseService({ databasePath: dbPath });
+    const secureStoreMissingKey = new EdgeSecureStore({
+      storageDir: path.join(tempDir, 'secure_empty'),
+      backend: backendFresh,
+    });
+    const timeMissingKey = new TrustedTimeManager({
+      db: getTestNativeDatabase(edgeDbMissingKey),
+      secureStore: secureStoreMissingKey,
+    });
+    assert.equal(
+      timeMissingKey.isLocked(),
+      true,
+      'DB row present but integrity key missing must fail closed',
+    );
+    assert.throws(
+      () => timeMissingKey.getTrustedEffectiveTime(),
+      (err: Error) => err instanceof ClockRollbackLockError,
+    );
+    edgeDbMissingKey.close();
+
+    // 4. Key + missing row (Anchor Deletion Bypass Remediation) => fail closed
+    const edgeDbDeletedRow = new EdgeDatabaseService({
+      databasePath: path.join(tempDir, 'edge_empty.db'),
+    });
+    const timeDeletedRow = new TrustedTimeManager({
+      db: getTestNativeDatabase(edgeDbDeletedRow),
+      secureStore: secureStoreFresh, // has 'trusted_time_anchor_hmac_key'
+    });
+    assert.equal(
+      timeDeletedRow.isLocked(),
+      true,
+      'Active integrity key present while DB anchor row is missing (deleted) MUST fail closed',
+    );
+    assert.throws(
+      () => timeDeletedRow.getTrustedEffectiveTime(),
+      (err: Error) => err instanceof ClockRollbackLockError,
+    );
+    assert.throws(
+      () => timeDeletedRow.syncCloudTime(nowEpoch + 100),
+      (err: Error) => err instanceof ClockRollbackLockError,
+      'Locked system must NOT allow syncCloudTime to recreate or unlock anchor',
+    );
+    edgeDbDeletedRow.close();
+
+    // 5. Tampered row => fail closed
+    const edgeDbTampered = new EdgeDatabaseService({ databasePath: dbPath });
+    const nativeDbTampered = getTestNativeDatabase(edgeDbTampered);
+    nativeDbTampered
+      .prepare(
+        'UPDATE trusted_time_anchors SET last_known_cloud_time = last_known_cloud_time - 1000 WHERE id = 1',
+      )
+      .run();
+    const timeTampered = new TrustedTimeManager({
+      db: nativeDbTampered,
+      secureStore: secureStoreFresh,
+    });
+    assert.equal(
+      timeTampered.isLocked(),
+      true,
+      'Tampered DB anchor row must fail cryptographic integrity',
+    );
+    edgeDbTampered.close();
+
+    // 6. Corrupted integrity tag => fail closed
+    const edgeDbCorruptedTag = new EdgeDatabaseService({ databasePath: dbPath });
+    const nativeDbCorruptedTag = getTestNativeDatabase(edgeDbCorruptedTag);
+    nativeDbCorruptedTag
       .prepare(
         "UPDATE trusted_time_anchors SET integrity_tag = 'badc0ffee0000000000000000000000000000000000000000000000000000000' WHERE id = 1",
       )
       .run();
-
-    const time2 = new TrustedTimeManager({ db: nativeDb2, secureStore: secureStore1 });
-    assert.equal(time2.isLocked(), true, 'Corrupted integrity tag must trigger lock');
-
-    // Case B: Active node missing integrity key in EdgeSecureStore
-    secureStore1.deleteSecret('trusted_time_anchor_hmac_key');
-    const time3 = new TrustedTimeManager({ db: nativeDb2, secureStore: secureStore1 });
-    assert.equal(time3.isLocked(), true, 'Missing integrity key on active node must trigger lock');
-
-    edgeDb2.close();
+    const timeCorruptedTag = new TrustedTimeManager({
+      db: nativeDbCorruptedTag,
+      secureStore: secureStoreFresh,
+    });
+    assert.equal(timeCorruptedTag.isLocked(), true, 'Corrupted integrity tag must trigger lock');
+    edgeDbCorruptedTag.close();
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -1849,6 +1953,329 @@ test('WP009-T39: Production EdgeSecureStore fails closed if host OS secure stora
       },
       'StationPinStore must fail closed when host secure storage is unavailable',
     );
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// TEST OBLIGATION 40: HMAC metadata fail-closed validation on active node
+// ---------------------------------------------------------------------------
+test('WP009-T40: HMAC metadata fail-closed validation on active node', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wp009_t40_'));
+  const dbPath = path.join(tempDir, 'edge.db');
+  const secureDir = path.join(tempDir, 'secure');
+  const masterKey = crypto.randomBytes(32);
+
+  try {
+    const backend = new TestIsolatedSecureStorageBackend({ masterKey });
+    const edgeDb = new EdgeDatabaseService({ databasePath: dbPath });
+    const persistence = new EnrollmentPersistence(edgeDb);
+    const secureStore = new EdgeSecureStore({ storageDir: secureDir, backend });
+    const time = new TrustedTimeManager({ db: getTestNativeDatabase(edgeDb), secureStore });
+    const nowEpoch = Math.floor(Date.now() / 1000);
+    time.syncCloudTime(nowEpoch);
+
+    // Initial setup: create store with active key and metadata
+    new EdgePairingStore({
+      organizationId: 'org-meta',
+      branchId: 'br-meta',
+      edgeId: 'edge-meta',
+      edgePublicKeyFingerprint: 'FP-META',
+      secureStore,
+      persistence,
+      trustedTimeManager: time,
+    });
+    assert.equal(secureStore.hasSecret('station_token_hmac_active_key'), true);
+    assert.equal(secureStore.hasSecret('station_token_hmac_metadata'), true);
+
+    // 1. Active key + missing metadata => fail closed
+    secureStore.deleteSecret('station_token_hmac_metadata');
+    assert.throws(
+      () => {
+        new EdgePairingStore({
+          organizationId: 'org-meta',
+          branchId: 'br-meta',
+          edgeId: 'edge-meta',
+          edgePublicKeyFingerprint: 'FP-META',
+          secureStore,
+          persistence,
+          trustedTimeManager: time,
+        });
+      },
+      (err: Error) => {
+        assert.ok(err instanceof EnrollmentSecurityError);
+        assert.match(err.message, /station_token_hmac_metadata is missing/i);
+        return true;
+      },
+      'Active key with missing metadata MUST fail closed',
+    );
+
+    // 2. Active key + corrupted metadata (non-JSON payload) => fail closed
+    secureStore.storeSecret(
+      'station_token_hmac_metadata',
+      Buffer.from('NOT_A_VALID_JSON{', 'utf8'),
+    );
+    assert.throws(
+      () => {
+        new EdgePairingStore({
+          organizationId: 'org-meta',
+          branchId: 'br-meta',
+          edgeId: 'edge-meta',
+          edgePublicKeyFingerprint: 'FP-META',
+          secureStore,
+          persistence,
+          trustedTimeManager: time,
+        });
+      },
+      (err: Error) => {
+        assert.ok(err instanceof EnrollmentSecurityError);
+        assert.match(err.message, /metadata corrupted/i);
+        return true;
+      },
+      'Active key with corrupted metadata MUST fail closed',
+    );
+
+    // 3. Malformed metadata (missing activeKeyVersion or invalid types) => fail closed
+    secureStore.storeSecret(
+      'station_token_hmac_metadata',
+      Buffer.from(JSON.stringify({ activeKeyVersion: 'one', previousKeyVersion: null }), 'utf8'),
+    );
+    assert.throws(
+      () => {
+        new EdgePairingStore({
+          organizationId: 'org-meta',
+          branchId: 'br-meta',
+          edgeId: 'edge-meta',
+          edgePublicKeyFingerprint: 'FP-META',
+          secureStore,
+          persistence,
+          trustedTimeManager: time,
+        });
+      },
+      (err: Error) => {
+        assert.ok(err instanceof EnrollmentSecurityError);
+        assert.match(err.message, /malformed/i);
+        return true;
+      },
+      'Malformed metadata with non-numeric activeKeyVersion MUST fail closed',
+    );
+
+    // 4. Non-expired previousKey declared in metadata + missing previous key => fail closed
+    secureStore.storeSecret(
+      'station_token_hmac_metadata',
+      Buffer.from(
+        JSON.stringify({
+          activeKeyVersion: 2,
+          previousKeyVersion: 1,
+          previousKeyExpiresAt: nowEpoch + 3600, // 1 hour in future
+        }),
+        'utf8',
+      ),
+    );
+    // Ensure previous key secret does NOT exist
+    if (secureStore.hasSecret('station_token_hmac_previous_key')) {
+      secureStore.deleteSecret('station_token_hmac_previous_key');
+    }
+    assert.throws(
+      () => {
+        new EdgePairingStore({
+          organizationId: 'org-meta',
+          branchId: 'br-meta',
+          edgeId: 'edge-meta',
+          edgePublicKeyFingerprint: 'FP-META',
+          secureStore,
+          persistence,
+          trustedTimeManager: time,
+        });
+      },
+      (err: Error) => {
+        assert.ok(err instanceof EnrollmentSecurityError);
+        assert.match(err.message, /missing in EdgeSecureStore/i);
+        return true;
+      },
+      'Metadata declaring non-expired previous key while key is missing MUST fail closed',
+    );
+
+    // 5. Non-expired previousKey declared with invalid key length (!== 32 bytes) => fail closed
+    secureStore.storeSecret('station_token_hmac_previous_key', crypto.randomBytes(16)); // only 16 bytes!
+    assert.throws(
+      () => {
+        new EdgePairingStore({
+          organizationId: 'org-meta',
+          branchId: 'br-meta',
+          edgeId: 'edge-meta',
+          edgePublicKeyFingerprint: 'FP-META',
+          secureStore,
+          persistence,
+          trustedTimeManager: time,
+        });
+      },
+      (err: Error) => {
+        assert.ok(err instanceof EnrollmentSecurityError);
+        assert.match(err.message, /length is invalid/i);
+        return true;
+      },
+      'Invalid previous key length MUST fail closed',
+    );
+
+    edgeDb.close();
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// TEST OBLIGATION 41: Platform-aware ElectronSafeStorageBackend and Linux fail-closed enforcement
+// ---------------------------------------------------------------------------
+test('WP009-T41: Platform-aware ElectronSafeStorageBackend and Linux fail-closed enforcement', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wp009_t41_'));
+
+  try {
+    // 1. Linux with 'basic_text': MUST fail closed
+    const mockBasicText = {
+      isEncryptionAvailable: () => true,
+      getSelectedStorageBackend: () => 'basic_text',
+      encryptString: (_s: string) => Buffer.from('mock'),
+      decryptString: (_b: Buffer) => 'mock',
+    } as unknown as typeof import('electron').safeStorage;
+
+    const backendBasicText = new ElectronSafeStorageBackend(mockBasicText, { platform: 'linux' });
+    assert.equal(
+      backendBasicText.isAvailable(),
+      false,
+      'basic_text on Linux MUST return isAvailable() === false',
+    );
+    assert.equal(backendBasicText.getSelectedStorageBackend(), 'basic_text');
+    assert.throws(
+      () => backendBasicText.encrypt(Buffer.from('test', 'utf8')),
+      (err: Error) => {
+        assert.ok(err instanceof EdgeSecureStoreError);
+        assert.match(err.message, /basic_text/i);
+        return true;
+      },
+      'Linux basic_text encrypt() MUST fail closed',
+    );
+    assert.throws(
+      () => new EdgeSecureStore({ storageDir: tempDir, backend: backendBasicText }),
+      (err: Error) => {
+        assert.ok(err instanceof EdgeSecureStoreError);
+        assert.match(err.message, /basic_text/i);
+        return true;
+      },
+      'EdgeSecureStore constructor MUST fail closed on Linux basic_text',
+    );
+    assert.throws(
+      () =>
+        new StationPinStore({
+          storeFilePath: path.join(tempDir, 'pins.enc'),
+          backend: backendBasicText,
+        }),
+      (err: Error) => {
+        assert.ok(err instanceof StationPinStoreError);
+        assert.match(err.message, /basic_text/i);
+        return true;
+      },
+      'StationPinStore constructor MUST fail closed on Linux basic_text',
+    );
+
+    // 2. Linux with 'unavailable' or unknown backend: MUST fail closed
+    const mockUnavailable = {
+      isEncryptionAvailable: () => true,
+      getSelectedStorageBackend: () => 'unavailable',
+      encryptString: (_s: string) => Buffer.from('mock'),
+      decryptString: (_b: Buffer) => 'mock',
+    } as unknown as typeof import('electron').safeStorage;
+
+    const backendUnavailable = new ElectronSafeStorageBackend(mockUnavailable, {
+      platform: 'linux',
+    });
+    assert.equal(
+      backendUnavailable.isAvailable(),
+      false,
+      'unavailable on Linux MUST return isAvailable() === false',
+    );
+    assert.throws(
+      () => backendUnavailable.encrypt(Buffer.from('test', 'utf8')),
+      (err: Error) => {
+        assert.ok(err instanceof EdgeSecureStoreError);
+        assert.match(err.message, /not an authorized secure OS keyring/i);
+        return true;
+      },
+      'Linux unavailable backend MUST fail closed',
+    );
+
+    const mockUnknown = {
+      isEncryptionAvailable: () => true,
+      getSelectedStorageBackend: () => 'insecure_custom_backend',
+      encryptString: (_s: string) => Buffer.from('mock'),
+      decryptString: (_b: Buffer) => 'mock',
+    } as unknown as typeof import('electron').safeStorage;
+
+    const backendUnknown = new ElectronSafeStorageBackend(mockUnknown, { platform: 'linux' });
+    assert.equal(
+      backendUnknown.isAvailable(),
+      false,
+      'Unknown backend on Linux MUST return isAvailable() === false',
+    );
+    assert.throws(
+      () => backendUnknown.encrypt(Buffer.from('test', 'utf8')),
+      (err: Error) => {
+        assert.ok(err instanceof EdgeSecureStoreError);
+        assert.match(err.message, /not an authorized secure OS keyring/i);
+        return true;
+      },
+      'Linux unknown backend MUST fail closed',
+    );
+
+    // 3. Linux with authorized secure backend (gnome_libsecret, kwallet5): MUST succeed
+    let capturedPlaintext = '';
+    const mockSecureLinux = {
+      isEncryptionAvailable: () => true,
+      getSelectedStorageBackend: () => 'gnome_libsecret',
+      encryptString: (s: string) => {
+        capturedPlaintext = s;
+        return Buffer.from(`ENC:${s}`, 'utf8');
+      },
+      decryptString: (b: Buffer) => {
+        return b.toString('utf8').replace(/^ENC:/, '');
+      },
+    } as unknown as typeof import('electron').safeStorage;
+
+    const backendSecureLinux = new ElectronSafeStorageBackend(mockSecureLinux, {
+      platform: 'linux',
+    });
+    assert.equal(
+      backendSecureLinux.isAvailable(),
+      true,
+      'gnome_libsecret on Linux MUST return isAvailable() === true',
+    );
+    assert.equal(backendSecureLinux.getSelectedStorageBackend(), 'gnome_libsecret');
+
+    const testSecret = Buffer.from('TEST_AUTHORIZED_SECRET', 'utf8');
+    const encrypted = backendSecureLinux.encrypt(testSecret);
+    assert.equal(capturedPlaintext, 'TEST_AUTHORIZED_SECRET');
+    const decrypted = backendSecureLinux.decrypt(encrypted);
+    assert.equal(decrypted.toString('utf8'), 'TEST_AUTHORIZED_SECRET');
+
+    // 4. macOS / Windows: isEncryptionAvailable() = true is sufficient
+    const mockMacOs = {
+      isEncryptionAvailable: () => true,
+      getSelectedStorageBackend: () => {
+        throw new Error('getSelectedStorageBackend not supported on darwin');
+      },
+      encryptString: (s: string) => Buffer.from(`MAC_ENC:${s}`),
+      decryptString: (b: Buffer) => b.toString('utf8').replace(/^MAC_ENC:/, ''),
+    } as unknown as typeof import('electron').safeStorage;
+
+    const backendMacOs = new ElectronSafeStorageBackend(mockMacOs, { platform: 'darwin' });
+    assert.equal(
+      backendMacOs.isAvailable(),
+      true,
+      'darwin with isEncryptionAvailable() = true MUST be available',
+    );
+    const macEnc = backendMacOs.encrypt(Buffer.from('MAC_SECRET', 'utf8'));
+    assert.equal(backendMacOs.decrypt(macEnc).toString('utf8'), 'MAC_SECRET');
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }

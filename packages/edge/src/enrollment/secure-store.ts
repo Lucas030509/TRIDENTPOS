@@ -27,15 +27,28 @@ export interface SecureStorageBackend {
   decrypt(ciphertext: Buffer): Buffer;
 }
 
+export const SECURE_LINUX_STORAGE_BACKENDS: ReadonlySet<string> = new Set([
+  'gnome_libsecret',
+  'kwallet',
+  'kwallet5',
+  'kwallet6',
+]);
+
 /**
  * Standard Electron safeStorage adapter.
  * Uses native OS-backed keyring (DPAPI on Windows, Keychain Services on macOS, Secret Service on Linux).
  * Prohibits basic_text on Linux.
+ * Prohibits unknown or unavailable backends on Linux.
  */
 export class ElectronSafeStorageBackend implements SecureStorageBackend {
   readonly #safeStorage: typeof import('electron').safeStorage | null;
+  readonly #platform: NodeJS.Platform;
 
-  constructor(electronSafeStorage?: typeof import('electron').safeStorage) {
+  constructor(
+    electronSafeStorage?: typeof import('electron').safeStorage,
+    options: { platform?: NodeJS.Platform } = {},
+  ) {
+    this.#platform = options.platform ?? process.platform;
     if (electronSafeStorage) {
       this.#safeStorage = electronSafeStorage;
     } else {
@@ -52,7 +65,14 @@ export class ElectronSafeStorageBackend implements SecureStorageBackend {
   public isAvailable(): boolean {
     if (!this.#safeStorage) return false;
     try {
-      return this.#safeStorage.isEncryptionAvailable();
+      if (!this.#safeStorage.isEncryptionAvailable()) {
+        return false;
+      }
+      if (this.#platform === 'linux') {
+        const backend = this.getSelectedStorageBackend();
+        return SECURE_LINUX_STORAGE_BACKENDS.has(backend);
+      }
+      return true;
     } catch {
       return false;
     }
@@ -61,7 +81,11 @@ export class ElectronSafeStorageBackend implements SecureStorageBackend {
   public getSelectedStorageBackend(): string {
     if (!this.#safeStorage) return 'unavailable';
     try {
-      return this.#safeStorage.getSelectedStorageBackend();
+      if (typeof this.#safeStorage.getSelectedStorageBackend === 'function') {
+        const backend = this.#safeStorage.getSelectedStorageBackend();
+        return typeof backend === 'string' && backend.length > 0 ? backend : 'unavailable';
+      }
+      return this.#platform === 'linux' ? 'unavailable' : 'os_keyring';
     } catch {
       return 'unavailable';
     }
@@ -69,26 +93,36 @@ export class ElectronSafeStorageBackend implements SecureStorageBackend {
 
   public encrypt(plaintext: Buffer): Buffer {
     if (!this.isAvailable()) {
+      const backend = this.getSelectedStorageBackend();
+      if (this.#platform === 'linux') {
+        if (backend === 'basic_text') {
+          throw new EdgeSecureStoreError(
+            "Insecure storage backend 'basic_text' on Linux is strictly prohibited. Failing closed.",
+          );
+        }
+        throw new EdgeSecureStoreError(
+          `Linux safeStorage backend '${backend}' is not an authorized secure OS keyring. Failing closed.`,
+        );
+      }
       throw new EdgeSecureStoreError('Secure storage encryption is not available on this host');
-    }
-    const backend = this.getSelectedStorageBackend();
-    if (backend === 'basic_text') {
-      throw new EdgeSecureStoreError(
-        "Insecure storage backend 'basic_text' on Linux is strictly prohibited. Failing closed.",
-      );
     }
     return this.#safeStorage!.encryptString(plaintext.toString('utf8'));
   }
 
   public decrypt(ciphertext: Buffer): Buffer {
     if (!this.isAvailable()) {
+      const backend = this.getSelectedStorageBackend();
+      if (this.#platform === 'linux') {
+        if (backend === 'basic_text') {
+          throw new EdgeSecureStoreError(
+            "Insecure storage backend 'basic_text' on Linux is strictly prohibited. Failing closed.",
+          );
+        }
+        throw new EdgeSecureStoreError(
+          `Linux safeStorage backend '${backend}' is not an authorized secure OS keyring. Failing closed.`,
+        );
+      }
       throw new EdgeSecureStoreError('Secure storage encryption is not available on this host');
-    }
-    const backend = this.getSelectedStorageBackend();
-    if (backend === 'basic_text') {
-      throw new EdgeSecureStoreError(
-        "Insecure storage backend 'basic_text' on Linux is strictly prohibited. Failing closed.",
-      );
     }
     const decryptedStr = this.#safeStorage!.decryptString(ciphertext);
     return Buffer.from(decryptedStr, 'utf8');
@@ -110,8 +144,14 @@ export class EdgeSecureStore {
 
     // Assert secure storage backend is available and not basic_text immediately upon construction
     if (!this.#backend.isAvailable()) {
+      const backendName = this.#backend.getSelectedStorageBackend();
+      if (backendName === 'basic_text') {
+        throw new EdgeSecureStoreError(
+          "Insecure storage backend 'basic_text' on Linux is strictly prohibited. Failing closed.",
+        );
+      }
       throw new EdgeSecureStoreError(
-        'EdgeSecureStore initialization failed: host OS secure storage encryption is unavailable. Failing closed.',
+        `EdgeSecureStore initialization failed: host OS secure storage encryption is unavailable or backend '${backendName}' is not an authorized secure OS keyring. Failing closed.`,
       );
     }
     const backendName = this.#backend.getSelectedStorageBackend();
@@ -187,7 +227,7 @@ export class EdgeSecureStore {
  * Enforces:
  * 1. Initial enrollment pin can be established.
  * 2. Normal runtime code CANNOT overwrite an existing pin (mismatch fails closed).
- * 3. Administrative reset requires supervised physical intervention.
+ * 3. Administrative reset/overwrite via runtime API is prohibited (separately governed physical workflow).
  * 4. PIN STORE FAILURE => ZERO SECRET DISCLOSURE + ZERO SERVER MUTATION.
  */
 export class StationPinStore {
@@ -200,8 +240,14 @@ export class StationPinStore {
     this.#backend = options.backend ?? new ElectronSafeStorageBackend();
 
     if (!this.#backend.isAvailable()) {
+      const backendName = this.#backend.getSelectedStorageBackend();
+      if (backendName === 'basic_text') {
+        throw new StationPinStoreError(
+          "Insecure storage backend 'basic_text' on Linux is strictly prohibited. Failing closed.",
+        );
+      }
       throw new StationPinStoreError(
-        'StationPinStore initialization failed: host secure storage encryption is unavailable. Failing closed.',
+        `StationPinStore initialization failed: host secure storage encryption is unavailable or backend '${backendName}' is not an authorized secure OS keyring. Failing closed.`,
       );
     }
     const backendName = this.#backend.getSelectedStorageBackend();
@@ -291,36 +337,5 @@ export class StationPinStore {
       pinnedAt: now,
     });
     return true;
-  }
-
-  /**
-   * Supervised administrative reset of an existing PIN.
-   * Requires non-empty administrative authorization token.
-   */
-  public supervisedAdministrativeResetPin(
-    branchId: string,
-    edgeId: string,
-    newFingerprint: string,
-    authorization: { supervisedAdminToken: string },
-  ): void {
-    if (
-      !authorization?.supervisedAdminToken ||
-      typeof authorization.supervisedAdminToken !== 'string' ||
-      authorization.supervisedAdminToken.trim() === ''
-    ) {
-      throw new StationPinStoreError(
-        'Supervised administrative pin reset rejected: non-empty administrative authorization token is required.',
-      );
-    }
-
-    const key = this.#getCompositeKey(branchId, edgeId);
-    const now = Math.floor(Date.now() / 1000);
-    this.#pins.set(key, {
-      branchId,
-      edgeId,
-      edgePublicKeyFingerprint: newFingerprint.toUpperCase(),
-      pinnedAt: now,
-    });
-    this.#saveToFile();
   }
 }

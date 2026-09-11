@@ -20,6 +20,7 @@ import {
 } from './crypto.js';
 import {
   EnrollmentQRPayload,
+  EnrollmentSecurityError,
   StationEnrollmentRequest,
   StationEnrollmentResponse,
 } from './types.js';
@@ -75,64 +76,143 @@ export class EdgePairingStore {
     const previousKeySecret = 'station_token_hmac_previous_key';
     const metadataSecret = 'station_token_hmac_metadata';
 
-    if (this.#secureStore.hasSecret(activeKeySecret)) {
-      this.#activeHmacKey = this.#secureStore.loadSecret(activeKeySecret);
-      validateHmacKeyLength(this.#activeHmacKey);
+    const hasActiveKey = this.#secureStore.hasSecret(activeKeySecret);
+    const hasMetadata = this.#secureStore.hasSecret(metadataSecret);
 
-      if (this.#secureStore.hasSecret(metadataSecret)) {
-        try {
-          const meta = JSON.parse(
-            this.#secureStore.loadSecret(metadataSecret).toString('utf8'),
-          ) as HmacKeyMetadata;
-          this.#activeKeyVersion =
-            typeof meta.activeKeyVersion === 'number' ? meta.activeKeyVersion : 1;
+    // Fresh first bootstrap: permitted ONLY when neither active key nor metadata exists
+    if (!hasActiveKey && !hasMetadata) {
+      const newKey = crypto.randomBytes(32);
+      validateHmacKeyLength(newKey);
+      this.#activeHmacKey = newKey;
+      this.#activeKeyVersion = 1;
+      this.#previousHmacKey = null;
+      this.#previousHmacKeyExpiresAt = null;
+      this.#previousKeyVersion = null;
 
-          let effectiveTime: number;
-          try {
-            effectiveTime = this.#trustedTimeManager.getTrustedEffectiveTime();
-          } catch {
-            effectiveTime = Math.floor(Date.now() / 1000);
-          }
-
-          if (
-            meta.previousKeyExpiresAt !== null &&
-            typeof meta.previousKeyExpiresAt === 'number' &&
-            effectiveTime <= meta.previousKeyExpiresAt
-          ) {
-            if (this.#secureStore.hasSecret(previousKeySecret)) {
-              this.#previousHmacKey = this.#secureStore.loadSecret(previousKeySecret);
-              validateHmacKeyLength(this.#previousHmacKey);
-              this.#previousHmacKeyExpiresAt = meta.previousKeyExpiresAt;
-              this.#previousKeyVersion = meta.previousKeyVersion;
-            }
-          } else {
-            // Expired or none: securely purge previous key
-            if (this.#secureStore.hasSecret(previousKeySecret)) {
-              this.#secureStore.deleteSecret(previousKeySecret);
-            }
-            this.#previousHmacKey = null;
-            this.#previousHmacKeyExpiresAt = null;
-            this.#previousKeyVersion = null;
-            this.#saveMetadata();
-          }
-        } catch {
-          this.#activeKeyVersion = 1;
-        }
-      }
+      this.#secureStore.storeSecret(activeKeySecret, newKey);
+      this.#saveMetadata();
       return;
     }
 
-    // Fresh first bootstrap: generate initial exact 32-byte key
-    const newKey = crypto.randomBytes(32);
-    validateHmacKeyLength(newKey);
-    this.#activeHmacKey = newKey;
-    this.#activeKeyVersion = 1;
-    this.#previousHmacKey = null;
-    this.#previousHmacKeyExpiresAt = null;
-    this.#previousKeyVersion = null;
+    // Inconsistent state: metadata exists without active HMAC key -> FAIL CLOSED
+    if (!hasActiveKey && hasMetadata) {
+      throw new EnrollmentSecurityError(
+        'EdgePairingStore corrupted state: HMAC metadata exists without active HMAC key. Failing closed.',
+      );
+    }
 
-    this.#secureStore.storeSecret(activeKeySecret, newKey);
-    this.#saveMetadata();
+    // Inconsistent state: active HMAC key present but metadata is missing -> FAIL CLOSED
+    if (hasActiveKey && !hasMetadata) {
+      throw new EnrollmentSecurityError(
+        'EdgePairingStore corrupted state: active HMAC key exists but station_token_hmac_metadata is missing. Failing closed.',
+      );
+    }
+
+    // Active node restart: active HMAC key and metadata both exist -> validate strictly
+    this.#activeHmacKey = this.#secureStore.loadSecret(activeKeySecret);
+    validateHmacKeyLength(this.#activeHmacKey);
+
+    let rawMeta: Buffer;
+    try {
+      rawMeta = this.#secureStore.loadSecret(metadataSecret);
+    } catch (err) {
+      throw new EnrollmentSecurityError(
+        `EdgePairingStore failed to read HMAC metadata: ${(err as Error).message}`,
+        { cause: err },
+      );
+    }
+
+    let meta: HmacKeyMetadata;
+    try {
+      meta = JSON.parse(rawMeta.toString('utf8')) as HmacKeyMetadata;
+    } catch (err) {
+      throw new EnrollmentSecurityError(
+        `EdgePairingStore HMAC metadata corrupted: invalid JSON payload`,
+        { cause: err },
+      );
+    }
+
+    if (
+      !meta ||
+      typeof meta !== 'object' ||
+      typeof meta.activeKeyVersion !== 'number' ||
+      !Number.isInteger(meta.activeKeyVersion) ||
+      meta.activeKeyVersion < 1
+    ) {
+      throw new EnrollmentSecurityError(
+        'EdgePairingStore HMAC metadata malformed: invalid activeKeyVersion',
+      );
+    }
+    this.#activeKeyVersion = meta.activeKeyVersion;
+
+    if (meta.previousKeyExpiresAt !== null && meta.previousKeyExpiresAt !== undefined) {
+      if (
+        typeof meta.previousKeyExpiresAt !== 'number' ||
+        typeof meta.previousKeyVersion !== 'number' ||
+        !Number.isInteger(meta.previousKeyVersion) ||
+        meta.previousKeyVersion < 1
+      ) {
+        throw new EnrollmentSecurityError(
+          'EdgePairingStore HMAC metadata malformed: invalid previousKey metadata structure',
+        );
+      }
+
+      let effectiveTime: number;
+      try {
+        effectiveTime = this.#trustedTimeManager.getTrustedEffectiveTime();
+      } catch (err) {
+        throw new EnrollmentSecurityError(
+          `EdgePairingStore trusted time unavailable during HMAC key restoration: ${(err as Error).message}`,
+          { cause: err },
+        );
+      }
+
+      if (effectiveTime <= meta.previousKeyExpiresAt) {
+        // Non-expired previous key declared: MUST exist and be exactly 32 bytes
+        if (!this.#secureStore.hasSecret(previousKeySecret)) {
+          throw new EnrollmentSecurityError(
+            'EdgePairingStore HMAC metadata declares non-expired previous key, but previous key secret is missing in EdgeSecureStore. Failing closed.',
+          );
+        }
+
+        let prevKey: Buffer;
+        try {
+          prevKey = this.#secureStore.loadSecret(previousKeySecret);
+        } catch (err) {
+          throw new EnrollmentSecurityError(
+            `EdgePairingStore failed to load declared previous HMAC key: ${(err as Error).message}`,
+            { cause: err },
+          );
+        }
+
+        if (prevKey.length !== 32) {
+          throw new EnrollmentSecurityError(
+            `Declared previous HMAC key length is invalid (${prevKey.length} bytes, expected 32). Failing closed.`,
+          );
+        }
+
+        this.#previousHmacKey = prevKey;
+        this.#previousHmacKeyExpiresAt = meta.previousKeyExpiresAt;
+        this.#previousKeyVersion = meta.previousKeyVersion;
+      } else {
+        // Expired previous key: purge normally
+        if (this.#secureStore.hasSecret(previousKeySecret)) {
+          this.#secureStore.deleteSecret(previousKeySecret);
+        }
+        this.#previousHmacKey = null;
+        this.#previousHmacKeyExpiresAt = null;
+        this.#previousKeyVersion = null;
+        this.#saveMetadata();
+      }
+    } else {
+      // No previous key declared in metadata
+      if (this.#secureStore.hasSecret(previousKeySecret)) {
+        this.#secureStore.deleteSecret(previousKeySecret);
+      }
+      this.#previousHmacKey = null;
+      this.#previousHmacKeyExpiresAt = null;
+      this.#previousKeyVersion = null;
+    }
   }
 
   #saveMetadata(): void {
