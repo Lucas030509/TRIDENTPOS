@@ -24,12 +24,14 @@ import {
 import { WriteSerializer } from './write-serializer.js';
 import { WalCheckpointManager } from './wal-manager.js';
 import { registerTestNativeDatabase } from './test-access.js';
+import { EnrollmentPersistence } from './enrollment-persistence.js';
 
 export class EdgeDatabaseService {
   readonly #db: Database.Database;
   readonly #resolvedPath: string;
   readonly #writeSerializer: WriteSerializer;
   readonly #walManager: WalCheckpointManager;
+  #enrollmentPersistence: EnrollmentPersistence | null = null;
   #currentDurabilityMode: DurabilityMode = 'NORMAL';
   #closed = false;
   #isDurabilityCompromised = false;
@@ -300,6 +302,18 @@ export class EdgeDatabaseService {
     }
 
     return executeTx();
+  }
+
+  /**
+   * Retrieves the narrow, strictly typed enrollment persistence repository.
+   * Exposes zero arbitrary SQL or native handles to callers.
+   */
+  public getEnrollmentPersistence(): EnrollmentPersistence {
+    this.assertOpen();
+    if (!this.#enrollmentPersistence) {
+      this.#enrollmentPersistence = new EnrollmentPersistence(this, this.#db);
+    }
+    return this.#enrollmentPersistence;
   }
 
   /**
