@@ -1,12 +1,13 @@
 # ACR-2026-011 GOVERNANCE SYNTHESIS & RECONCILIATION EVIDENCE
-## Joint Data and Security Architecture Synthesis for WP-009
+## Remediation R1 Synthesis: Addressing Coordinator Quick Integrity Failure
 
 **Document ID:** `EVIDENCE-ACR-2026-011-SYNTHESIS`  
-**Version:** `1.0 SYNTHESIS EVIDENCE`  
+**Version:** `1.1 REMEDIATION R1 EVIDENCE`  
 **Date:** `2026-09-11`  
 **Framework:** `EAAF v1.2.0 @ 7e036f43240b3dc28ccb996e350263598275b2cd`  
 **Operating Mode:** `SOLO_MAINTAINER`  
-**Author Agents:** `03_Data_Architect` & `08_Security_Architect`  
+**Author Agent:** `01_Solution_Architect — ACR-2026-011 GOVERNANCE SYNTHESIS AUTHOR`  
+**Clarification Inputs:** `03_Data_Architect` (ED9), `08_Security_Architect` (ES9C), and EAAF Coordinator Synthesis Corrections  
 **Governing ACR:** [`ARCHITECTURE_CHANGE_REQUEST_WP009_TRUST_BOOTSTRAP.md`](file:///Volumes/SSD_ORICO/BRAIN/TRIDENTPOSREST/eeaaf/TRIDENTPOS/ARCHITECTURE_CHANGE_REQUEST_WP009_TRUST_BOOTSTRAP.md)  
 **Status:** `PROPOSED / PENDING PRODUCT OWNER APPROVAL`  
 
@@ -18,54 +19,64 @@
 - **Reviewed Trigger Candidate (S9-R1):** `6b7fc1982e04872fa9255a701cb978380376807d` (`INVALIDATED FOR INDEPENDENT REVIEW`)
 - **Data Clarification Input (ED9):** `469e30d07e4ea3e18bb9c22e1c7089f37b1dc560` on branch `clarification/wp-009-data-authority-r2`
 - **Security Clarification Input (ES9C):** `c5dbd25b977d8a2cc54da3f21a888bf07dbb7cbc` on branch `clarification/wp-009-security-architecture-r1`
-- **Current Governance Branch:** `governance/acr-2026-011-wp-009-trust-bootstrap` (Branched directly from canonical G8)
+- **Initial Governance Proposal (GA11):** `c018ac9cc3528d93af741cd997d5355b86ecd5e8` on branch `governance/acr-2026-011-wp-009-trust-bootstrap`
+- **Coordinator Verdict on GA11:** `ACR-2026-011 QUICK INTEGRITY — FAIL / BLOCKED`
+- **Remediation Target (GA11-R1):** Descendant commit on `governance/acr-2026-011-wp-009-trust-bootstrap` with parent `GA11-R1^ = GA11`
 
 ---
 
-## 2. Synthesis of Architectural Clarifications
+## 2. Quick Integrity Failure Traceability & GA11-R1 Corrections
 
-This document synthesizes the independent evaluations of the Data Architect (ED9) and Security Architect (ES9C) into a single, unified governance proposal:
+Proposal GA11 failed Coordinator Quick Integrity review due to several critical omissions and architectural inconsistencies. In accordance with EAAF v1.2.0 traceability requirements, this record preserves the exact failure points and their definitive GA11-R1 remediations:
 
 ```text
 ==================================================================================================================================
-ARCHITECTURAL TOPIC      DATA ARCHITECT EVALUATION (ED9)      SECURITY ARCHITECT EVALUATION (ES9C) SYNTHESIZED ACR-2026-011 RULING
+DEFICIENCY IDENTIFIED IN GA11          EAAF COORDINATOR FINDING             GA11-R1 DEFINITIVE ARCHITECTURAL REMEDIATION
 ==================================================================================================================================
-1. Transaction Boundary  Mandated single atomic SQLite        Confirmed transaction must commit    MANDATORY DATA-INV-WP009-01:
-                         transaction (DATA-INV-WP009-01)      before success audit is emitted;     Single runInTransaction for CAS
-                         for CAS consumption + credential     rejection of split CAS/insert        consumption + credential insert.
-                         insert to prevent burned tokens.     transactions.                        consumed_at reverts to NULL on error.
+1. Incomplete Transaction Invariant    GA11 placed TerminalEnrolada /       Mandated TerminalEnrolada / SUCCESS audit append
+   & Post-Commit Audit Callback        SUCCESS audit outside transaction as INSIDE single atomic SQLite WAL transaction
+                                       post-commit callback.               (DATA-INV-WP009-01). ALL COMMIT OR NONE COMMIT:
+                                                                            credential or audit failure triggers full ROLLBACK,
+                                                                            consumed_at remains NULL, no token issued.
 ----------------------------------------------------------------------------------------------------------------------------------
-2. Multi-Tenant Context  Mandatory organization_id &          Affirmed tenant and branch scoping   Mandatory organization_id & branch_id
-                         branch_id in local records to        must be validated against token and  in both enrollment_tokens and
-                         prevent cross-tenant contamination.  credentials fail-closed.             station_credentials.
+2. Inverted Station Pinning Ordering   GA11 persisted cert pin after        Corrected protocol: (1) Zero-data TLS probe,
+                                       server enrollment.                   (2) verify fingerprint, (3) persist in StationPinStore,
+                                                                            (4) ONLY THEN open pinned 2nd TLS connection and transmit
+                                                                            secrets. PIN STORE FAILURE => ZERO SECRET DISCLOSURE.
 ----------------------------------------------------------------------------------------------------------------------------------
-3. station_token_hash    Excluded from durable schema;        Excluded from durable schema;        REMOVED from station_credentials.
-   Disposition           shift tokens represent transient     Local Station Token is 12h session   Durable hardware identity separated
-                         authorization, not device identity.  material; sessions belong to WP-010. from ephemeral session management.
+3. Invented Provisioning Manifest &    GA11 invented "signed branch         Removed unproven manifest statement. Formulated canonical
+   Clock Drift Threshold Semantics     provisioning manifest" and mixed     trustedEffectiveTime = Tcloud + monotonicElapsed(M0) via
+                                       timestamp units (ms vs sec).         process.hrtime.bigint(). Persisted anchors in SQLite WAL.
+                                                                            Rollback > 5 min (300s) -> CLOCK_ROLLBACK_LOCKED.
 ----------------------------------------------------------------------------------------------------------------------------------
-4. Edge TLS Private Key  Referred to Security Architect       Plaintext file 0600 is insufficient; Encrypted at rest via OS Keyring
-   Storage & Lifecycle   for cryptographic evaluation.        mandated OS Keyring (DPAPI/Keychain); (DPAPI/Keyring). Fail-closed on start
-                                                              silent regeneration PROHIBITED.      if corrupt. Zero silent regeneration.
+4. Non-Standard Timestamp Units        GA11 introduced "Epoch ms".          Normalized all governed WP-009 security records to
+                                                                            UNIX EPOCH SECONDS consistently across DDL, dict,
+                                                                            comments, and protocol specs.
 ----------------------------------------------------------------------------------------------------------------------------------
-5. Station Token HMAC    Referred to Security Architect       Volatile in-memory key breaks floor  Mandatory 256-bit CSPRNG key
-   Signing Key           for key lifecycle evaluation.        sessions across restart; mandated    persisted in OS Keyring. Distinct from
-                                                              256-bit persistent key in Keyring.   TLS key. Weak keys rejected.
+5. Missing Local Security Audit Model  SSOT lacked local forensic audit     Created edge_security_audit table in DATA_MODEL.md with
+                                       table on Edge host.                  13 governed attributes, append-only tamper-evident hash
+                                                                            chain, and authority in DATA_AUTHORITY_MATRIX.md.
 ----------------------------------------------------------------------------------------------------------------------------------
-6. Station Pin Store     Affirmed pinning contract            initialPin is PROHIBITED in prod;    Tamper-resistant platform store
-                         requires durable client storage.     mandated platform-level tamper-      contract; initialPin prohibited
-                                                              resistant storage (Keystore/Keyring). in production client interfaces.
+6. Omission of EdgeSecureStore in SSOT GA11 failed to amend                 Amended SECRETS_AND_KEY_MANAGEMENT.md with full
+                                       SECRETS_AND_KEY_MANAGEMENT.md.       EdgeSecureStore contract (OS Keyring, DPAPI/Keychain/
+                                                                            Secret Service, fail-closed, Linux basic_text PROHIBITED).
 ----------------------------------------------------------------------------------------------------------------------------------
-7. Trusted Time & Clock  Affirmed token expiration requires   process.hrtime.bigint() for pairing; Monotonic pairing duration; anchor
-   Rollback Protection   valid timestamps.                    lastKnownCloudTime anchor; rollback  lastKnownCloudTime in SQLite; rollback
-                                                              > 5 min triggers lockout & audit.    > 5 min locks node and emits CRITICAL.
+7. Unproven Station Type Check         GA11 froze CHECK with 4 hardcoded    Removed restrictive CHECK constraint from DDL. Retained
+                                       station types without authority.     station_type TEXT NOT NULL until canonical taxonomy exists.
 ----------------------------------------------------------------------------------------------------------------------------------
-8. Audit Sequencing &    TerminalEnrolada is local forensic   TerminalEnrolada / SUCCESS emitted   Post-commit audit emission only;
-   False-Success Bug     provenance; must not conflate with   ONLY AFTER atomic transaction commit; mandatory default local audit sink;
-                         WP-012 WAN replication event.        fail-closed audit execution.         WP-012 owns outbox_queue transport.
+8. HMAC Key Contract & Rotation        Validation allowed >= 32 bytes and   Validated key as EXACTLY 32 bytes (256 bits CSPRNG).
+   Semantics Ambiguity                 introduced generic 15-min grace.     Removed 15-min grace; non-disruptive rotation retains
+                                                                            previous key for 12h token lifetime.
 ----------------------------------------------------------------------------------------------------------------------------------
-9. Persistence API       getEnrollmentPersistence() is an     Public persistence escape hatches    EnrollmentPersistence is strictly
-   Encapsulation         ungoverned backdoor; must be         bypass trust bootstrap verification; package-private / internal to
-                         package-private / module-internal.   must remain module-internal.         @trident/edge. Public API removed.
+9. Outdated Sequence Diagram           SECURITY_ARCHITECTURE.md Sec. 3      Updated sequence diagram to reflect zero-data probe,
+                                       showed outdated pin/audit order.     StationPinStore write, pinned connection, in-memory
+                                                                            signing, and atomic WAL transaction.
+----------------------------------------------------------------------------------------------------------------------------------
+10. False Authority / Approval Labels  Modified SSOT files appeared already Added prominent ACR-2026-011 PROPOSED OVERLAY notices
+                                       canonical/approved.                  to all modified SSOT files, preserving baseline metadata.
+----------------------------------------------------------------------------------------------------------------------------------
+11. Inaccurate Authorship Metadata     GA11 falsely attributed authored ACR Corrected author to 01_Solution_Architect as synthesis
+                                       jointly to clarification agents.     author, citing ED9 and ES9C as inputs.
 ==================================================================================================================================
 ```
 
@@ -73,22 +84,27 @@ ARCHITECTURAL TOPIC      DATA ARCHITECT EVALUATION (ED9)      SECURITY ARCHITECT
 
 ## 3. Inventory of Governed SSOT Files Amended
 
-The following seven (7) canonical architecture documents have been amended to incorporate the synthesized decisions:
+Ten (10) SSOT architecture and governance files have been amended in GA11-R1:
 
-1. **`DATA_AUTHORITY_MATRIX.md`:** Added 4 explicit rows in Section 1 establishing SoR, writable nodes, read replicas, and sync directions for `stations`, `edge_hosts`, `enrollment_tokens`, and `station_credentials`.
-2. **`DATA_MODEL.md`:** Added Section 3 SQLite DDL for `enrollment_tokens` and `station_credentials` with composite unique constraints and check constraints, excluding `station_token_hash`.
-3. **`DATA_DICTIONARY.md`:** Added 17 dictionary attribute definitions for `enrollment_tokens` and `station_credentials`.
-4. **`SECURITY_ARCHITECTURE.md`:** Added Invariants 4 through 7 in Section 3.2 enforcing OS Keyring encryption, prohibition of silent TLS regeneration, TLS probe isolation, post-commit audit emission, and platform pin storage.
-5. **`IAM_SECURITY_MODEL.md`:** Updated Sections 4 and 5 with persistent HMAC key specifications, session vs. identity separation, monotonic pairing timer, `lastKnownCloudTime` storage anchor, and `ClockRollbackDetected` CRITICAL audit lockout.
-6. **`SECURITY_CONTROL_MATRIX.md`:** Added Section 3 formally specifying `SEC-VAL-03` debt disposition (software algorithms closed in WP-009, hardware LAN validation assigned to WP-028).
-7. **`IMPLEMENTATION_PLAN.md`:** Updated WP-009 outputs, acceptance criteria, test descriptions, and Section 11 debt mappings to enforce `DATA-INV-WP009-01`, internal persistence encapsulation, and elimination of public overrides.
+1. **`DATA_AUTHORITY_MATRIX.md`:** Added 5 explicit rows in Section 1 (`stations`, `edge_hosts`, `enrollment_tokens`, `station_credentials`, `edge_security_audit`) with proposal overlay notice.
+2. **`DATA_MODEL.md`:** Formalized Section 3 SQLite WAL DDL for `enrollment_tokens`, `station_credentials` (removed unproven station-type check), and `edge_security_audit` (13 fields, append-only, tamper-evident hash chain) using Unix epoch seconds.
+3. **`DATA_DICTIONARY.md`:** Added dictionary entries for all attributes of `enrollment_tokens`, `station_credentials`, and `edge_security_audit`.
+4. **`SECURITY_ARCHITECTURE.md`:** Updated Section 3.2 sequence diagram, pin-before-secret ordering (`SEC-INV-WP009-02`), in-memory signing order, atomic transaction invariant (`DATA-INV-WP009-01`), HTTP failure semantics, and Section 10 trusted time.
+5. **`IAM_SECURITY_MODEL.md`:** Updated Sections 4 and 5 with exact 32-byte HMAC key contract, rotation semantics, pin-before-secret ordering, monotonic `trustedEffectiveTime`, and clock rollback lockout.
+6. **`SECRETS_AND_KEY_MANAGEMENT.md`:** Formally added `EdgeSecureStore` specification (Section 4), inventory entries, exact 32-byte HMAC key contract, and `StationPinStore`.
+7. **`SECURITY_CONTROL_MATRIX.md`:** Updated Section 3 with refined `SEC-VAL-03` debt disposition and enrollment audit control.
+8. **`IMPLEMENTATION_PLAN.md`:** Updated WP-009 outputs, acceptance criteria, and detailed 27 test obligations with zero `.skip`/`.only`/fake providers.
+9. **`ARCHITECTURE_CHANGE_REQUEST_WP009_TRUST_BOOTSTRAP.md`:** Authoritative ACR specification synthesized under remediation R1.
+10. **`evidence/ACR-2026-011_GOVERNANCE_SYNTHESIS.md`:** This document, recording Quick Integrity failure and remediation reconciliation.
 
 ---
 
 ## 4. Verification Checklist & Invariants Confirmation
 
 - [x] Canonical `main` confirmed at `bb44f35bbe459ae86869b541e42dea12fc8173f8`.
-- [x] Dedicated branch `governance/acr-2026-011-wp-009-trust-bootstrap` created from exact G8.
+- [x] Governance branch `governance/acr-2026-011-wp-009-trust-bootstrap` confirmed descending from G8.
+- [x] GA11 history preserved: GA11 SHA `c018ac9cc3528d93af741cd997d5355b86ecd5e8` remains intact.
+- [x] New commit GA11-R1 created with `GA11-R1^ = GA11`.
 - [x] Application code modified: **NO** (Zero lines in `packages/*` source files changed).
 - [x] PR #28 modified: **NO** (PR remains in its original state on branch `feature/wp-009-edge-enrollment-trust-bootstrap`).
 - [x] Clarification branches ED9 and ES9C modified: **NO** (Both remain unchanged sibling branches).
@@ -97,4 +113,4 @@ The following seven (7) canonical architecture documents have been amended to in
 
 ---
 
-DOCUMENT STATUS: SYNTHESIS COMPLETE — READY FOR GOVERNANCE REVIEW
+DOCUMENT STATUS: REMEDIATION R1 COMPLETE — READY FOR COORDINATOR QUICK INTEGRITY RE-CHECK

@@ -1,11 +1,16 @@
 # SECURITY CONTROL & AUTHORIZATION MATRIX — ERP RESTAURANTES
 
+> [!WARNING]
+> **ACR-2026-011 PROPOSED OVERLAY — NOT CANONICAL UNTIL PRODUCT OWNER APPROVAL AND MERGE TO MAIN**
+> 
+> The additions in this document relating to WP-009 (`SEC-VAL-03` debt disposition, atomic enrollment audit controls) represent proposed governance overlays under review via ACR-2026-011. The underlying baseline remains `APPROVED / FROZEN — 2026-09-03`.
+
 **Document ID:** `ARCH-SCM-001`  
-**Version:** `1.2 REMEDIATED DRAFT (R2.1)`  
-**Status:** `APPROVED / FROZEN — 2026-09-03`  
+**Version:** `1.2 REMEDIATED DRAFT (R2.1)` (with ACR-2026-011 Proposed Overlay)  
+**Status:** `APPROVED / FROZEN — 2026-09-03` (`ACR-2026-011 PROPOSAL PENDING PO APPROVAL`)  
 **Date:** 2026-09-02  
 **Framework:** `EAAF v1.2.0 @ 7e036f43240b3dc28ccb996e350263598275b2cd`  
-**Author Agent:** `08_Security_Architect — Remediation Author`  
+**Author Agent:** `08_Security_Architect — Remediation Author` (Overlay Synthesis: `01_Solution_Architect`)  
 **Approved Baseline Commit:** `9d076c1a8f674b2411991b20fa4faa83b85f708a` (Tag `data-architecture-v1.0-approved`)  
 
 ---
@@ -33,7 +38,7 @@
 | **Emisión de Corte Z (Definitivo)**| Rol con permiso `corte.emitir_z` | Edge Host Local API | SÍ | SÍ (Credencial autorizadora) | `CorteZEmitido` (Inmutable) |
 | **Ajuste Manual / Contingencia Folios**| Rol administrativo con permiso `folios.contingencia` | Edge Host Local API | SÍ | SÍ (Credencial + Motivo) | `ContingenciaFolioRegistrada` |
 | **Modificación de Precios / Catálogo**| Rol corporativo con permiso `catalogo.administrar` | Cloud API Gateway | NO | SÍ (MFA Cloud) | `CatalogoPreciosModificado` |
-| **Enrolamiento de Nueva Terminal** | Rol administrativo con permiso `dispositivos.enrolar` | Edge Host Local API | SÍ | SÍ (Pairing QR con Fingerprint Binding) | `TerminalEnrolada` |
+| **Enrolamiento de Nueva Terminal** | Rol administrativo con permiso `dispositivos.enrolar` | Edge Host Local API | SÍ | SÍ (Pairing QR con Fingerprint Binding, PinStore previo, Transacción Atómica WAL) | `TerminalEnrolada` (en `edge_security_audit`) |
 
 ---
 
@@ -46,8 +51,8 @@
 
 | Deuda de Seguridad | Alcance Cubierto en WP-009 | Alcance Requerido para Cierre Total (WP-028) | Estatus de Gobernanza |
 |---|---|---|---|
-| **`SEC-VAL-03`** (Trust Bootstrap & Rogue Edge Resistance) | Verificación algorítmica de software: handshake mTLS, coincidencia en tiempo constante de fingerprint SHA-256 vs payload QR físico, aborto previo a revelación de secreto (canary), y consumo atómico CAS en SQLite WAL. | Pruebas adversarias en hardware físico y red LAN real: resistencia ante ataques de suplantación mDNS en equipos Wi-Fi comerciales, saturación multicast y benchmark de sobrecarga criptográfica en hardware low-end ($\le 2\text{ GB}$ RAM). | **OPEN / PARTIAL — TARGET HARDWARE / LAN EVIDENCE REQUIRED** |
+| **`SEC-VAL-03`** (Trust Bootstrap & Rogue Edge Resistance) | Verificación algorítmica de software: inspección TLS zero-data, coincidencia en tiempo constante de fingerprint SHA-256 vs payload QR físico, persistencia previa obligatoria en `StationPinStore`, firma de Station Token en memoria pre-mutación, consumo atómico CAS + inserción de credenciales + inserción forense `TerminalEnrolada / SUCCESS` en `edge_security_audit` en una única transacción SQLite WAL (`DATA-INV-WP009-01`), `EdgeSecureStore` con cifrado OS, trustedEffectiveTime monotónico y bloqueo por clock rollback. | Pruebas adversarias en hardware físico y red LAN real: resistencia ante ataques de suplantación mDNS en equipos Wi-Fi comerciales, saturación multicast y benchmark de sobrecarga criptográfica en hardware low-end ($\le 2\text{ GB}$ RAM). | **OPEN / PARTIAL — TARGET HARDWARE / LAN EVIDENCE REQUIRED** |
 
 ---
 
-DOCUMENT STATUS: APPROVED / FROZEN — 2026-09-03
+DOCUMENT STATUS: APPROVED / FROZEN — 2026-09-03 (ACR-2026-011 PROPOSED ADDITIONS PENDING PRODUCT OWNER APPROVAL)

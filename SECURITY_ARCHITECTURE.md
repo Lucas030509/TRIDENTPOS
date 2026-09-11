@@ -1,11 +1,16 @@
 # SECURITY ARCHITECTURE — ERP RESTAURANTES / TRIDENTPOS
 
+> [!WARNING]
+> **ACR-2026-011 PROPOSED OVERLAY — NOT CANONICAL UNTIL PRODUCT OWNER APPROVAL AND MERGE TO MAIN**
+> 
+> The additions and protocol revisions in this document relating to WP-009 (`StationPinStore`, `DATA-INV-WP009-01`, `edge_security_audit`, `EdgeSecureStore`) represent proposed governance overlays under review via ACR-2026-011. The underlying baseline remains `APPROVED / FROZEN — 2026-09-03`.
+
 **Document ID:** `ARCH-SEC-001`  
-**Version:** `1.2 REMEDIATED DRAFT (R2.1)`  
-**Status:** `APPROVED / FROZEN — 2026-09-03`  
+**Version:** `1.2 REMEDIATED DRAFT (R2.1)` (with ACR-2026-011 Proposed Overlay)  
+**Status:** `APPROVED / FROZEN — 2026-09-03` (`ACR-2026-011 PROPOSAL PENDING PO APPROVAL`)  
 **Date:** 2026-09-02  
 **Framework:** `EAAF v1.2.0 @ 7e036f43240b3dc28ccb996e350263598275b2cd`  
-**Author Agent:** `08_Security_Architect — Remediation Author`  
+**Author Agent:** `08_Security_Architect — Remediation Author` (Overlay Synthesis: `01_Solution_Architect`)  
 **Approved Baseline Commit:** `9d076c1a8f674b2411991b20fa4faa83b85f708a` (Tag `data-architecture-v1.0-approved`)  
 **Target Gate:** `SECURITY_GATE`  
 
@@ -118,42 +123,75 @@ sequenceDiagram
     autonumber
     participant Station as Nueva Terminal / Comandero
     participant Admin as Gerente de Sucursal (Físico)
+    participant PinStore as StationPinStore (Almacenamiento Seguro Plataforma)
     participant Edge as Edge Server Host Legítimo (Local)
     participant Rogue as Rogue Edge Falso en LAN (mDNS)
 
     Admin->>Edge: Solicitar Enrolamiento de Terminal en Consola Local
-    Edge->>Edge: Genera Payload Vinculado (Fingerprint TLS + Secret + Expiración 10 min)
+    Edge->>Edge: Genera Payload Vinculado (Fingerprint TLS + Secret + Expiración 10 min en Unix epoch seg)
     Edge-->>Admin: Despliega QR y Código en Pantalla Física del Edge
     
     Admin->>Station: Escanea QR / Ingresa Pairing Payload
     Station->>Station: Descubre candidatos en LAN vía mDNS (Rogue y Legítimo)
     
-    Note over Station,Rogue: Intento de Interceptación por Rogue Edge
-    Station->>Rogue: Establece conexión TLS inicial y solicita Certificado
-    Rogue-->>Station: Presenta Certificado TLS de Rogue
-    Station->>Station: Compara Fingerprint del Certificado vs `edgePublicKeyFingerprint` del QR
-    Station--xRogue: FINGERPRINT MISMATCH! Conexión abortada inmediatamente sin revelar `pairingSecret`
+    Note over Station,Rogue: 1. Inspección TLS Zero-Application-Data (Rogue Edge)
+    Station->>Rogue: Abre conexión TLS de inspección (cero datos de aplicación)
+    Rogue-->>Station: Presenta Certificado TLS de Rogue (DER)
+    Station->>Station: Calcula fingerprint SHA-256 vs QR físico
+    Station--xRogue: FINGERPRINT MISMATCH! Conexión abortada inmediatamente sin revelar pairingSecret
     
-    Note over Station,Edge: Conexión con Edge Legítimo
-    Station->>Edge: Establece conexión TLS y solicita Certificado
-    Edge-->>Station: Presenta Certificado TLS de Edge Legítimo
-    Station->>Station: Compara Fingerprint vs QR $\rightarrow$ MATCH CONFIRMADO
+    Note over Station,Edge: 2. Inspección TLS Zero-Application-Data (Edge Legítimo)
+    Station->>Edge: Abre conexión TLS de inspección (cero datos de aplicación)
+    Edge-->>Station: Presenta Certificado TLS de Edge Legítimo (DER)
+    Station->>Station: Calcula SHA-256 de DER y compara vs QR -> MATCH EXACTO CONFIRMADO
+    Station->>Station: Destruye socket de inspección
     
-    Station->>Edge: Handshake de Enrolamiento (Presenta `pairingId`, `pairingSecret` y `stationPublicKey`)
-    Edge->>Edge: Valida secreto no expirado, consume `pairingId` atómicamente y emite Station Token
-    Edge-->>Station: Retorna Station Token firmado + confirmación
-    Station->>Station: Fija permanentemente el Certificado TLS (Certificate Pinning)
-    Edge->>Edge: Registra evento de auditoría `TerminalEnrolada`
+    Note over Station,PinStore: 3. Persistencia de Pin Previa a Revelación de Secretos
+    Station->>PinStore: Persistir fingerprint verificado en StationPinStore seguro
+    PinStore-->>Station: Persistencia exitosa confirmada
+    Note over Station: Invariante: PIN STORE FAILURE => ZERO SECRET DISCLOSURE + ZERO SERVER MUTATION
+    
+    Note over Station,Edge: 4. Segunda Conexión TLS Anclada al Certificado Comprobado
+    Station->>Edge: Conecta vía TLS fijado estrictamente a ca: [provenCertDer]
+    Station->>Edge: Transmite pairingId, pairingSecret y stationPublicKey
+    
+    Note over Edge: 5. Preparación, Firma en Memoria y Transacción Atómica
+    Edge->>Edge: Valida contexto (tenant / branch / edge), trusted time y compara secreto en tiempo constante
+    Edge->>Edge: Construye y firma Station Token (HS256, 12h) en memoria previa a mutación
+    Note over Edge: Si firma falla: CERO mutaciones de base de datos
+    
+    Edge->>Edge: BEGIN IMMEDIATE (DATA-INV-WP009-01)<br/>1. Re-read token<br/>2. Validate context & expiration<br/>3. Verify secret<br/>4. CAS consume token (consumed_at = now)<br/>5. INSERT station_credentials<br/>6. Bind pairing_id -> station_id<br/>7. Append durable edge_security_audit (TerminalEnrolada / SUCCESS)<br/>COMMIT
+    Note over Edge: Invariante: ALL COMMIT OR NONE COMMIT (Rollback ante cualquier fallo)
+    
+    Edge-->>Station: HTTP 200 + Station Token firmado
+    Note over Station,Edge: Semántica de Falla HTTP: Si la entrega HTTP falla tras commit exitoso,<br/>el enrolamiento y la auditoría permanecen firmes; cliente ejecuta re-enrolamiento gobernado
 ```
 
-### Invariantes Criptográficos:
+### Invariantes Criptográficos y de Protocolo:
 1. **No Divulgación Previa:** La terminal **nunca envía ni expone el `pairingSecret`** a ningún candidato cuyo certificado TLS no coincida exactamente con el `edgePublicKeyFingerprint` obtenido físicamente.
 2. **Resistencia a Relay / MITM:** Un Rogue Edge no puede retransmitir el secreto ni actuar como proxy, ya que no posee la llave privada correspondiente al certificado cuyo fingerprint fue escaneado.
-3. **Consumo Atómico y Expiración:** El `pairingSecret` tiene una vigencia máxima de 10 minutos (`SECURITY POLICY DEFAULT`) y se invalida inmediatamente tras el primer uso exitoso.
-4. **Cifrado en Reposo de Llave TLS y Prohibición de Regeneración Silenciosa (`SEC-INV-WP009-01`):** La llave privada TLS de Edge Host **NUNCA** se persiste en texto claro en el sistema de archivos. Debe cifrarse en reposo mediante el Keyring del SO (Windows DPAPI, macOS Keychain, Linux Secret Service). Si la llave es ilegible o falta, el proceso **DEBE FALLAR CERRADO AL INICIAR** con alerta crítica. La regeneración silenciosa de llaves en un nodo activo queda estrictamente prohibida.
+3. **Consumo Atómico y Expiración:** El `pairingSecret` tiene una vigencia máxima de 10 minutos (600 segundos, expresado en `UNIX EPOCH SECONDS`) y se invalida atómicamente tras su primer uso exitoso.
+4. **Cifrado en Reposo de Llave TLS y Prohibición de Regeneración Silenciosa (`SEC-INV-WP009-01`):** La llave privada TLS de Edge Host **NUNCA** se persiste en texto claro en el sistema de archivos. Debe almacenarse cifrada en reposo mediante el componente interno `EdgeSecureStore` respaldado por el Keyring del SO (Windows DPAPI, macOS Keychain, Linux Secret Service real; backend inseguro `basic_text` en Linux está terminantemente PROHIBIDO). Si la llave es ilegible o falta, el proceso **DEBE FALLAR CERRADO AL INICIAR** con alerta crítica. La regeneración silenciosa de llaves en un nodo activo queda estrictamente prohibida.
 5. **Aislamiento de la Sonda TLS:** La conexión TLS inicial para extraer el certificado DER del candidato se limita a la inspección de transporte con **CERO datos de aplicación** transmitidos. El socket se destruye de inmediato tras leer el certificado y el tráfico subsiguiente se ancla estrictamente al certificado comprobado (`ca: [provenCertDer]`).
-6. **Orden Estricto de Auditoría Post-Commit:** El evento `TerminalEnrolada` con resultado `SUCCESS` se emite **ÚNICAMENTE DESPUÉS** de que la transacción atómica en SQLite WAL (`DATA-INV-WP009-01`) haya completado `COMMIT` y el Station Token haya sido firmado. Se prohíbe la emisión pre-flight de eventos de éxito.
-7. **Almacenamiento Seguro del Pin en Estación:** Las estaciones deben almacenar el fingerprint verificado en almacenamiento seguro de la plataforma (OS Keyring / Keystore). El parámetro `initialPin` queda prohibido en producción.
+6. **Orden Estricto de Persistencia del Pin en Estación (`SEC-INV-WP009-02`):** La terminal debe persistir el fingerprint verificado en el almacenamiento seguro de plataforma (`StationPinStore`) **ANTES** de abrir la segunda conexión TLS y antes de transmitir `pairingId`, `pairingSecret` o identidad pública. Invariante: `PIN STORE FAILURE => ZERO SECRET DISCLOSURE + ZERO SERVER MUTATION`. El parámetro `initialPin` queda estrictamente prohibido en producción.
+7. **Orden de Firma de Token Pre-Transacción:** Para evitar tokens quemados por fallos criptográficos, el Station Token se construye y firma en memoria **antes** de ingresar a la transacción atómica de persistencia. Si la firma falla, no se efectúa mutación alguna en la base de datos. Los bytes del token firmado no son válidos ni utilizables hasta que el commit en base de datos concluya con éxito y la respuesta sea liberada.
+8. **Transacción Atómica de Enrolamiento y Auditoría Local (`DATA-INV-WP009-01`):**  
+   El consumo de token, inserción de credenciales y registro de auditoría `TerminalEnrolada` con resultado `SUCCESS` deben ejecutarse dentro de una **única transacción SQLite WAL (`BEGIN IMMEDIATE ... COMMIT`)**:
+   ```text
+   BEGIN IMMEDIATE
+   1. Re-read enrollment token
+   2. Validate tenant / branch / edge context
+   3. Validate expiration (Unix epoch seconds)
+   4. Verify pairing secret
+   5. CAS consume token (consumed_at = now)
+   6. Insert station_credentials
+   7. Bind pairing_id -> station_id
+   8. Append durable local edge_security_audit (TerminalEnrolada / SUCCESS)
+   COMMIT
+   ```
+   **Invariante `ALL COMMIT OR NONE COMMIT`:** Si la inserción de credenciales O la inserción de auditoría falla: `ROLLBACK`, `consumed_at` permanece `NULL`, la fila en `station_credentials` no existe, la fila `SUCCESS` en `edge_security_audit` no existe, y ningún Station Token es retornado. Se prohíbe definir la auditoría autoritativa de éxito como un simple callback post-commit. Callbacks de observabilidad post-commit son opcionales y no constituyen el sumidero de auditoría autoritativo.
+9. **Semántica de Falla en Respuesta HTTP:** Si la transmisión de la respuesta HTTP 200 falla después de un commit atómico exitoso, el enrolamiento permanece duradero, `TerminalEnrolada / SUCCESS` permanece asentado y el token de pairing consumido. No se revierte la verdad histórica transaccional por fallos de transporte; el cliente debe recurrir al protocolo gobernado de recuperación/re-enrolamiento.
+10. **Llave HMAC de Firma de Station Token:** Debe ser de exactamente 32 bytes (256 bits), generada por CSPRNG, protegida en `EdgeSecureStore`, e independiente de la llave TLS. Se prohíbe la inyección arbitraria de strings en producción. Rotación no disruptiva mantiene la llave previa hasta la expiración máxima de tokens emitidos (12 horas).
 
 ---
 
@@ -221,11 +259,15 @@ Formalizado en [`THREAT_MODEL.md`](file:///Volumes/SSD_ORICO/BRAIN/TRIDENTPOSRES
 
 ## 10. Layered Tamper-Evident Audit & Clock Protection
 
-- **Auditoría Local:** Encadenamiento criptográfico (Hash Chaining SHA-256) en `local_audit_trail` para detectar alteraciones accidentales, borrados parciales o desórdenes cronológicos.
-- **Anclaje Remoto (Cloud Checkpoint):** Puntos de control periódicos y confirmaciones de sincronización (`Cloud Sync ACK`) firmadas para detectar reescrituras globales de la base de datos local.
+- **Auditoría Local y Forense de Seguridad:** Encadenamiento criptográfico (Hash Chaining SHA-256) en `local_audit_trail` y `edge_security_audit`. La inserción de eventos de seguridad de enrolamiento (`TerminalEnrolada / SUCCESS`) se ejecuta de manera indivisible dentro de la misma transacción de mutación en SQLite WAL (`DATA-INV-WP009-01`), garantizando que jamás existan credenciales sin su correspondiente rastro forense.
+- **Anclaje Remoto (Cloud Checkpoint):** Puntos de control periódicos y confirmaciones de sincronización (`Cloud Sync ACK`) firmadas para detectar reescrituras globales de la base de datos local (gobernado en WP-012/WP-013).
 - **Declaración de Riesgo Residual:** La reescritura total de SQLite previa al anclaje remoto constituye un riesgo residual documentado; su aceptación formal o mitigación adicional corresponde a la autoridad autorizada de gestión de riesgos bajo gobernanza EAAF.
-- **Protección de Manipulación del Reloj (Clock Rollback):** Los temporizadores de sesión local y expiración de tokens utilizan contadores monotónicos del proceso (`process.hrtime.bigint()`). La detección de desfases mayores a 5 minutos respecto a `lastKnownCloudTime` dispara una alerta y bloquea la emisión de tokens.
+- **Protección de Manipulación del Reloj (Clock Rollback) y Trusted Time:**
+  - En tiempo de ejecución del mismo proceso, las decisiones de expiración y temporización de seguridad se basan en tiempo monotónico (`process.hrtime.bigint()`). Al sincronizar tiempo Cloud autenticado $T_{cloud}$ en el instante monotónico $M_0$, el tiempo efectivo confiable es $T_{eff} = T_{cloud} + \text{monotonicElapsedSince}(M_0)$.
+  - Metadatos del ancla protegida (`lastKnownCloudTime`, `localWallTimeAtLastCloudSync`, `anchorVersion`, metadatos de integridad) se persisten en SQLite.
+  - Tras un reinicio del proceso u OS, el ancla persistida actúa como cota inferior inviolable. Si el reloj de pared retrocede más de 5 minutos (300 segundos en Unix epoch) respecto a los anclas confiables (`Date.now() / 1000 < lastKnownCloudTime - 300`), el sistema entra en estado `CLOCK_ROLLBACK_LOCKED`, bloquea el enrolamiento y la emisión de tokens, y emite un evento crítico de auditoría (`ClockRollbackDetected`).
+  - En el primer bootstrap seguro sin ancla previa, se requiere sincronización inicial de tiempo Cloud autenticado (queda prohibido inventar tiempo confiable desde manifiestos no canónicos o reloj de pared no validado).
 
 ---
 
-DOCUMENT STATUS: APPROVED / FROZEN — 2026-09-03
+DOCUMENT STATUS: APPROVED / FROZEN — 2026-09-03 (ACR-2026-011 PROPOSED ADDITIONS PENDING PRODUCT OWNER APPROVAL)

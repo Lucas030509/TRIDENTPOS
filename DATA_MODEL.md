@@ -1,11 +1,16 @@
 # DATA MODEL SPECIFICATION — ERP RESTAURANTES / TRIDENTPOS
 
+> [!WARNING]
+> **ACR-2026-011 PROPOSED OVERLAY — NOT CANONICAL UNTIL PRODUCT OWNER APPROVAL AND MERGE TO MAIN**
+> 
+> The additions in this document relating to WP-009 (`enrollment_tokens`, `station_credentials`, `edge_security_audit`) represent proposed governance overlays under review via ACR-2026-011. The underlying baseline remains `APPROVED / FROZEN — 2026-09-01`.
+
 **Document ID:** `ARCH-MDL-001`  
-**Version:** `1.0 APPROVED / FROZEN`  
-**Status:** `APPROVED / FROZEN — 2026-09-01`  
+**Version:** `1.0 APPROVED / FROZEN` (with ACR-2026-011 Proposed Overlay)  
+**Status:** `APPROVED / FROZEN — 2026-09-01` (`ACR-2026-011 PROPOSAL PENDING PO APPROVAL`)  
 **Date:** 2026-09-01  
 **Framework:** `EAAF v1.2.0 @ 7e036f43240b3dc28ccb996e350263598275b2cd`  
-**Author Agent:** `03_Data_Architect`  
+**Author Agent:** `03_Data_Architect` (Overlay Synthesis: `01_Solution_Architect`)  
 **Approved Solution Baseline:** `e35205906055a8425ab875d05789652b3c3497b7` (Tag `solution-architecture-v1.3-approved`)  
 
 ---
@@ -735,9 +740,9 @@ CREATE TABLE enrollment_tokens (
     branch_id TEXT NOT NULL,
     edge_id TEXT NOT NULL,
     secret_hash TEXT NOT NULL, -- SHA-256 del secreto de emparejamiento
-    expires_at INTEGER NOT NULL, -- Epoch ms, máx 600s
-    consumed_at INTEGER NULL, -- Timestamp de consumo atómico CAS
-    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL, -- Unix epoch seconds, máx 600s
+    consumed_at INTEGER NULL, -- Timestamp Unix epoch seconds de consumo atómico CAS
+    created_at INTEGER NOT NULL, -- Timestamp Unix epoch seconds
     CONSTRAINT chk_enrollment_tokens_consumed CHECK (consumed_at IS NULL OR consumed_at >= created_at)
 );
 
@@ -750,18 +755,43 @@ CREATE TABLE station_credentials (
     organization_id TEXT NOT NULL,
     branch_id TEXT NOT NULL,
     station_code TEXT NOT NULL,
-    station_type TEXT NOT NULL, -- POS, KDS, COMANDERO, DISPLAY
+    station_type TEXT NOT NULL, -- Clasificación operativa de estación
     station_public_key TEXT NOT NULL, -- Llave pública / certificado de terminal
-    enrolled_at INTEGER NOT NULL, -- Timestamp epoch ms
+    enrolled_at INTEGER NOT NULL, -- Timestamp Unix epoch seconds
     is_revoked INTEGER NOT NULL DEFAULT 0,
-    revoked_at INTEGER NULL,
+    revoked_at INTEGER NULL, -- Timestamp Unix epoch seconds
     CONSTRAINT uq_station_credentials_tenant_branch_code UNIQUE (organization_id, branch_id, station_code),
-    CONSTRAINT chk_station_credentials_type CHECK (station_type IN ('POS', 'KDS', 'COMANDERO', 'DISPLAY')),
     CONSTRAINT chk_station_credentials_revoked CHECK (is_revoked IN (0, 1))
 );
 
 CREATE INDEX idx_station_credentials_auth ON station_credentials (station_id, is_revoked);
 CREATE INDEX idx_station_credentials_tenant_branch ON station_credentials (organization_id, branch_id);
+
+-- Bitácora de Auditoría de Seguridad Local (WP-009, ACR-2026-011)
+-- Requisitos: Append-Only, Tamper-Evident Hash Chain, SQLite WAL
+-- Cero mutaciones UPDATE/DELETE a través de la frontera normal de aplicación
+-- Cero secretos en metadatos. Inserción atómica en misma transacción que mutaciones de enrolamiento
+CREATE TABLE edge_security_audit (
+    event_id TEXT PRIMARY KEY, -- UUIDv4
+    organization_id TEXT NOT NULL,
+    branch_id TEXT NOT NULL,
+    edge_id TEXT NOT NULL,
+    station_id TEXT NULL,
+    event_type TEXT NOT NULL, -- ej. TerminalEnrolada, ClockRollbackDetected
+    severity TEXT NOT NULL, -- INFO, WARN, ERROR, CRITICAL
+    action TEXT NOT NULL, -- ej. ENROLLMENT_SUCCESS, CLOCK_ROLLBACK_LOCK
+    sequence_number INTEGER NOT NULL, -- Secuencia estrictamente incremental por nodo
+    previous_record_hash TEXT NOT NULL, -- SHA-256 hex del registro anterior ('0'*64 para génesis)
+    record_hash TEXT NOT NULL, -- SHA-256 hex del payload canónico RFC 8785
+    metadata_json TEXT NOT NULL, -- JSON sanitizado sin secretos ni PII
+    created_at INTEGER NOT NULL, -- Timestamp Unix epoch seconds
+    CONSTRAINT uq_edge_security_audit_seq UNIQUE (organization_id, branch_id, edge_id, sequence_number),
+    CONSTRAINT uq_edge_security_audit_hash UNIQUE (organization_id, record_hash),
+    CONSTRAINT chk_edge_security_audit_severity CHECK (severity IN ('INFO', 'WARN', 'ERROR', 'CRITICAL'))
+);
+
+CREATE INDEX idx_edge_security_audit_seq ON edge_security_audit (organization_id, branch_id, edge_id, sequence_number);
+CREATE INDEX idx_edge_security_audit_lookup ON edge_security_audit (organization_id, branch_id, event_type, created_at);
 
 -- Catálogo de Productos Local (Read Replica Snapshot)
 CREATE TABLE local_products (
@@ -918,4 +948,4 @@ CREATE TABLE local_audit_trail (
 
 ---
 
-DOCUMENT STATUS: APPROVED / FROZEN — 2026-09-01
+DOCUMENT STATUS: APPROVED / FROZEN — 2026-09-01 (ACR-2026-011 PROPOSED ADDITIONS PENDING PRODUCT OWNER APPROVAL)

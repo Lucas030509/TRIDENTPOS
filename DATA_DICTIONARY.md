@@ -1,11 +1,16 @@
 # DATA DICTIONARY — ERP RESTAURANTES / TRIDENTPOS
 
+> [!WARNING]
+> **ACR-2026-011 PROPOSED OVERLAY — NOT CANONICAL UNTIL PRODUCT OWNER APPROVAL AND MERGE TO MAIN**
+> 
+> The additions in this document relating to WP-009 (`enrollment_tokens`, `station_credentials`, `edge_security_audit`) represent proposed governance overlays under review via ACR-2026-011. The underlying baseline remains `APPROVED / FROZEN — 2026-09-01`.
+
 **Document ID:** `ARCH-DIC-001`  
-**Version:** `1.0 APPROVED / FROZEN`  
-**Status:** `APPROVED / FROZEN — 2026-09-01`  
+**Version:** `1.0 APPROVED / FROZEN` (with ACR-2026-011 Proposed Overlay)  
+**Status:** `APPROVED / FROZEN — 2026-09-01` (`ACR-2026-011 PROPOSAL PENDING PO APPROVAL`)  
 **Date:** 2026-09-01  
 **Framework:** `EAAF v1.2.0 @ 7e036f43240b3dc28ccb996e350263598275b2cd`  
-**Author Agent:** `03_Data_Architect`  
+**Author Agent:** `03_Data_Architect` (Overlay Synthesis: `01_Solution_Architect`)  
 **Approved Solution Baseline:** `e35205906055a8425ab875d05789652b3c3497b7` (Tag `solution-architecture-v1.3-approved`)  
 
 ---
@@ -39,18 +44,31 @@
 | `enrollment_tokens` | `branch_id` | TEXT | NO | Internal | Identificador de la sucursal física asociada al emparejamiento. |
 | `enrollment_tokens` | `edge_id` | TEXT | NO | Internal | Identificador del nodo Edge emisor del secreto. |
 | `enrollment_tokens` | `secret_hash` | TEXT | NO | Restricted | Hash SHA-256 del secreto CSPRNG de 256 bits generado para el QR. |
-| `enrollment_tokens` | `expires_at` | INTEGER | NO | Internal | Timestamp epoch ms de expiración (máximo 600 segundos). |
-| `enrollment_tokens` | `consumed_at` | INTEGER | SÍ | Internal | Timestamp epoch ms de consumo atómico CAS único (NULL si no ha sido consumido). |
-| `enrollment_tokens` | `created_at` | INTEGER | NO | Internal | Timestamp epoch ms de emisión física del token. |
+| `enrollment_tokens` | `expires_at` | INTEGER | NO | Internal | Timestamp UNIX EPOCH SECONDS de expiración (máximo 600 segundos). |
+| `enrollment_tokens` | `consumed_at` | INTEGER | SÍ | Internal | Timestamp UNIX EPOCH SECONDS de consumo atómico CAS único (NULL si no ha sido consumido). |
+| `enrollment_tokens` | `created_at` | INTEGER | NO | Internal | Timestamp UNIX EPOCH SECONDS de emisión física del token. |
 | `station_credentials` | `station_id` | TEXT | NO | Internal | Identificador único de la estación (UUID coincidente con Cloud `stations.id`). Clave primaria. |
 | `station_credentials` | `organization_id` | TEXT | NO | Internal | Identificador del Tenant propietario. |
 | `station_credentials` | `branch_id` | TEXT | NO | Internal | Identificador de la sucursal física. |
 | `station_credentials` | `station_code` | TEXT | NO | Internal | Código operativo de la terminal (ej. 'POS-01', 'KDS-01'). Único por sucursal. |
-| `station_credentials` | `station_type` | TEXT | NO | Internal | Tipo de estación operativa ('POS', 'KDS', 'COMANDERO', 'DISPLAY'). |
+| `station_credentials` | `station_type` | TEXT | NO | Internal | Tipo o clasificación operativa de la estación (sin restricción de catálogo cerrada hasta gobernanza formal de taxonomía). |
 | `station_credentials` | `station_public_key`| TEXT | NO | Internal | Llave pública criptográfica o certificado presentado por la terminal en el enrolamiento. |
-| `station_credentials` | `enrolled_at` | INTEGER | NO | Internal | Timestamp epoch ms en el que se completó el enrolamiento local seguro. |
+| `station_credentials` | `enrolled_at` | INTEGER | NO | Internal | Timestamp UNIX EPOCH SECONDS en el que se completó el enrolamiento local seguro. |
 | `station_credentials` | `is_revoked` | INTEGER | NO | Internal | Bandera de revocación local/remota (0 = Activa, 1 = Revocada). |
-| `station_credentials` | `revoked_at` | INTEGER | SÍ | Internal | Timestamp epoch ms de revocación del dispositivo (NULL si activa). |
+| `station_credentials` | `revoked_at` | INTEGER | SÍ | Internal | Timestamp UNIX EPOCH SECONDS de revocación del dispositivo (NULL si activa). |
+| `edge_security_audit` | `event_id` | TEXT | NO | Internal | Identificador único del evento de auditoría local Edge (UUIDv4). Clave primaria. Inmutable. |
+| `edge_security_audit` | `organization_id` | TEXT | NO | Internal | Identificador del Tenant propietario para particionamiento lógico multi-inquilino. |
+| `edge_security_audit` | `branch_id` | TEXT | NO | Internal | Identificador de la sucursal física. |
+| `edge_security_audit` | `edge_id` | TEXT | NO | Internal | Identificador del nodo Edge host emisor del evento de seguridad local. |
+| `edge_security_audit` | `station_id` | TEXT | SÍ | Internal | Identificador de la terminal asociada (NULL para eventos propios de infraestructura/Edge). |
+| `edge_security_audit` | `event_type` | TEXT | NO | Internal | Tipo de evento de seguridad local (ej. 'TerminalEnrolada', 'ClockRollbackDetected'). |
+| `edge_security_audit` | `severity` | TEXT | NO | Internal | Nivel de severidad forense ('INFO', 'WARN', 'ERROR', 'CRITICAL'). |
+| `edge_security_audit` | `action` | TEXT | NO | Internal | Acción de seguridad ejecutada (ej. 'ENROLLMENT_SUCCESS', 'CLOCK_ROLLBACK_LOCK'). |
+| `edge_security_audit` | `sequence_number` | INTEGER | NO | Internal | Número de secuencia estrictamente monotónico e incremental por nodo edge. |
+| `edge_security_audit` | `previous_record_hash` | TEXT | NO | Internal | Hash SHA-256 hex del registro anterior en la cadena tamper-evident ('0'*64 para génesis). |
+| `edge_security_audit` | `record_hash` | TEXT | NO | Internal | Hash SHA-256 hex del registro actual serializado canónicamente (RFC 8785). |
+| `edge_security_audit` | `metadata_json` | TEXT | NO | Internal | Metadatos forenses estructurados en JSON serializado; estrictamente sanitizados sin secretos ni credenciales. |
+| `edge_security_audit` | `created_at` | INTEGER | NO | Internal | Timestamp UNIX EPOCH SECONDS de inserción duradera en SQLite WAL. |
 | `audit_log_events` | `id` | UUID | NO | Internal | Identificador único del evento de auditoría. Inmutable, append-only. |
 | `audit_log_events` | `organization_id` | UUID | NO | Internal | Identificador del Tenant propietario. Clave de partición lógica en RLS (`current_app_org_id()`). Inmutable. |
 | `audit_log_events` | `branch_id` | UUID | SÍ | Internal | Sucursal donde ocurrió el evento (NULL para eventos corporativos). Clave foránea `(organization_id, branch_id)` con `ON DELETE RESTRICT` preservando la inmutabilidad histórica forense. |
@@ -135,4 +153,4 @@
 
 ---
 
-DOCUMENT STATUS: APPROVED / FROZEN — 2026-09-01
+DOCUMENT STATUS: APPROVED / FROZEN — 2026-09-01 (ACR-2026-011 PROPOSED ADDITIONS PENDING PRODUCT OWNER APPROVAL)
