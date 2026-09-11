@@ -10,6 +10,7 @@
  * - Real Content Security Policy enforcement in the renderer
  */
 
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { app, BrowserWindow, safeStorage } from 'electron';
@@ -22,8 +23,10 @@ import {
 import {
   ElectronSafeStorageBackend,
   EdgeSecureStore,
+  StationPinStore,
   SECURE_LINUX_STORAGE_BACKENDS,
 } from './enrollment/secure-store.js';
+import { StationPinStoreError } from './enrollment/types.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -722,6 +725,60 @@ async function runElectronRuntimeTests(): Promise<void> {
           'WP009-E01',
           `Host OS secure storage unavailable on ${process.platform} — fail-closed verified`,
         );
+      }
+    }
+
+    // Explicitly verify StationPinStore runtime behavior in actual Electron:
+    // 1. External backend injection is rejected fail-closed
+    let injectionBlocked = false;
+    try {
+      new StationPinStore({
+        storeFilePath: path.join(__dirname, 'test-pins.enc'),
+        backend: { isAvailable: () => true } as unknown as never,
+      } as unknown as { storeFilePath: string });
+    } catch (err) {
+      injectionBlocked =
+        err instanceof StationPinStoreError &&
+        err.message.includes('does not allow external backend injection');
+    }
+    if (!injectionBlocked) {
+      throw new Error(
+        'StationPinStore allowed external backend injection in production Electron runtime!',
+      );
+    }
+
+    // 2. In Outcome A, native OS keyring encryption round-trip succeeds
+    if (isAvailable) {
+      const realPinPath = path.join(__dirname, 'tmp-real-pins.enc');
+      try {
+        const pinStore = new StationPinStore({ storeFilePath: realPinPath });
+        const verified = pinStore.verifyOrPin('branch-elec', 'edge-elec', 'SHA256:ELEC_TEST');
+        if (!verified) {
+          throw new Error('Initial pin verification failed in real Electron StationPinStore');
+        }
+        const diskBytes = fs.readFileSync(realPinPath);
+        if (diskBytes.toString('utf8').includes('SHA256:ELEC_TEST')) {
+          throw new Error('StationPinStore leaked plaintext pin on disk in real Electron runtime!');
+        }
+        const reloaded = new StationPinStore({ storeFilePath: realPinPath });
+        const reloadedPin = reloaded.getPin('branch-elec', 'edge-elec');
+        if (!reloadedPin || reloadedPin.edgePublicKeyFingerprint !== 'SHA256:ELEC_TEST') {
+          throw new Error('Reloaded pin failed round-trip in real Electron StationPinStore');
+        }
+      } finally {
+        if (fs.existsSync(realPinPath)) {
+          fs.rmSync(realPinPath, { force: true });
+        }
+      }
+    } else if (selectedBackend === 'basic_text') {
+      let pinFailedClosed = false;
+      try {
+        new StationPinStore({ storeFilePath: path.join(__dirname, 'tmp-pins-basic.enc') });
+      } catch (err) {
+        pinFailedClosed = (err as Error).message.includes('basic_text');
+      }
+      if (!pinFailedClosed) {
+        throw new Error('Expected StationPinStore to fail closed on Linux basic_text');
       }
     }
   } catch (err) {

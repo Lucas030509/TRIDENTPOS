@@ -8,8 +8,14 @@
  */
 
 import crypto from 'node:crypto';
-import { SecureStorageBackend, SECURE_LINUX_STORAGE_BACKENDS } from './secure-store.js';
+import {
+  SecureStorageBackend,
+  SECURE_LINUX_STORAGE_BACKENDS,
+  createTestStationPinStore,
+} from './secure-store.js';
 import { EdgeSecureStoreError } from './types.js';
+
+export { createTestStationPinStore };
 
 /**
  * TestIsolatedSecureStorageBackend

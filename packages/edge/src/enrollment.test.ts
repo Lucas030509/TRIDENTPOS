@@ -29,7 +29,10 @@ import { EdgeTlsIdentityManager } from './enrollment/tls-identity.js';
 import { EdgePairingStore } from './enrollment/pairing-store.js';
 import { TrustedTimeManager } from './enrollment/trusted-time.js';
 import { EdgeSecureStoreError, EdgeTlsKeyMissingOrCorruptedError } from './enrollment/types.js';
-import { TestIsolatedSecureStorageBackend } from './enrollment/test-support.js';
+import {
+  TestIsolatedSecureStorageBackend,
+  createTestStationPinStore,
+} from './enrollment/test-support.js';
 import { validateHmacKeyLength } from './enrollment/crypto.js';
 import { EnrollmentPersistence } from './db/enrollment-persistence.js';
 import { getTestNativeDatabase } from './db/test-access.js';
@@ -96,7 +99,7 @@ function createTestContext(prefix = 'wp009_test', masterKey?: Buffer) {
     trustedTimeManager,
   });
 
-  const pinStore = new StationPinStore({
+  const pinStore = createTestStationPinStore({
     storeFilePath: pinStorePath,
     backend: testSecureBackend,
   });
@@ -428,11 +431,11 @@ test('WP009-T07: StationPinStore persistence survives client restart', () => {
 
   try {
     // Process 1: write pin
-    const store1 = new StationPinStore({ storeFilePath: pinPath, backend });
+    const store1 = createTestStationPinStore({ storeFilePath: pinPath, backend });
     store1.verifyOrPin('branch-1', 'edge-1', 'SHA256:AA:BB:CC:DD');
 
     // Process 2: reload store from disk
-    const store2 = new StationPinStore({ storeFilePath: pinPath, backend });
+    const store2 = createTestStationPinStore({ storeFilePath: pinPath, backend });
     const pin = store2.getPin('branch-1', 'edge-1');
     assert.ok(pin);
     assert.equal(pin.edgePublicKeyFingerprint, 'SHA256:AA:BB:CC:DD');
@@ -1155,10 +1158,10 @@ test('WP009-T27: Linux basic_text insecure safeStorage backend rejected (fails c
       'EdgeSecureStore must fail closed when backend is basic_text',
     );
 
-    // Also verify StationPinStore fails closed on basic_text
+    // Also verify StationPinStore fails closed on basic_text via test double
     assert.throws(
       () => {
-        new StationPinStore({
+        createTestStationPinStore({
           storeFilePath: path.join(tempDir, 'pins.enc'),
           backend: basicTextBackend,
         });
@@ -1284,7 +1287,7 @@ test('WP009-T30: StationPinStore persists pins in platform secure storage (ciphe
   const backend = new TestIsolatedSecureStorageBackend();
 
   try {
-    const store = new StationPinStore({ storeFilePath: pinPath, backend });
+    const store = createTestStationPinStore({ storeFilePath: pinPath, backend });
     store.verifyOrPin('branch-alpha', 'edge-bravo', 'SHA256:11:22:33:44:55:66');
 
     // Inspect raw disk file
@@ -1311,7 +1314,7 @@ test('WP009-T30: StationPinStore persists pins in platform secure storage (ciphe
     );
 
     // Reload with backend to verify it decrypts correctly
-    const storeReloaded = new StationPinStore({ storeFilePath: pinPath, backend });
+    const storeReloaded = createTestStationPinStore({ storeFilePath: pinPath, backend });
     const pin = storeReloaded.getPin('branch-alpha', 'edge-bravo');
     assert.ok(pin);
     assert.equal(pin.edgePublicKeyFingerprint, 'SHA256:11:22:33:44:55:66');
@@ -1330,7 +1333,7 @@ test('WP009-T31: StationPinStore cannot replace existing pin, has no reset/overw
   const backend = new TestIsolatedSecureStorageBackend({ masterKey });
 
   try {
-    const store = new StationPinStore({ storeFilePath: pinPath, backend });
+    const store = createTestStationPinStore({ storeFilePath: pinPath, backend });
     // 1. Initial pin establishment succeeds
     const pinned = store.verifyOrPin('br-1', 'edge-1', 'SHA256:ORIGINAL');
     assert.equal(pinned, true, 'Initial pin establishment must succeed');
@@ -1379,7 +1382,7 @@ test('WP009-T31: StationPinStore cannot replace existing pin, has no reset/overw
     );
 
     // 6. Restart does not reset the pin
-    const storeAfterRestart = new StationPinStore({ storeFilePath: pinPath, backend });
+    const storeAfterRestart = createTestStationPinStore({ storeFilePath: pinPath, backend });
     const pinAfterRestart = storeAfterRestart.getPin('br-1', 'edge-1');
     assert.ok(pinAfterRestart, 'Pin must survive process restart');
     assert.equal(pinAfterRestart.edgePublicKeyFingerprint, 'SHA256:ORIGINAL');
@@ -1874,6 +1877,8 @@ test('WP009-T38: Public package entrypoint strictly encapsulates internals and r
     'NodeCryptoVaultBackend',
     'TestIsolatedSecureStorageBackend',
     'SecureStorageBackend',
+    'createTestStationPinStore',
+    'kInternalTestBackend',
     'EdgeTlsIdentityManager',
     'EdgePairingStore',
     'EnrollmentPersistence',
@@ -2167,7 +2172,7 @@ test('WP009-T41: Platform-aware ElectronSafeStorageBackend and Linux fail-closed
     );
     assert.throws(
       () =>
-        new StationPinStore({
+        createTestStationPinStore({
           storeFilePath: path.join(tempDir, 'pins.enc'),
           backend: backendBasicText,
         }),
@@ -2276,6 +2281,164 @@ test('WP009-T41: Platform-aware ElectronSafeStorageBackend and Linux fail-closed
     );
     const macEnc = backendMacOs.encrypt(Buffer.from('MAC_SECRET', 'utf8'));
     assert.equal(backendMacOs.decrypt(macEnc).toString('utf8'), 'MAC_SECRET');
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// TEST OBLIGATION 42: Public StationPinStore production API cannot inject or replace OS secure-storage backend
+// ---------------------------------------------------------------------------
+test('WP009-T42: public StationPinStore production API cannot inject or replace OS secure-storage backend', async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wp009_t42_'));
+  const pinPath = path.join(tempDir, 'station_pins.enc');
+
+  const fakeInsecureBackend = {
+    isAvailable: () => true,
+    getSelectedStorageBackend: () => 'fake_insecure_custom_backend',
+    encrypt: (b: Buffer) => b, // Insecure plaintext bypass
+    decrypt: (b: Buffer) => b,
+  };
+
+  try {
+    // 1. Public StationPinStore constructor exposes no backend injection option:
+    // Any attempt to supply backend injection properties throws StationPinStoreError
+    const injectionKeys = [
+      'backend',
+      'storageBackend',
+      'secureBackend',
+      'adapter',
+      'provider',
+      'storage',
+      'customBackend',
+      'fallback',
+    ];
+
+    for (const key of injectionKeys) {
+      assert.throws(
+        () => {
+          new StationPinStore({
+            storeFilePath: pinPath,
+            [key]: fakeInsecureBackend,
+          } as unknown as { storeFilePath: string });
+        },
+        (err: Error) => {
+          assert.ok(err instanceof StationPinStoreError);
+          assert.match(err.message, /does not allow external backend injection/i);
+          return true;
+        },
+        `Public constructor MUST reject option '${key}'`,
+      );
+    }
+
+    // 2. Arbitrary object injection cannot replace production secure storage:
+    // Attempting positional 2nd argument or token tampering throws StationPinStoreError
+    assert.throws(
+      () => {
+        new (StationPinStore as unknown as new (...args: unknown[]) => StationPinStore)(
+          { storeFilePath: pinPath },
+          fakeInsecureBackend,
+        );
+      },
+      (err: Error) => {
+        assert.ok(err instanceof StationPinStoreError);
+        assert.match(err.message, /accepts exactly one options argument|backend injection/i);
+        return true;
+      },
+      'Positional argument injection MUST be rejected fail-closed',
+    );
+
+    assert.throws(
+      () => {
+        new (StationPinStore as unknown as new (...args: unknown[]) => StationPinStore)(
+          { storeFilePath: pinPath },
+          'invalid_token',
+          fakeInsecureBackend,
+        );
+      },
+      (err: Error) => {
+        assert.ok(err instanceof StationPinStoreError);
+        assert.match(err.message, /accepts exactly one options argument|backend injection/i);
+        return true;
+      },
+      'Spoofed internal token MUST be rejected fail-closed',
+    );
+
+    // In normal public usage without test-support, StationPinStore internally instantiates
+    // ElectronSafeStorageBackend, which in headless Node asserts host secure storage availability
+    // and strictly fails closed (preventing any insecure storage fallback)
+    assert.throws(
+      () => {
+        new StationPinStore({ storeFilePath: pinPath });
+      },
+      (err: Error) => {
+        assert.ok(err instanceof StationPinStoreError);
+        assert.match(err.message, /host secure storage encryption is unavailable/i);
+        return true;
+      },
+      'Public constructor MUST internally enforce platform secure storage validation',
+    );
+
+    // 3. Public package exposes no secure-backend setter:
+    const storeProto = StationPinStore.prototype as unknown as Record<string, unknown>;
+    const forbiddenMethods = [
+      'setBackend',
+      'setStorageBackend',
+      'setSecureBackend',
+      'setAdapter',
+      'setProvider',
+      'setStorage',
+      'configureBackend',
+      'useBackend',
+      'backend',
+      'storageBackend',
+    ];
+    for (const method of forbiddenMethods) {
+      assert.equal(
+        method in storeProto,
+        false,
+        `StationPinStore.prototype MUST NOT expose setter/property '${method}'`,
+      );
+    }
+
+    // 4. Public package exposes no backend factory override:
+    const storeClass = StationPinStore as unknown as Record<string, unknown>;
+    const forbiddenStatics = [
+      'setFactory',
+      'setBackendFactory',
+      'setDefaultBackend',
+      'overrideBackend',
+      'registerBackend',
+      'createWithBackend',
+      'createTestStationPinStore',
+    ];
+    for (const staticFn of forbiddenStatics) {
+      assert.equal(
+        staticFn in storeClass,
+        false,
+        `StationPinStore static methods MUST NOT expose factory override '${staticFn}'`,
+      );
+    }
+
+    // 5. Public package exposes no test-support escape hatch:
+    const publicModule = (await import('./index.js')) as Record<string, unknown>;
+    const forbiddenPackageSymbols = [
+      'TestIsolatedSecureStorageBackend',
+      'createTestStationPinStore',
+      'SecureStorageBackend',
+      'ElectronSafeStorageBackend',
+      'EdgeSecureStore',
+      'NodeCryptoVaultBackend',
+      'kInternalTestBackend',
+      'testSupport',
+    ];
+    for (const sym of forbiddenPackageSymbols) {
+      assert.equal(
+        sym in publicModule,
+        false,
+        `Public @trident/edge entrypoint MUST NOT export test-support escape hatch '${sym}'`,
+      );
+    }
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }

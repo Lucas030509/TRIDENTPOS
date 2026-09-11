@@ -11,6 +11,7 @@ export { StationEnrollmentClient } from './station-client.js';
 export type { StationEnrollmentClientOptions } from './station-client.js';
 
 export { StationPinStore } from './secure-store.js';
+export type { StationPinStoreOptions } from './secure-store.js';
 
 export { EdgeMdnsAdvertiser, EdgeMdnsBrowser } from './mdns-discovery.js';
 export type { EdgeMdnsAdvertiserOptions } from './mdns-discovery.js';

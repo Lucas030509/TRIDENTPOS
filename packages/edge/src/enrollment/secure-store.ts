@@ -221,6 +221,21 @@ export class EdgeSecureStore {
 }
 
 /**
+ * Module-private internal symbol used strictly by createTestStationPinStore.
+ * Prohibited from public package exposure.
+ */
+const kInternalTestBackend = Symbol('kInternalTestBackend');
+
+/**
+ * Public configuration options for StationPinStore.
+ * Callers specify only the storeFilePath.
+ * The underlying OS secure-storage backend is determined strictly by the platform secure storage invariant.
+ */
+export interface StationPinStoreOptions {
+  readonly storeFilePath: string;
+}
+
+/**
  * StationPinStore
  * Client-side tamper-resistant store persisting verified TLS certificate fingerprints.
  * Backed by platform secure storage (encrypted at rest; never mutable plaintext JSON).
@@ -229,15 +244,61 @@ export class EdgeSecureStore {
  * 2. Normal runtime code CANNOT overwrite an existing pin (mismatch fails closed).
  * 3. Administrative reset/overwrite via runtime API is prohibited (separately governed physical workflow).
  * 4. PIN STORE FAILURE => ZERO SECRET DISCLOSURE + ZERO SERVER MUTATION.
+ * 5. Production construction internally selects ElectronSafeStorageBackend and applies governed platform validation.
+ *    External injection of arbitrary runtime storage backends is strictly prohibited.
  */
 export class StationPinStore {
   readonly #storeFilePath: string;
   readonly #backend: SecureStorageBackend;
   #pins: Map<string, StationPinRecord> = new Map();
 
-  constructor(options: { storeFilePath: string; backend?: SecureStorageBackend }) {
+  constructor(
+    options: StationPinStoreOptions,
+    /** @internal Internal token prohibited from public use */
+    _internalToken?: unknown,
+    /** @internal Internal test backend prohibited from public use */
+    _internalBackend?: SecureStorageBackend,
+  ) {
+    if (arguments.length > 1) {
+      if (_internalToken !== kInternalTestBackend || !_internalBackend) {
+        throw new StationPinStoreError(
+          'StationPinStore constructor accepts exactly one options argument. Backend injection is strictly prohibited.',
+        );
+      }
+    }
+
+    if (!options || typeof options !== 'object') {
+      throw new StationPinStoreError('StationPinStore requires an options object');
+    }
+
+    // Defensive check against arbitrary parameter injection
+    const forbiddenProps = [
+      'backend',
+      'storageBackend',
+      'secureBackend',
+      'adapter',
+      'provider',
+      'storage',
+      'customBackend',
+      'fallback',
+    ];
+    for (const prop of forbiddenProps) {
+      if (prop in options) {
+        throw new StationPinStoreError(
+          `StationPinStore does not allow external backend injection via '${prop}'. Production persistence is strictly platform-secured.`,
+        );
+      }
+    }
+
+    if (typeof options.storeFilePath !== 'string' || options.storeFilePath.trim().length === 0) {
+      throw new StationPinStoreError('StationPinStore requires a valid storeFilePath');
+    }
+
     this.#storeFilePath = path.resolve(options.storeFilePath);
-    this.#backend = options.backend ?? new ElectronSafeStorageBackend();
+    this.#backend =
+      _internalToken === kInternalTestBackend && _internalBackend
+        ? _internalBackend
+        : new ElectronSafeStorageBackend();
 
     if (!this.#backend.isAvailable()) {
       const backendName = this.#backend.getSelectedStorageBackend();
@@ -338,4 +399,21 @@ export class StationPinStore {
     });
     return true;
   }
+}
+
+/**
+ * Test-only factory for StationPinStore.
+ * STRICTLY UNEXPORTED from package entrypoint (@trident/edge).
+ * Used exclusively by internal test files (via ./enrollment/test-support.js)
+ * for isolated deterministic unit tests and fault injection.
+ */
+export function createTestStationPinStore(options: {
+  storeFilePath: string;
+  backend: SecureStorageBackend;
+}): StationPinStore {
+  return new StationPinStore(
+    { storeFilePath: options.storeFilePath },
+    kInternalTestBackend,
+    options.backend,
+  );
 }
