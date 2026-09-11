@@ -1,13 +1,13 @@
 # SECRETS AND KEY MANAGEMENT SPECIFICATION — ERP RESTAURANTES
 
 > [!NOTE]
-> **ACR-2026-011 PRODUCT OWNER APPROVED OVERLAY — PENDING MERGE TO MAIN**
+> **ACR-2026-011 APPROVED / MERGED / CANONICAL ON MAIN — G9**
 > 
-> The additions in this document relating to WP-009 (`EdgeSecureStore`, Edge TLS Private Key, Station Token HMAC Key contract, StationPinStore) represent governance overlays formally approved by the Product Owner via ACR-2026-011, pending promotion into canonical main. The underlying baseline remains `APPROVED / FROZEN — 2026-09-03`.
+> The additions in this document relating to WP-009 (`EdgeSecureStore`, Edge TLS Private Key, Station Token HMAC Key contract, StationPinStore) represent governance overlays formally approved and merged into canonical main under G9 (`0e50fe12ba7a95638c8efe57d4cd9c598b56daa9`). The underlying baseline remains `APPROVED / FROZEN — 2026-09-03`.
 
 **Document ID:** `ARCH-SEC-002`  
-**Version:** `1.1 REMEDIATED DRAFT` (with ACR-2026-011 Approved Overlay)  
-**Status:** `APPROVED / FROZEN — 2026-09-03` (`ACR-2026-011 PRODUCT OWNER APPROVED — PENDING MERGE TO MAIN`)  
+**Version:** `1.1 APPROVED OVERLAY` (ACR-2026-011 Canonical Overlay — G9)  
+**Status:** `APPROVED / FROZEN — 2026-09-03` (`ACR-2026-011 APPROVED / MERGED / CANONICAL ON MAIN — G9`)  
 **Date:** 2026-09-01  
 **Framework:** `EAAF v1.2.0 @ 7e036f43240b3dc28ccb996e350263598275b2cd`  
 **Author Agent:** `08_Security_Architect` (Overlay Synthesis: `01_Solution_Architect`)  
@@ -87,4 +87,4 @@ El subsistema Edge Host implementa el componente interno de almacenamiento segur
 
 ---
 
-DOCUMENT STATUS: APPROVED / FROZEN — 2026-09-03 (ACR-2026-011 PRODUCT OWNER APPROVED — PENDING MERGE TO MAIN)
+DOCUMENT STATUS: APPROVED / FROZEN — 2026-09-03 (ACR-2026-011 APPROVED / MERGED / CANONICAL ON MAIN — G9)

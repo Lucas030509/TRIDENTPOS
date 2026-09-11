@@ -1,9 +1,9 @@
 # ARCHITECTURE CHANGE REQUEST: WP-009 EDGE ENROLLMENT & TRUST BOOTSTRAP DATA AUTHORITY, KEY LIFECYCLE, AND TRANSACTION INVARIANTS
 
 > [!NOTE]
-> **ACR-2026-011 PRODUCT OWNER APPROVED OVERLAY — PENDING MERGE TO MAIN**
+> **ACR-2026-011 APPROVED / MERGED / CANONICAL ON MAIN — G9**
 > 
-> This document constitutes a formal Architecture Change Request under EAAF v1.2.0. Its contents have been explicitly approved by the Product Owner and become canonical upon merge into main.
+> This document constitutes a formal Architecture Change Request under EAAF v1.2.0. Its contents have been explicitly approved by the Product Owner (POA11) and merged into canonical main under G9 (`0e50fe12ba7a95638c8efe57d4cd9c598b56daa9`).
 
 **ID:** `ACR-2026-011`  
 **Framework:** `EAAF v1.2.0 @ 7e036f43240b3dc28ccb996e350263598275b2cd`  
@@ -11,7 +11,7 @@
 **Requester:** `01_Solution_Architect — ACR-2026-011 GOVERNANCE SYNTHESIS AUTHOR`  
 **Clarification Inputs:** `03_Data_Architect` (ED9), `08_Security_Architect` (ES9C), and EAAF Coordinator Synthesis Corrections  
 **Date:** `2026-09-11`  
-**Status:** `PRODUCT OWNER APPROVED — PENDING MERGE TO MAIN`  
+**Status:** `ACR-2026-011 APPROVED / MERGED / CANONICAL ON MAIN — G9`  
 **Base Commit:** `bb44f35bbe459ae86869b541e42dea12fc8173f8` (`G8`)  
 **Operating Mode:** `SOLO_MAINTAINER`  
 **Classification:** `ARCHITECTURE CLARIFICATION & SSOT GOVERNANCE SYNTHESIS (REMEDIATION R1)`  
