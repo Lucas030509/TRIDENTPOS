@@ -150,6 +150,10 @@ sequenceDiagram
 1. **No Divulgación Previa:** La terminal **nunca envía ni expone el `pairingSecret`** a ningún candidato cuyo certificado TLS no coincida exactamente con el `edgePublicKeyFingerprint` obtenido físicamente.
 2. **Resistencia a Relay / MITM:** Un Rogue Edge no puede retransmitir el secreto ni actuar como proxy, ya que no posee la llave privada correspondiente al certificado cuyo fingerprint fue escaneado.
 3. **Consumo Atómico y Expiración:** El `pairingSecret` tiene una vigencia máxima de 10 minutos (`SECURITY POLICY DEFAULT`) y se invalida inmediatamente tras el primer uso exitoso.
+4. **Cifrado en Reposo de Llave TLS y Prohibición de Regeneración Silenciosa (`SEC-INV-WP009-01`):** La llave privada TLS de Edge Host **NUNCA** se persiste en texto claro en el sistema de archivos. Debe cifrarse en reposo mediante el Keyring del SO (Windows DPAPI, macOS Keychain, Linux Secret Service). Si la llave es ilegible o falta, el proceso **DEBE FALLAR CERRADO AL INICIAR** con alerta crítica. La regeneración silenciosa de llaves en un nodo activo queda estrictamente prohibida.
+5. **Aislamiento de la Sonda TLS:** La conexión TLS inicial para extraer el certificado DER del candidato se limita a la inspección de transporte con **CERO datos de aplicación** transmitidos. El socket se destruye de inmediato tras leer el certificado y el tráfico subsiguiente se ancla estrictamente al certificado comprobado (`ca: [provenCertDer]`).
+6. **Orden Estricto de Auditoría Post-Commit:** El evento `TerminalEnrolada` con resultado `SUCCESS` se emite **ÚNICAMENTE DESPUÉS** de que la transacción atómica en SQLite WAL (`DATA-INV-WP009-01`) haya completado `COMMIT` y el Station Token haya sido firmado. Se prohíbe la emisión pre-flight de eventos de éxito.
+7. **Almacenamiento Seguro del Pin en Estación:** Las estaciones deben almacenar el fingerprint verificado en almacenamiento seguro de la plataforma (OS Keyring / Keystore). El parámetro `initialPin` queda prohibido en producción.
 
 ---
 

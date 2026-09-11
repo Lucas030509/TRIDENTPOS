@@ -34,6 +34,23 @@
 | `stations` | `code` | VARCHAR(50) | NO | Internal | Código de estación (ej. 'POS-01'). Único por sucursal `(organization_id, branch_id, code)`. |
 | `stations` | `station_type` | VARCHAR(50) | NO | Internal | Tipo de terminal (`POS`, `KDS`, `COMANDERO`, `DISPLAY`). |
 | `stations` | `is_authorized` | BOOLEAN | NO | Internal | Estado de autorización operativa del dispositivo. Desautorización operacional soft (`is_authorized = false`). |
+| `enrollment_tokens` | `pairing_id` | TEXT | NO | Internal | Identificador único del token de emparejamiento físico QR (UUIDv4). Clave primaria. Efímero. |
+| `enrollment_tokens` | `organization_id` | TEXT | NO | Internal | Identificador del Tenant propietario para aislamiento multi-inquilino. |
+| `enrollment_tokens` | `branch_id` | TEXT | NO | Internal | Identificador de la sucursal física asociada al emparejamiento. |
+| `enrollment_tokens` | `edge_id` | TEXT | NO | Internal | Identificador del nodo Edge emisor del secreto. |
+| `enrollment_tokens` | `secret_hash` | TEXT | NO | Restricted | Hash SHA-256 del secreto CSPRNG de 256 bits generado para el QR. |
+| `enrollment_tokens` | `expires_at` | INTEGER | NO | Internal | Timestamp epoch ms de expiración (máximo 600 segundos). |
+| `enrollment_tokens` | `consumed_at` | INTEGER | SÍ | Internal | Timestamp epoch ms de consumo atómico CAS único (NULL si no ha sido consumido). |
+| `enrollment_tokens` | `created_at` | INTEGER | NO | Internal | Timestamp epoch ms de emisión física del token. |
+| `station_credentials` | `station_id` | TEXT | NO | Internal | Identificador único de la estación (UUID coincidente con Cloud `stations.id`). Clave primaria. |
+| `station_credentials` | `organization_id` | TEXT | NO | Internal | Identificador del Tenant propietario. |
+| `station_credentials` | `branch_id` | TEXT | NO | Internal | Identificador de la sucursal física. |
+| `station_credentials` | `station_code` | TEXT | NO | Internal | Código operativo de la terminal (ej. 'POS-01', 'KDS-01'). Único por sucursal. |
+| `station_credentials` | `station_type` | TEXT | NO | Internal | Tipo de estación operativa ('POS', 'KDS', 'COMANDERO', 'DISPLAY'). |
+| `station_credentials` | `station_public_key`| TEXT | NO | Internal | Llave pública criptográfica o certificado presentado por la terminal en el enrolamiento. |
+| `station_credentials` | `enrolled_at` | INTEGER | NO | Internal | Timestamp epoch ms en el que se completó el enrolamiento local seguro. |
+| `station_credentials` | `is_revoked` | INTEGER | NO | Internal | Bandera de revocación local/remota (0 = Activa, 1 = Revocada). |
+| `station_credentials` | `revoked_at` | INTEGER | SÍ | Internal | Timestamp epoch ms de revocación del dispositivo (NULL si activa). |
 | `audit_log_events` | `id` | UUID | NO | Internal | Identificador único del evento de auditoría. Inmutable, append-only. |
 | `audit_log_events` | `organization_id` | UUID | NO | Internal | Identificador del Tenant propietario. Clave de partición lógica en RLS (`current_app_org_id()`). Inmutable. |
 | `audit_log_events` | `branch_id` | UUID | SÍ | Internal | Sucursal donde ocurrió el evento (NULL para eventos corporativos). Clave foránea `(organization_id, branch_id)` con `ON DELETE RESTRICT` preservando la inmutabilidad histórica forense. |

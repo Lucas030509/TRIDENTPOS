@@ -16,6 +16,10 @@
 |---|---|---|---|---|---|---|---|
 | **Organizaciones & Sucursales** | 1. Full Suite | Cloud PostgreSQL | Cloud | Edge SQLite | Cloud → Edge (Full Bootstrap) | Cloud Wins (Inmutable) | Cloud Platform Core |
 | **Usuarios, Roles & PINs** | 1. Full Suite | Cloud PostgreSQL | Cloud | Edge SQLite (CachedUsers) | Cloud → Edge (Deltas) | Cloud Wins (Revocation Delta) | Cloud Platform Core |
+| **Estaciones & Terminales (stations)** | 1. Full Suite | Cloud PostgreSQL | Cloud | Edge SQLite (CachedStations) | Cloud → Edge (Delta Sync) | Cloud Wins (Inmutable / Soft Deauth) | Cloud Platform Core |
+| **Edge Host Identity & Config (edge_hosts)** | 1. Full Suite | Hybrid: Protected Local Config + Cloud PostgreSQL | Edge Host Local (Runtime) / Cloud (Tenancy) | Cloud Fleet Telemetry | Edge → Cloud (Heartbeats) | Cloud Wins | Edge Host / Cloud Platform Core |
+| **Tokens de Enrolamiento (enrollment_tokens)** | 1. Full Suite | Edge SQLite (WAL) | Edge Host Local Console Only | None (LAN-local only) | None (Zero Cloud Sync) | CAS Single-Winner (Consumo Atómico) | Edge Enrollment Subsystem |
+| **Credenciales Locales de Estación (station_credentials)** | 1. Full Suite | Edge SQLite (WAL) | Edge Host Local (Enrolamiento / Revocación Local) | Cloud PostgreSQL (Auditoría / Fleet Registry) | Edge → Cloud (Outbox WP-012) / Cloud → Edge (Deltas) | Cloud Wins (Revocación Remota) | Edge Security & IAM Subsystem |
 | **Catálogo Maestro (Prod/Menús/Mod)** | 1. Full Suite | Cloud PostgreSQL | Cloud | Edge SQLite (local_products) | Cloud → Edge (Atomic Staging) | Cloud Wins (Checksum Verification)| Cloud Platform Core |
 | **Precios Base & Impuestos** | 1. Full Suite | Cloud PostgreSQL | Cloud | Edge SQLite | Cloud → Edge (Deltas) | Cloud Wins (Preserva Open Sales) | Cloud Platform Core |
 | **Branch Overrides (Precios Locales)**| 1. Full Suite | Cloud PostgreSQL | Cloud | Edge SQLite | Cloud → Edge (Deltas) | Cloud Wins | Cloud Platform Core |

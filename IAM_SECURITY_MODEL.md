@@ -78,6 +78,10 @@ graph TD
 | **One-Time Override Token**| Edge Host | 60 segundos | HMAC-SHA256 (Llave Local) | `SECURITY POLICY DEFAULT` | Consumo único (One-Time Use) al autorizar operación sensible. |
 | **Pairing Secret Payload** | Edge Host | 10 minutos | JSON Criptográfico con Fingerprint| `SECURITY POLICY DEFAULT` | Consumo atómico único tras verificación de fingerprint TLS. |
 
+### Especificaciones de Llave y Sesión Local (ACR-2026-011):
+- **Llave de Firma de Station Token:** La llave de firma HMAC-SHA256 es de 256 bits (32 bytes) de entropía CSPRNG, independiente de la llave TLS, persistida de forma segura en el OS Keyring / Bóveda Cifrada a través de reinicios del proceso y del sistema operativo. Se prohíben claves públicas arbitrarias en producción.
+- **Separación de Identidad y Sesión:** La tabla durable `station_credentials` almacena únicamente la identidad y autorización del dispositivo de piso. No persiste `station_token_hash`. El ciclo de vida de sesiones y turnos activos se administra de forma efímera en `WP-010` (`StationSessions`).
+
 ---
 
 ## 5. Protocolo Criptográfico de Enrolamiento y Resiliencia Temporal (R2F-01, SR-12)
@@ -89,9 +93,10 @@ graph TD
    - Si no coincide, la conexión es abortada sin transmitir el secreto, neutralizando cualquier intento de relay o proxy malicioso por un Rogue Edge en la LAN.
    - Tras la validación del fingerprint, el `pairingSecret` se envía cifrado bajo la sesión TLS verificada, el Edge lo valida y consume atómicamente, y emite el `Station Token`.
 
-2. **Protección contra Manipulación de Reloj (Clock Rollback):**
-   - Los temporizadores de expiración de sesiones efímeras se calculan utilizando contadores monotónicos del proceso (`process.hrtime.bigint()`).
-   - El Edge Server compara periódicamente el reloj local contra la última marca de tiempo recibida de Cloud (`lastKnownCloudTime`). Retrocesos de reloj mayores a 5 minutos bloquean la emisión de nuevos tokens y generan una alerta de auditoría (`ClockRollbackDetected`).
+2. **Protección contra Manipulación de Reloj (Clock Rollback) (ACR-2026-011):**
+   - Los temporizadores de expiración de sesiones efímeras y pairing secrets en memoria se calculan utilizando contadores monotónicos del proceso (`process.hrtime.bigint()`), inmunes a saltos o manipulaciones del reloj de pared del sistema operativo.
+   - La marca `lastKnownCloudTime` se persiste localmente en SQLite. En el primer arranque, se inicializa desde el manifiesto criptográfico de aprovisionamiento de sucursal. Durante la operación offline, avanza localmente mediante tiempo monotónico.
+   - El Edge Server compara periódicamente el reloj local contra `lastKnownCloudTime`. Retrocesos del reloj de pared mayores a 5 minutos (`Date.now() < lastKnownCloudTime - 300000`) colocan al nodo en estado `CLOCK_ROLLBACK_LOCKED`, **bloquean inmediatamente la generación de secretos de pairing y la emisión de tokens**, y generan una alerta de auditoría crítica (`ClockRollbackDetected`).
 
 ---
 

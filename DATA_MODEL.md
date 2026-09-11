@@ -728,6 +728,41 @@ CREATE TABLE cached_users (
     is_revoked INTEGER NOT NULL DEFAULT 0
 );
 
+-- Ephemeral One-Time Pairing Tokens (WP-009, ACR-2026-011)
+CREATE TABLE enrollment_tokens (
+    pairing_id TEXT PRIMARY KEY,
+    organization_id TEXT NOT NULL,
+    branch_id TEXT NOT NULL,
+    edge_id TEXT NOT NULL,
+    secret_hash TEXT NOT NULL, -- SHA-256 del secreto de emparejamiento
+    expires_at INTEGER NOT NULL, -- Epoch ms, máx 600s
+    consumed_at INTEGER NULL, -- Timestamp de consumo atómico CAS
+    created_at INTEGER NOT NULL,
+    CONSTRAINT chk_enrollment_tokens_consumed CHECK (consumed_at IS NULL OR consumed_at >= created_at)
+);
+
+CREATE INDEX idx_enrollment_tokens_lookup ON enrollment_tokens (pairing_id, consumed_at, expires_at);
+CREATE INDEX idx_enrollment_tokens_tenant_branch ON enrollment_tokens (organization_id, branch_id);
+
+-- Credenciales Locales de Estación y Autorización de Piso (WP-009, ACR-2026-011)
+CREATE TABLE station_credentials (
+    station_id TEXT PRIMARY KEY, -- UUID coincidente con Cloud stations.id
+    organization_id TEXT NOT NULL,
+    branch_id TEXT NOT NULL,
+    station_code TEXT NOT NULL,
+    station_type TEXT NOT NULL, -- POS, KDS, COMANDERO, DISPLAY
+    station_public_key TEXT NOT NULL, -- Llave pública / certificado de terminal
+    enrolled_at INTEGER NOT NULL, -- Timestamp epoch ms
+    is_revoked INTEGER NOT NULL DEFAULT 0,
+    revoked_at INTEGER NULL,
+    CONSTRAINT uq_station_credentials_tenant_branch_code UNIQUE (organization_id, branch_id, station_code),
+    CONSTRAINT chk_station_credentials_type CHECK (station_type IN ('POS', 'KDS', 'COMANDERO', 'DISPLAY')),
+    CONSTRAINT chk_station_credentials_revoked CHECK (is_revoked IN (0, 1))
+);
+
+CREATE INDEX idx_station_credentials_auth ON station_credentials (station_id, is_revoked);
+CREATE INDEX idx_station_credentials_tenant_branch ON station_credentials (organization_id, branch_id);
+
 -- Catálogo de Productos Local (Read Replica Snapshot)
 CREATE TABLE local_products (
     id TEXT PRIMARY KEY,

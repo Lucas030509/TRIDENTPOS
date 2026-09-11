@@ -42,4 +42,12 @@
 
 ---
 
+## 3. Disposición de Deuda de Validación de Seguridad: SEC-VAL-03 (ACR-2026-011)
+
+| Deuda de Seguridad | Alcance Cubierto en WP-009 | Alcance Requerido para Cierre Total (WP-028) | Estatus de Gobernanza |
+|---|---|---|---|
+| **`SEC-VAL-03`** (Trust Bootstrap & Rogue Edge Resistance) | Verificación algorítmica de software: handshake mTLS, coincidencia en tiempo constante de fingerprint SHA-256 vs payload QR físico, aborto previo a revelación de secreto (canary), y consumo atómico CAS en SQLite WAL. | Pruebas adversarias en hardware físico y red LAN real: resistencia ante ataques de suplantación mDNS en equipos Wi-Fi comerciales, saturación multicast y benchmark de sobrecarga criptográfica en hardware low-end ($\le 2\text{ GB}$ RAM). | **OPEN / PARTIAL — TARGET HARDWARE / LAN EVIDENCE REQUIRED** |
+
+---
+
 DOCUMENT STATUS: APPROVED / FROZEN — 2026-09-03
