@@ -14,7 +14,8 @@
   },
   "dependencies": {
     "@trident/core": "*",
-    "better-sqlite3": "13.0.3"
+    "better-sqlite3": "13.0.3",
+    "bonjour-service": "1.4.4"
   },
   "scripts": {
     "build": "tsc -b && node -e \"import('node:fs').then(fs => { fs.copyFileSync('src/index.html', 'dist/index.html'); fs.copyFileSync('src/preload.cjs', 'dist/preload.cjs'); })\"",

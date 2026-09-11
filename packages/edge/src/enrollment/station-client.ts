@@ -28,6 +28,11 @@ export interface StationIdentityInfo {
   readonly stationPublicKey: string;
 }
 
+export interface StationPinStore {
+  savePin(fingerprint: string): void;
+  loadPin(): string | null;
+}
+
 export interface EnrolledStationSession {
   readonly stationId: string;
   readonly stationToken: string;
@@ -40,6 +45,10 @@ export interface StationEnrollmentClientOptions {
   readonly customCa?: string | readonly string[];
   /** Socket connection timeout in milliseconds */
   readonly timeoutMs?: number;
+  /** Optional persistent pin store for device restart continuity */
+  readonly pinStore?: StationPinStore;
+  /** Optional pre-loaded pinned fingerprint */
+  readonly initialPin?: string;
 }
 
 export class StationEnrollmentClient {
@@ -48,6 +57,14 @@ export class StationEnrollmentClient {
 
   constructor(options: StationEnrollmentClientOptions = {}) {
     this.#options = options;
+    if (options.initialPin) {
+      this.#pinnedFingerprint = options.initialPin.toUpperCase();
+    } else if (options.pinStore) {
+      const stored = options.pinStore.loadPin();
+      if (stored) {
+        this.#pinnedFingerprint = stored.toUpperCase();
+      }
+    }
   }
 
   /**
@@ -128,6 +145,7 @@ export class StationEnrollmentClient {
     // STAGE 4: PIN EDGE IDENTITY PERMANENTLY FOR ALL SUBSEQUENT CONNECTIONS
     // -------------------------------------------------------------------------
     this.#pinnedFingerprint = payload.edgePublicKeyFingerprint.toUpperCase();
+    this.#options.pinStore?.savePin(this.#pinnedFingerprint);
 
     return Object.freeze({
       stationId: enrollmentResponse.stationId,

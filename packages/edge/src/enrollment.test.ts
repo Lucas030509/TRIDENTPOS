@@ -1,7 +1,8 @@
 /**
  * TRIDENTPOS WP-009 — Edge Enrollment & Trust Bootstrap Protocol Test Suite
  * Rigorously validates all requirements per SECURITY_ARCHITECTURE.md Sec. 3 (R2F-01),
- * IAM_SECURITY_MODEL.md Sec. 5, ADR-005, and PRE_FREEZE_ADVERSARIAL_BUILDER_GATE.md v1.0.
+ * IAM_SECURITY_MODEL.md Sec. 4 & 5, ADR-005, and PRE_FREEZE_ADVERSARIAL_BUILDER_GATE.md v1.0.
+ * Updated under Remediation R1 with mandatory tests R1-T01 through R1-T06.
  */
 
 import { describe, it, beforeEach, afterEach } from 'node:test';
@@ -13,6 +14,8 @@ import crypto from 'node:crypto';
 import https from 'node:https';
 import tls from 'node:tls';
 import type { AddressInfo } from 'node:net';
+
+import * as EdgePublicApi from './index.js';
 import {
   createPairingPayload,
   parsePairingPayload,
@@ -20,15 +23,21 @@ import {
 } from './enrollment/pairing-payload.js';
 import {
   generatePairingSecret,
+  generateSelfSignedX509Certificate,
   hashSha256,
   redactSensitiveData,
   timingSafeSecretCompare,
 } from './enrollment/crypto.js';
 import { OneTimePairingStore, ClockProvider } from './enrollment/pairing-store.js';
 import { EdgeTlsIdentityManager } from './enrollment/tls-identity.js';
-import { EdgeEnrollmentServer, MAX_ENROLLMENT_BODY_BYTES } from './enrollment/enrollment-server.js';
-import { StationEnrollmentClient } from './enrollment/station-client.js';
 import {
+  EdgeEnrollmentServer,
+  MAX_ENROLLMENT_BODY_BYTES,
+  STATION_TOKEN_TTL_SECONDS,
+} from './enrollment/enrollment-server.js';
+import { StationEnrollmentClient, StationPinStore } from './enrollment/station-client.js';
+import {
+  BonjourMdnsProvider,
   InMemoryDiscoveryProvider,
   MdnsDiscoveryService,
   TRIDENTPOS_MDNS_SERVICE_NAME,
@@ -53,6 +62,18 @@ class MockClock implements ClockProvider {
 
   public setTime(seconds: number): void {
     this.#currentTime = seconds;
+  }
+}
+
+class MemoryPinStore implements StationPinStore {
+  #pin: string | null = null;
+
+  public savePin(fingerprint: string): void {
+    this.#pin = fingerprint;
+  }
+
+  public loadPin(): string | null {
+    return this.#pin;
   }
 }
 
@@ -102,15 +123,15 @@ describe('WP-009 Edge Enrollment & Trust Bootstrap Protocol', () => {
     assert.ok(legitPort > 0);
 
     // 2. Setup Rogue Edge Identity & Server (with canary tracking)
-    const rogueTls = new EdgeTlsIdentityManager({ commonName: 'Rogue-Edge' });
+    const rogueGenerated = generateSelfSignedX509Certificate({ commonName: 'Rogue-Edge' });
     let rogueReceivedBytes = 0;
     let rogueReceivedSecret = false;
     let rogueEnrollCalls = 0;
 
     const rogueServer = https.createServer(
       {
-        key: rogueTls.keyPem,
-        cert: rogueTls.certPem,
+        key: rogueGenerated.keyPem,
+        cert: rogueGenerated.certPem,
       },
       (req, res) => {
         rogueEnrollCalls++;
@@ -143,8 +164,8 @@ describe('WP-009 Edge Enrollment & Trust Bootstrap Protocol', () => {
     });
     pairingStore.storePairingToken(pairingPayload);
 
-    // 4. Rogue announces itself in mDNS
-    const discoveryService = new MdnsDiscoveryService();
+    // 4. Rogue announces itself in discovery
+    const discoveryService = new MdnsDiscoveryService(new InMemoryDiscoveryProvider());
     await discoveryService.advertise({
       host: '127.0.0.1',
       port: roguePort,
@@ -179,9 +200,7 @@ describe('WP-009 Edge Enrollment & Trust Bootstrap Protocol', () => {
     );
 
     // 6. OBJECTIVE CANARY ASSERTIONS (Section 19):
-    // - Rogue server received ZERO requests to its HTTP enrollment endpoint
     assert.equal(rogueEnrollCalls, 0, 'Canary failed: Rogue HTTP endpoint was hit!');
-    // - Rogue server received ZERO bytes containing pairingSecret
     assert.equal(
       rogueReceivedBytes,
       0,
@@ -410,8 +429,8 @@ describe('WP-009 Edge Enrollment & Trust Bootstrap Protocol', () => {
     const scannedPayload = parsePairingPayload(qrString);
     assert.deepEqual(scannedPayload, pairingPayload);
 
-    // 3. mDNS discovery of Edge
-    const discovery = new MdnsDiscoveryService();
+    // 3. Discovery of Edge
+    const discovery = new MdnsDiscoveryService(new InMemoryDiscoveryProvider());
     await discovery.advertise({
       host: '127.0.0.1',
       port: legitPort,
@@ -453,7 +472,6 @@ describe('WP-009 Edge Enrollment & Trust Bootstrap Protocol', () => {
     assert.equal(audit.event, 'TerminalEnrolada');
     assert.equal(audit.outcome, 'SUCCESS');
     assert.equal(audit.stationCode, 'POS-BARRA');
-    // Ensure audit event contains NO secrets or private keys
     const auditRecord = audit as unknown as Record<string, unknown>;
     assert.equal(auditRecord['pairingSecret'], undefined);
     assert.equal(auditRecord['stationToken'], undefined);
@@ -485,7 +503,7 @@ describe('WP-009 Edge Enrollment & Trust Bootstrap Protocol', () => {
     // Tamper with the secret in the payload
     const tamperedPayload = {
       ...pairingPayload,
-      pairingSecret: generatePairingSecret(), // different 256-bit secret
+      pairingSecret: generatePairingSecret(),
     };
 
     const stationClient = new StationEnrollmentClient();
@@ -533,7 +551,7 @@ describe('WP-009 Edge Enrollment & Trust Bootstrap Protocol', () => {
 
     // Token generated for Branch B, but attempted to be consumed on Branch A server
     const pairingPayloadBranchB = createPairingPayload({
-      branchId: 'BRANCH-B-UUID', // mismatch
+      branchId: 'BRANCH-B-UUID',
       edgeId: 'EDGE-A',
       edgePublicKeyFingerprint: legitTls.fingerprint,
     });
@@ -601,9 +619,9 @@ describe('WP-009 Edge Enrollment & Trust Bootstrap Protocol', () => {
     assert.equal(stationClient.pinnedFingerprint, legitTls.fingerprint);
 
     // 2. Simulate subsequent reconnect where server presents a DIFFERENT certificate
-    const imposterTls = new EdgeTlsIdentityManager({ commonName: 'Imposter-Edge' });
+    const imposterGenerated = generateSelfSignedX509Certificate({ commonName: 'Imposter-Edge' });
     const imposterServer = https.createServer(
-      { key: imposterTls.keyPem, cert: imposterTls.certPem },
+      { key: imposterGenerated.keyPem, cert: imposterGenerated.certPem },
       (req, res) => res.end('IMPOSTER'),
     );
     const imposterPort = await new Promise<number>((resolve) => {
@@ -623,7 +641,6 @@ describe('WP-009 Edge Enrollment & Trust Bootstrap Protocol', () => {
         },
         () => {
           try {
-            // Verify pinned certificate
             assert.throws(
               () => {
                 stationClient.verifyPinnedSocket(socket);
@@ -651,6 +668,346 @@ describe('WP-009 Edge Enrollment & Trust Bootstrap Protocol', () => {
   });
 
   // =========================================================================
+  // WP009-R1-T01: Production package cannot extract Edge private/signing key
+  // =========================================================================
+  it('WP009-R1-T01: Production package cannot extract Edge private/signing key', () => {
+    // 1. Verify public package surface does not export private key properties or identity manager
+    const exportedKeys = Object.keys(EdgePublicApi);
+    assert.ok(exportedKeys.length > 0, 'Public API has exports');
+    assert.equal(exportedKeys.includes('keyPem'), false, 'Package root exports keyPem!');
+    assert.equal(
+      exportedKeys.includes('getTlsCredentials'),
+      false,
+      'Package root exports getTlsCredentials!',
+    );
+    assert.equal(
+      exportedKeys.includes('EdgeTlsIdentityManager'),
+      false,
+      'Package root exports internal EdgeTlsIdentityManager!',
+    );
+
+    // 2. Verify instance reflection on EdgeEnrollmentServer does not yield keys
+    const legitTls = new EdgeTlsIdentityManager({ commonName: 'Legit-Edge-R1-T01' });
+    const server = new EdgeEnrollmentServer({
+      branchId: TEST_BRANCH_ID,
+      edgeId: TEST_EDGE_ID,
+      tlsManager: legitTls,
+      pairingStore,
+    });
+
+    const ownProps = Object.getOwnPropertyNames(server);
+    const ownSymbols = Object.getOwnPropertySymbols(server);
+    assert.equal(ownProps.includes('keyPem'), false);
+    assert.equal(ownProps.includes('privateKey'), false);
+    assert.equal(ownProps.includes('signingKey'), false);
+    assert.equal(ownProps.includes('localStationSigningKey'), false);
+    assert.equal(ownSymbols.length, 0, 'Instance must not have symbol escape hatches');
+
+    // 3. Verify prototype reflection does not expose private keys
+    const protoProps = Object.getOwnPropertyNames(Object.getPrototypeOf(server));
+    assert.equal(protoProps.includes('keyPem'), false);
+    assert.equal(protoProps.includes('getTlsCredentials'), false);
+  });
+
+  // =========================================================================
+  // WP009-R1-T02: WP-008 database boundary remains closed
+  // =========================================================================
+  it('WP009-R1-T02: WP-008 database boundary remains closed against arbitrary SQL', () => {
+    // Verify EdgeDatabaseService does not expose generic arbitrary SQL methods
+    const dbAsAny = dbService as unknown as Record<string, unknown>;
+
+    assert.equal(dbAsAny['exec'], undefined, 'dbService.exec must not be exposed');
+    assert.equal(dbAsAny['run'], undefined, 'dbService.run must not be exposed');
+    assert.equal(dbAsAny['query'], undefined, 'dbService.query must not be exposed');
+    assert.equal(dbAsAny['transaction'], undefined, 'dbService.transaction must not be exposed');
+    assert.equal(
+      dbAsAny['getNativeDatabase'],
+      undefined,
+      'dbService.getNativeDatabase must not be exposed',
+    );
+
+    // Attempting to invoke arbitrary SQL fails
+    assert.throws(() => {
+      (dbService as unknown as { exec: (s: string) => void }).exec('DROP TABLE enrollment_tokens');
+    }, TypeError);
+  });
+
+  // =========================================================================
+  // WP009-R1-T03: Production discovery provider is real mDNS/Bonjour
+  // =========================================================================
+  it('WP009-R1-T03: Production discovery provider is real mDNS/Bonjour', () => {
+    // Default constructor must use BonjourMdnsProvider, NOT InMemoryDiscoveryProvider
+    const defaultDiscovery = new MdnsDiscoveryService();
+    assert.ok(
+      defaultDiscovery.provider instanceof BonjourMdnsProvider,
+      'Default discovery provider must be BonjourMdnsProvider',
+    );
+    assert.equal(defaultDiscovery.provider.constructor.name, 'BonjourMdnsProvider');
+  });
+
+  // =========================================================================
+  // WP009-R1-T04: Station Token follows frozen IAM policy (HMAC-SHA256, 12 hours)
+  // =========================================================================
+  it('WP009-R1-T04: Station Token follows frozen IAM policy', async () => {
+    const localSigningKey = crypto.randomBytes(32);
+    const legitTls = new EdgeTlsIdentityManager({ commonName: 'Legit-Edge-R1-T04' });
+    const legitServer = new EdgeEnrollmentServer({
+      branchId: TEST_BRANCH_ID,
+      edgeId: TEST_EDGE_ID,
+      tlsManager: legitTls,
+      pairingStore,
+      localStationSigningKey: localSigningKey,
+    });
+    const legitPort = await legitServer.start(0, '127.0.0.1');
+
+    const pairingPayload = createPairingPayload({
+      branchId: TEST_BRANCH_ID,
+      edgeId: TEST_EDGE_ID,
+      edgePublicKeyFingerprint: legitTls.fingerprint,
+    });
+    pairingStore.storePairingToken(pairingPayload);
+
+    const stationClient = new StationEnrollmentClient();
+    const stationInfo = {
+      stationCode: 'POS-IAM',
+      stationType: 'POS' as const,
+      stationPublicKey: 'PUBKEY_IAM',
+    };
+
+    const session = await stationClient.enrollWithCandidate(
+      { host: '127.0.0.1', port: legitPort },
+      pairingPayload,
+      stationInfo,
+    );
+
+    // 1. Inspect token structure
+    const parts = session.stationToken.split('.');
+    assert.equal(parts.length, 3, 'Station Token must be a 3-part compact JWT');
+
+    const header = JSON.parse(Buffer.from(parts[0]!, 'base64url').toString('utf8'));
+    const payload = JSON.parse(Buffer.from(parts[1]!, 'base64url').toString('utf8'));
+
+    // 2. Assert algorithm is HS256 (HMAC-SHA256) per IAM_SECURITY_MODEL.md
+    assert.equal(header.alg, 'HS256', 'Station token must use HMAC-SHA256 (HS256)');
+
+    // 3. Assert TTL is exactly 12 hours (43200 seconds)
+    const expectedTtl = STATION_TOKEN_TTL_SECONDS; // 43200
+    assert.equal(
+      payload.exp - payload.iat,
+      expectedTtl,
+      'Station token TTL must be exactly 12 hours (43200s)',
+    );
+
+    // 4. Verify token succeeds against correct local signing key
+    const verified = legitServer.verifyStationToken(session.stationToken);
+    assert.equal(verified.stationCode, 'POS-IAM');
+    assert.equal(verified.stationType, 'POS');
+    assert.equal(verified.branchId, TEST_BRANCH_ID);
+
+    // 5. Verify token fails against a DIFFERENT local signing key
+    const differentKey = crypto.randomBytes(32);
+    assert.throws(
+      () => {
+        EdgeEnrollmentServer.verifyStationTokenWithKey(
+          session.stationToken,
+          differentKey,
+          TEST_EDGE_ID,
+        );
+      },
+      (err: unknown) => {
+        const e = err as EnrollmentError;
+        assert.equal(e.code, 'INVALID_SECRET');
+        return true;
+      },
+    );
+
+    await legitServer.stop();
+  });
+
+  // =========================================================================
+  // WP009-R1-T05: Audit sink failure has governed explicit semantics (fail-closed)
+  // =========================================================================
+  it('WP009-R1-T05: Audit sink failure has governed explicit semantics (fail-closed)', async () => {
+    const legitTls = new EdgeTlsIdentityManager({ commonName: 'Legit-Edge-R1-T05' });
+    const legitServer = new EdgeEnrollmentServer({
+      branchId: TEST_BRANCH_ID,
+      edgeId: TEST_EDGE_ID,
+      tlsManager: legitTls,
+      pairingStore,
+      onAuditEvent: () => {
+        // Injected audit persistence failure
+        throw new Error('AUDIT_DATABASE_UNAVAILABLE');
+      },
+    });
+    const legitPort = await legitServer.start(0, '127.0.0.1');
+
+    const pairingPayload = createPairingPayload({
+      branchId: TEST_BRANCH_ID,
+      edgeId: TEST_EDGE_ID,
+      edgePublicKeyFingerprint: legitTls.fingerprint,
+    });
+    pairingStore.storePairingToken(pairingPayload);
+
+    const stationClient = new StationEnrollmentClient();
+    const stationInfo = {
+      stationCode: 'POS-AUDIT',
+      stationType: 'POS' as const,
+      stationPublicKey: 'PUBKEY_AUDIT',
+    };
+
+    // Mandatory assertion: Enrollment MUST FAIL CLOSED if audit logging fails
+    await assert.rejects(
+      async () => {
+        await stationClient.enrollWithCandidate(
+          { host: '127.0.0.1', port: legitPort },
+          pairingPayload,
+          stationInfo,
+        );
+      },
+      (err: unknown) => {
+        const e = err as EnrollmentError;
+        assert.equal(e.name, 'EnrollmentError');
+        assert.equal(e.code, 'AUDIT_LOGGING_FAILED');
+        return true;
+      },
+    );
+
+    // CRITICAL INVARIANT: The pairing token must NOT be consumed
+    const state = pairingStore.getTokenState(pairingPayload.pairingId);
+    assert.equal(state.isConsumed, false, 'Pairing token was consumed despite audit sink failure!');
+
+    await legitServer.stop();
+  });
+
+  // =========================================================================
+  // WP009-R1-T06: Edge identity and station pin survive governed restart
+  // =========================================================================
+  it('WP009-R1-T06: Edge identity and station pin survive governed restart', async () => {
+    const edgeStorageDir = path.join(tempDir, 'edge-identity');
+    const pinStore = new MemoryPinStore();
+
+    // 1. Initial Edge creation from persistent storage path
+    const edgeTls1 = new EdgeTlsIdentityManager({ storagePath: edgeStorageDir });
+    const server1 = new EdgeEnrollmentServer({
+      branchId: TEST_BRANCH_ID,
+      edgeId: TEST_EDGE_ID,
+      tlsManager: edgeTls1,
+      pairingStore,
+    });
+    const port1 = await server1.start(0, '127.0.0.1');
+
+    // 2. Station enrolls and saves pin in pinStore
+    const pairingPayload = createPairingPayload({
+      branchId: TEST_BRANCH_ID,
+      edgeId: TEST_EDGE_ID,
+      edgePublicKeyFingerprint: edgeTls1.fingerprint,
+    });
+    pairingStore.storePairingToken(pairingPayload);
+
+    const stationClient1 = new StationEnrollmentClient({ pinStore });
+    await stationClient1.enrollWithCandidate({ host: '127.0.0.1', port: port1 }, pairingPayload, {
+      stationCode: 'POS-RESTART',
+      stationType: 'POS',
+      stationPublicKey: 'PUBKEY_RESTART',
+    });
+
+    // Verify pin was saved in pinStore
+    assert.equal(pinStore.loadPin(), edgeTls1.fingerprint);
+
+    // 3. Stop server 1 (simulating process restart)
+    await server1.stop();
+
+    // 4. Recreate Edge server from persistent storage path
+    const edgeTls2 = new EdgeTlsIdentityManager({ storagePath: edgeStorageDir });
+    assert.equal(
+      edgeTls2.fingerprint,
+      edgeTls1.fingerprint,
+      'Fingerprint must be identical across restart',
+    );
+
+    const server2 = new EdgeEnrollmentServer({
+      branchId: TEST_BRANCH_ID,
+      edgeId: TEST_EDGE_ID,
+      tlsManager: edgeTls2,
+      pairingStore,
+    });
+    const port2 = await server2.start(0, '127.0.0.1');
+
+    // 5. Recreate station client from persisted pinStore
+    const stationClient2 = new StationEnrollmentClient({ pinStore });
+    assert.equal(stationClient2.pinnedFingerprint, edgeTls1.fingerprint);
+
+    // 6. Connect to restarted legitimate Edge: verification passes
+    await new Promise<void>((resolve, reject) => {
+      const socket: tls.TLSSocket = tls.connect(
+        {
+          host: '127.0.0.1',
+          port: port2,
+          rejectUnauthorized: false,
+          checkServerIdentity: () => undefined,
+        },
+        () => {
+          try {
+            assert.equal(stationClient2.verifyPinnedSocket(socket), true);
+            socket.destroy();
+            resolve();
+          } catch (e) {
+            socket.destroy();
+            reject(e);
+          }
+        },
+      );
+      socket.on('error', reject);
+    });
+
+    // 7. Connect to replacement/imposter certificate: verification fails closed
+    const imposterGen = generateSelfSignedX509Certificate({ commonName: 'Imposter-Restart' });
+    const imposterServer = https.createServer(
+      { key: imposterGen.keyPem, cert: imposterGen.certPem },
+      (_req, res) => res.end('OK'),
+    );
+    const imposterPort = await new Promise<number>((res) => {
+      imposterServer.listen(0, '127.0.0.1', () => {
+        res((imposterServer.address() as AddressInfo).port);
+      });
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      const socket: tls.TLSSocket = tls.connect(
+        {
+          host: '127.0.0.1',
+          port: imposterPort,
+          rejectUnauthorized: false,
+          checkServerIdentity: () => undefined,
+        },
+        () => {
+          try {
+            assert.throws(
+              () => {
+                stationClient2.verifyPinnedSocket(socket);
+              },
+              (err: unknown) => {
+                const e = err as EnrollmentError;
+                assert.equal(e.code, 'CERTIFICATE_PIN_MISMATCH');
+                return true;
+              },
+            );
+            socket.destroy();
+            resolve();
+          } catch (e) {
+            socket.destroy();
+            reject(e);
+          }
+        },
+      );
+      socket.on('error', reject);
+    });
+
+    await server2.stop();
+    await new Promise<void>((res) => imposterServer.close(() => res()));
+  });
+
+  // =========================================================================
   // Additional Negative & Robustness Tests
   // =========================================================================
   it('rejects pairing payload with TTL exceeding 10 minutes (600s)', () => {
@@ -660,7 +1017,7 @@ describe('WP-009 Edge Enrollment & Trust Bootstrap Protocol', () => {
           branchId: TEST_BRANCH_ID,
           edgeId: TEST_EDGE_ID,
           edgePublicKeyFingerprint: 'SHA256:' + 'AA:'.repeat(31) + 'AA',
-          ttlSeconds: 601, // 10m 1s -> exceeds maximum
+          ttlSeconds: 601,
         });
       },
       (err: unknown) => {
@@ -697,7 +1054,6 @@ describe('WP-009 Edge Enrollment & Trust Bootstrap Protocol', () => {
     });
     const legitPort = await legitServer.start(0, '127.0.0.1');
 
-    // Construct an oversized payload > 64 KB
     const hugePadding = 'A'.repeat(MAX_ENROLLMENT_BODY_BYTES + 1024);
     const hugePayload = JSON.stringify({
       pairingId: crypto.randomUUID(),
@@ -736,9 +1092,7 @@ describe('WP-009 Edge Enrollment & Trust Bootstrap Protocol', () => {
   });
 
   it('Discovery is not Trust: mDNS advertisement does not bypass fingerprint validation', async () => {
-    // An attacker advertises a service matching every normal discovery attribute:
-    // named "TRIDENTPOS", valid IP, expected port, service name.
-    const discovery = new MdnsDiscoveryService();
+    const discovery = new MdnsDiscoveryService(new InMemoryDiscoveryProvider());
     await discovery.advertise({
       host: '127.0.0.1',
       port: 9999,
@@ -750,7 +1104,6 @@ describe('WP-009 Edge Enrollment & Trust Bootstrap Protocol', () => {
     assert.equal(candidates.length, 1);
     const candidate = candidates[0]!;
 
-    // Assert that candidate alone is NOT trusted and cannot be enrolled without TLS fingerprint proof
     const fakePayload = createPairingPayload({
       branchId: TEST_BRANCH_ID,
       edgeId: TEST_EDGE_ID,

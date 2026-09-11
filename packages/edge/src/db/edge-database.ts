@@ -24,12 +24,14 @@ import {
 import { WriteSerializer } from './write-serializer.js';
 import { WalCheckpointManager } from './wal-manager.js';
 import { registerTestNativeDatabase } from './test-access.js';
+import { EnrollmentPersistence } from './enrollment-persistence.js';
 
 export class EdgeDatabaseService {
   readonly #db: Database.Database;
   readonly #resolvedPath: string;
   readonly #writeSerializer: WriteSerializer;
   readonly #walManager: WalCheckpointManager;
+  #enrollmentPersistence: EnrollmentPersistence | null = null;
   #currentDurabilityMode: DurabilityMode = 'NORMAL';
   #closed = false;
   #isDurabilityCompromised = false;
@@ -303,34 +305,15 @@ export class EdgeDatabaseService {
   }
 
   /**
-   * Convenience alias for runInTransaction.
+   * Retrieves the narrow, strictly typed enrollment persistence repository.
+   * Exposes zero arbitrary SQL or native handles to callers.
    */
-  public transaction<T>(fn: () => T, options: TransactionOptions = {}): T {
-    return this.runInTransaction(fn, options);
-  }
-
-  /**
-   * Executes raw DDL or batch SQL statements with fail-closed connection check.
-   */
-  public exec(sql: string): void {
+  public getEnrollmentPersistence(): EnrollmentPersistence {
     this.assertOpen();
-    this.#db.exec(sql);
-  }
-
-  /**
-   * Executes a parameterized DML statement (INSERT, UPDATE, DELETE).
-   */
-  public run(sql: string, params: unknown[] = []): Database.RunResult {
-    this.assertOpen();
-    return this.#db.prepare(sql).run(...params);
-  }
-
-  /**
-   * Executes a parameterized query and returns all matching rows.
-   */
-  public query<T = unknown>(sql: string, params: unknown[] = []): T[] {
-    this.assertOpen();
-    return this.#db.prepare(sql).all(...params) as T[];
+    if (!this.#enrollmentPersistence) {
+      this.#enrollmentPersistence = new EnrollmentPersistence(this, this.#db);
+    }
+    return this.#enrollmentPersistence;
   }
 
   /**

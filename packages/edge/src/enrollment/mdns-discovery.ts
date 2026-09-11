@@ -8,6 +8,7 @@
  * fingerprint is independently validated against the physical pairing payload.
  */
 
+import { Bonjour, Service } from 'bonjour-service';
 import { MdnsCandidate } from './types.js';
 
 export const TRIDENTPOS_MDNS_SERVICE_NAME = '_tridentpos._tcp.local';
@@ -20,40 +21,131 @@ export interface DiscoveryProvider {
 }
 
 /**
- * In-process / Local Discovery Provider.
- * Allows controlled, isolated, deterministic discovery advertisement and enumeration
- * without third-party network daemon dependencies.
+ * Production mDNS/Bonjour Discovery Provider.
+ * Uses real LAN multicast DNS via pinned bonjour-service@1.4.4.
  */
-export class InMemoryDiscoveryProvider implements DiscoveryProvider {
-  private static readonly globalRegistry = new Map<string, MdnsCandidate>();
+export class BonjourMdnsProvider implements DiscoveryProvider {
+  #bonjour: Bonjour | null = null;
+  #publishedService: Service | null = null;
 
   public async publish(candidate: MdnsCandidate): Promise<void> {
-    InMemoryDiscoveryProvider.globalRegistry.set(candidate.edgeId, candidate);
+    if (!this.#bonjour) {
+      this.#bonjour = new Bonjour();
+    }
+    return new Promise((resolve, reject) => {
+      try {
+        this.#publishedService = this.#bonjour!.publish({
+          name: `tridentpos-${candidate.edgeId}`,
+          type: 'tridentpos',
+          port: candidate.port,
+          host: candidate.host,
+          txt: {
+            edgeId: candidate.edgeId,
+            branchId: candidate.branchId ?? '',
+            serviceName: candidate.serviceName ?? TRIDENTPOS_MDNS_SERVICE_NAME,
+          },
+        });
+        this.#publishedService.on('up', () => resolve());
+        this.#publishedService.on('error', (err) => reject(err));
+      } catch (err) {
+        reject(err);
+      }
+    });
   }
 
-  public async unpublish(edgeId: string): Promise<void> {
-    InMemoryDiscoveryProvider.globalRegistry.delete(edgeId);
+  public async unpublish(_edgeId: string): Promise<void> {
+    if (this.#publishedService) {
+      await new Promise<void>((res) => {
+        this.#publishedService!.stop(() => res());
+      });
+      this.#publishedService = null;
+    }
   }
 
-  public async discover(): Promise<readonly MdnsCandidate[]> {
-    return Array.from(InMemoryDiscoveryProvider.globalRegistry.values());
+  public async discover(timeoutMs = 2000): Promise<readonly MdnsCandidate[]> {
+    if (!this.#bonjour) {
+      this.#bonjour = new Bonjour();
+    }
+    const candidates: MdnsCandidate[] = [];
+    return new Promise((resolve) => {
+      const browser = this.#bonjour!.find({ type: 'tridentpos' }, (service) => {
+        const txt = service.txt as Record<string, string> | undefined;
+        const host = service.addresses?.[0] ?? service.host ?? '127.0.0.1';
+        candidates.push({
+          host,
+          port: service.port,
+          edgeId: txt?.edgeId ?? service.name,
+          branchId: txt?.branchId,
+          serviceName: txt?.serviceName ?? TRIDENTPOS_MDNS_SERVICE_NAME,
+        });
+      });
+
+      setTimeout(() => {
+        browser.stop();
+        resolve(Object.freeze(candidates));
+      }, timeoutMs);
+    });
   }
 
   public async destroy(): Promise<void> {
-    InMemoryDiscoveryProvider.globalRegistry.clear();
+    if (this.#publishedService) {
+      await new Promise<void>((res) => {
+        this.#publishedService!.stop(() => res());
+      });
+      this.#publishedService = null;
+    }
+    if (this.#bonjour) {
+      this.#bonjour.destroy();
+      this.#bonjour = null;
+    }
+  }
+}
+
+/**
+ * Deterministic In-Memory Discovery Provider.
+ * Exclusively for unit tests and isolated simulated networks.
+ */
+export class TestInMemoryDiscoveryProvider implements DiscoveryProvider {
+  private static readonly globalRegistry = new Map<string, MdnsCandidate>();
+
+  public async publish(candidate: MdnsCandidate): Promise<void> {
+    TestInMemoryDiscoveryProvider.globalRegistry.set(candidate.edgeId, candidate);
+  }
+
+  public async unpublish(edgeId: string): Promise<void> {
+    TestInMemoryDiscoveryProvider.globalRegistry.delete(edgeId);
+  }
+
+  public async discover(): Promise<readonly MdnsCandidate[]> {
+    return Array.from(TestInMemoryDiscoveryProvider.globalRegistry.values());
+  }
+
+  public async destroy(): Promise<void> {
+    TestInMemoryDiscoveryProvider.globalRegistry.clear();
   }
 
   public static clearAll(): void {
-    InMemoryDiscoveryProvider.globalRegistry.clear();
+    TestInMemoryDiscoveryProvider.globalRegistry.clear();
   }
 }
+
+/** Backwards-compatible alias for existing test fixtures */
+export const InMemoryDiscoveryProvider = TestInMemoryDiscoveryProvider;
 
 export class MdnsDiscoveryService {
   readonly #provider: DiscoveryProvider;
   #currentCandidate: MdnsCandidate | null = null;
 
-  constructor(provider: DiscoveryProvider = new InMemoryDiscoveryProvider()) {
-    this.#provider = provider;
+  constructor(provider?: DiscoveryProvider) {
+    // Production default MUST be the real mDNS provider (R1-C)
+    this.#provider = provider ?? new BonjourMdnsProvider();
+  }
+
+  /**
+   * Returns the underlying discovery provider.
+   */
+  public get provider(): DiscoveryProvider {
+    return this.#provider;
   }
 
   /**

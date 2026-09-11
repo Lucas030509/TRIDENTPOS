@@ -7,7 +7,6 @@ export * from './types.js';
 export * from './crypto.js';
 export * from './pairing-payload.js';
 export * from './pairing-store.js';
-export * from './tls-identity.js';
 export * from './mdns-discovery.js';
 export * from './enrollment-server.js';
 export * from './station-client.js';
