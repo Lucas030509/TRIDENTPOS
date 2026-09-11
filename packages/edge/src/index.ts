@@ -46,3 +46,6 @@ export * from './preload.js';
 
 // Re-export Proof Renderer & Audit
 export * from './renderer.js';
+
+// Re-export Local Database & Durability Manager (WP-008)
+export * from './db/index.js';
