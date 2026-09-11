@@ -1,13 +1,13 @@
 # DATA DICTIONARY — ERP RESTAURANTES / TRIDENTPOS
 
-> [!WARNING]
-> **ACR-2026-011 PROPOSED OVERLAY — NOT CANONICAL UNTIL PRODUCT OWNER APPROVAL AND MERGE TO MAIN**
+> [!NOTE]
+> **ACR-2026-011 PRODUCT OWNER APPROVED OVERLAY — PENDING MERGE TO MAIN**
 > 
-> The additions in this document relating to WP-009 (`enrollment_tokens`, `station_credentials`, `edge_security_audit`) represent proposed governance overlays under review via ACR-2026-011. The underlying baseline remains `APPROVED / FROZEN — 2026-09-01`.
+> The additions in this document relating to WP-009 (`enrollment_tokens`, `station_credentials`, `edge_security_audit`) represent governance overlays formally approved by the Product Owner via ACR-2026-011, pending promotion into canonical main. The underlying baseline remains `APPROVED / FROZEN — 2026-09-01`.
 
 **Document ID:** `ARCH-DIC-001`  
-**Version:** `1.0 APPROVED / FROZEN` (with ACR-2026-011 Proposed Overlay)  
-**Status:** `APPROVED / FROZEN — 2026-09-01` (`ACR-2026-011 PROPOSAL PENDING PO APPROVAL`)  
+**Version:** `1.0 APPROVED / FROZEN` (with ACR-2026-011 Approved Overlay)  
+**Status:** `APPROVED / FROZEN — 2026-09-01` (`ACR-2026-011 PRODUCT OWNER APPROVED — PENDING MERGE TO MAIN`)  
 **Date:** 2026-09-01  
 **Framework:** `EAAF v1.2.0 @ 7e036f43240b3dc28ccb996e350263598275b2cd`  
 **Author Agent:** `03_Data_Architect` (Overlay Synthesis: `01_Solution_Architect`)  
@@ -153,4 +153,4 @@
 
 ---
 
-DOCUMENT STATUS: APPROVED / FROZEN — 2026-09-01 (ACR-2026-011 PROPOSED ADDITIONS PENDING PRODUCT OWNER APPROVAL)
+DOCUMENT STATUS: APPROVED / FROZEN — 2026-09-01 (ACR-2026-011 PRODUCT OWNER APPROVED — PENDING MERGE TO MAIN)

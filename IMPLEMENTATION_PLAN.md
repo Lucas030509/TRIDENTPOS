@@ -1,13 +1,13 @@
 # IMPLEMENTATION PLAN — ERP RESTAURANTES / TRIDENTPOS
 
-> [!WARNING]
-> **ACR-2026-011 PROPOSED OVERLAY — NOT CANONICAL UNTIL PRODUCT OWNER APPROVAL AND MERGE TO MAIN**
+> [!NOTE]
+> **ACR-2026-011 PRODUCT OWNER APPROVED OVERLAY — PENDING MERGE TO MAIN**
 > 
-> The additions and test specifications in this document relating to WP-009 (`DATA-INV-WP009-01`, `StationPinStore`, `EdgeSecureStore`, `edge_security_audit`, exact test obligations) represent proposed governance overlays under review via ACR-2026-011. The underlying baseline remains `APPROVED / FROZEN — 2026-09-03`.
+> The additions and test specifications in this document relating to WP-009 (`DATA-INV-WP009-01`, `StationPinStore`, `EdgeSecureStore`, `edge_security_audit`, exact test obligations) represent governance overlays approved by Product Owner. They become canonical upon merge to main. The underlying baseline remains `APPROVED / FROZEN — 2026-09-03`.
 
 **Document ID:** `PLAN-IMP-001`  
-**Version:** `1.1 REMEDIATED DRAFT (R1)` (with ACR-2026-011 Proposed Overlay)  
-**Status:** `READY FOR INDEPENDENT IMPLEMENTATION READINESS REVIEW` (`ACR-2026-011 PROPOSAL PENDING PO APPROVAL`)  
+**Version:** `1.1 APPROVED OVERLAY` (ACR-2026-011 Product Owner Approved)  
+**Status:** `READY FOR INDEPENDENT IMPLEMENTATION READINESS REVIEW` (`ACR-2026-011 PRODUCT OWNER APPROVED — PENDING MERGE TO MAIN`)  
 **Date:** `2026-09-03`  
 **Author Agent:** `01_Solution_Architect — IMPLEMENTATION READINESS REMEDIATION AUTHOR` (Overlay Synthesis: `01_Solution_Architect`)  
 **Target Gate:** `gates/IMPLEMENTATION_READINESS_GATE.md`  

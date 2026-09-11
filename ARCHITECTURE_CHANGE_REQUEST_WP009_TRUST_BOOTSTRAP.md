@@ -1,9 +1,9 @@
 # ARCHITECTURE CHANGE REQUEST: WP-009 EDGE ENROLLMENT & TRUST BOOTSTRAP DATA AUTHORITY, KEY LIFECYCLE, AND TRANSACTION INVARIANTS
 
-> [!WARNING]
-> **ACR-2026-011 PROPOSED OVERLAY — NOT CANONICAL UNTIL PRODUCT OWNER APPROVAL AND MERGE TO MAIN**
+> [!NOTE]
+> **ACR-2026-011 PRODUCT OWNER APPROVED OVERLAY — PENDING MERGE TO MAIN**
 > 
-> This document constitutes a formal Architecture Change Request under EAAF v1.2.0. Its contents represent proposed architectural governance amendments and are NOT canonical until explicitly approved by the Product Owner and merged into main.
+> This document constitutes a formal Architecture Change Request under EAAF v1.2.0. Its contents have been explicitly approved by the Product Owner and become canonical upon merge into main.
 
 **ID:** `ACR-2026-011`  
 **Framework:** `EAAF v1.2.0 @ 7e036f43240b3dc28ccb996e350263598275b2cd`  
@@ -11,7 +11,7 @@
 **Requester:** `01_Solution_Architect — ACR-2026-011 GOVERNANCE SYNTHESIS AUTHOR`  
 **Clarification Inputs:** `03_Data_Architect` (ED9), `08_Security_Architect` (ES9C), and EAAF Coordinator Synthesis Corrections  
 **Date:** `2026-09-11`  
-**Status:** `PROPOSED / PENDING PRODUCT OWNER APPROVAL`  
+**Status:** `PRODUCT OWNER APPROVED — PENDING MERGE TO MAIN`  
 **Base Commit:** `bb44f35bbe459ae86869b541e42dea12fc8173f8` (`G8`)  
 **Operating Mode:** `SOLO_MAINTAINER`  
 **Classification:** `ARCHITECTURE CLARIFICATION & SSOT GOVERNANCE SYNTHESIS (REMEDIATION R1)`  
@@ -184,9 +184,9 @@ Upon Product Owner approval of this ACR:
 ====================================================================================================
 PRODUCT OWNER GOVERNANCE APPROVAL
 ====================================================================================================
-[ ] APPROVED
+[X] APPROVED
 [ ] REJECTED / REVISION REQUIRED
 
-Product Owner: _______________________________      Date: ________________________
+Product Owner: Product Owner (via EAAF v1.2.0)      Date: 2026-09-11
 ====================================================================================================
 ```

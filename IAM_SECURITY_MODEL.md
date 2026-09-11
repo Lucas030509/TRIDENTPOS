@@ -1,13 +1,13 @@
 # IAM SECURITY MODEL SPECIFICATION — ERP RESTAURANTES
 
-> [!WARNING]
-> **ACR-2026-011 PROPOSED OVERLAY — NOT CANONICAL UNTIL PRODUCT OWNER APPROVAL AND MERGE TO MAIN**
+> [!NOTE]
+> **ACR-2026-011 PRODUCT OWNER APPROVED OVERLAY — PENDING MERGE TO MAIN**
 > 
-> The additions and specifications in this document relating to WP-009 (`EdgeSecureStore`, exact 32-byte HMAC key lifecycle, trustedEffectiveTime, atomic enrollment audit) represent proposed governance overlays under review via ACR-2026-011. The underlying baseline remains `APPROVED / FROZEN — 2026-09-03`.
+> The additions and specifications in this document relating to WP-009 (`EdgeSecureStore`, exact 32-byte HMAC key lifecycle, trustedEffectiveTime, atomic enrollment audit) represent governance overlays formally approved by the Product Owner via ACR-2026-011, pending promotion into canonical main. The underlying baseline remains `APPROVED / FROZEN — 2026-09-03`.
 
 **Document ID:** `ARCH-IAM-001`  
-**Version:** `1.2 REMEDIATED DRAFT (R2.1)` (with ACR-2026-011 Proposed Overlay)  
-**Status:** `APPROVED / FROZEN — 2026-09-03` (`ACR-2026-011 PROPOSAL PENDING PO APPROVAL`)  
+**Version:** `1.2 REMEDIATED DRAFT (R2.1)` (with ACR-2026-011 Approved Overlay)  
+**Status:** `APPROVED / FROZEN — 2026-09-03` (`ACR-2026-011 PRODUCT OWNER APPROVED — PENDING MERGE TO MAIN`)  
 **Date:** 2026-09-02  
 **Framework:** `EAAF v1.2.0 @ 7e036f43240b3dc28ccb996e350263598275b2cd`  
 **Author Agent:** `08_Security_Architect — Remediation Author` (Overlay Synthesis: `01_Solution_Architect`)  
@@ -113,4 +113,4 @@ graph TD
 
 ---
 
-DOCUMENT STATUS: APPROVED / FROZEN — 2026-09-03 (ACR-2026-011 PROPOSED ADDITIONS PENDING PRODUCT OWNER APPROVAL)
+DOCUMENT STATUS: APPROVED / FROZEN — 2026-09-03 (ACR-2026-011 PRODUCT OWNER APPROVED — PENDING MERGE TO MAIN)

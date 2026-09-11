@@ -1,13 +1,13 @@
 # SECURITY CONTROL & AUTHORIZATION MATRIX — ERP RESTAURANTES
 
-> [!WARNING]
-> **ACR-2026-011 PROPOSED OVERLAY — NOT CANONICAL UNTIL PRODUCT OWNER APPROVAL AND MERGE TO MAIN**
+> [!NOTE]
+> **ACR-2026-011 PRODUCT OWNER APPROVED OVERLAY — PENDING MERGE TO MAIN**
 > 
-> The additions in this document relating to WP-009 (`SEC-VAL-03` debt disposition, atomic enrollment audit controls) represent proposed governance overlays under review via ACR-2026-011. The underlying baseline remains `APPROVED / FROZEN — 2026-09-03`.
+> The additions in this document relating to WP-009 (`SEC-VAL-03` debt disposition, atomic enrollment audit controls) represent governance overlays approved by Product Owner. They become canonical upon merge to main. The underlying baseline remains `APPROVED / FROZEN — 2026-09-03`.
 
 **Document ID:** `ARCH-SCM-001`  
-**Version:** `1.2 REMEDIATED DRAFT (R2.1)` (with ACR-2026-011 Proposed Overlay)  
-**Status:** `APPROVED / FROZEN — 2026-09-03` (`ACR-2026-011 PROPOSAL PENDING PO APPROVAL`)  
+**Version:** `1.2 APPROVED OVERLAY` (ACR-2026-011 Product Owner Approved)  
+**Status:** `APPROVED / FROZEN — 2026-09-03` (`ACR-2026-011 PRODUCT OWNER APPROVED — PENDING MERGE TO MAIN`)  
 **Date:** 2026-09-02  
 **Framework:** `EAAF v1.2.0 @ 7e036f43240b3dc28ccb996e350263598275b2cd`  
 **Author Agent:** `08_Security_Architect — Remediation Author` (Overlay Synthesis: `01_Solution_Architect`)  
@@ -55,4 +55,4 @@
 
 ---
 
-DOCUMENT STATUS: APPROVED / FROZEN — 2026-09-03 (ACR-2026-011 PROPOSED ADDITIONS PENDING PRODUCT OWNER APPROVAL)
+DOCUMENT STATUS: APPROVED / FROZEN — 2026-09-03 (ACR-2026-011 OVERLAY: PRODUCT OWNER APPROVED — PENDING MERGE TO MAIN)
