@@ -1,13 +1,13 @@
 # DATA MODEL SPECIFICATION — ERP RESTAURANTES / TRIDENTPOS
 
 > [!NOTE]
-> **ACR-2026-011 PRODUCT OWNER APPROVED OVERLAY — PENDING MERGE TO MAIN**
+> **ACR-2026-011 APPROVED / MERGED / CANONICAL ON MAIN — G9**
 > 
-> The additions in this document relating to WP-009 (`enrollment_tokens`, `station_credentials`, `edge_security_audit`) represent governance overlays formally approved by the Product Owner via ACR-2026-011, pending promotion into canonical main. The underlying baseline remains `APPROVED / FROZEN — 2026-09-01`.
+> The additions in this document relating to WP-009 (`enrollment_tokens`, `station_credentials`, `edge_security_audit`) represent governance overlays formally approved and merged into canonical main under G9 (`0e50fe12ba7a95638c8efe57d4cd9c598b56daa9`). The underlying baseline remains `APPROVED / FROZEN — 2026-09-01`.
 
 **Document ID:** `ARCH-MDL-001`  
-**Version:** `1.0 APPROVED / FROZEN` (with ACR-2026-011 Approved Overlay)  
-**Status:** `APPROVED / FROZEN — 2026-09-01` (`ACR-2026-011 PRODUCT OWNER APPROVED — PENDING MERGE TO MAIN`)  
+**Version:** `1.0 APPROVED / FROZEN` (with ACR-2026-011 Canonical Overlay — G9)  
+**Status:** `APPROVED / FROZEN — 2026-09-01` (`ACR-2026-011 APPROVED / MERGED / CANONICAL ON MAIN — G9`)  
 **Date:** 2026-09-01  
 **Framework:** `EAAF v1.2.0 @ 7e036f43240b3dc28ccb996e350263598275b2cd`  
 **Author Agent:** `03_Data_Architect` (Overlay Synthesis: `01_Solution_Architect`)  
@@ -948,4 +948,4 @@ CREATE TABLE local_audit_trail (
 
 ---
 
-DOCUMENT STATUS: APPROVED / FROZEN — 2026-09-01 (ACR-2026-011 PRODUCT OWNER APPROVED — PENDING MERGE TO MAIN)
+DOCUMENT STATUS: APPROVED / FROZEN — 2026-09-01 (ACR-2026-011 APPROVED / MERGED / CANONICAL ON MAIN — G9)

@@ -9,7 +9,7 @@
 **Author Agent:** `01_Solution_Architect — ACR-2026-011 GOVERNANCE SYNTHESIS AUTHOR`  
 **Clarification Inputs:** `03_Data_Architect` (ED9), `08_Security_Architect` (ES9C), and EAAF Coordinator Synthesis Corrections  
 **Governing ACR:** [`ARCHITECTURE_CHANGE_REQUEST_WP009_TRUST_BOOTSTRAP.md`](file:///Volumes/SSD_ORICO/BRAIN/TRIDENTPOSREST/eeaaf/TRIDENTPOS/ARCHITECTURE_CHANGE_REQUEST_WP009_TRUST_BOOTSTRAP.md)  
-**Status:** `PRODUCT OWNER APPROVED — PENDING MERGE TO MAIN`  
+**Status:** `ACR-2026-011 APPROVED / MERGED / CANONICAL ON MAIN — G9`  
 
 ---
 
@@ -109,8 +109,8 @@ Ten (10) SSOT architecture and governance files have been amended in GA11-R1:
 - [x] PR #28 modified: **NO** (PR remains in its original state on branch `feature/wp-009-edge-enrollment-trust-bootstrap`).
 - [x] Clarification branches ED9 and ES9C modified: **NO** (Both remain unchanged sibling branches).
 - [x] Product Owner protected decisions (`OQ-SSOT-01` to `07`, `OQ-ARCH-01`, `OQ-ARCH-02`) preserved: **YES** (All remain `PENDING PO DECISION`).
-- [x] Product Owner Status: **`PRODUCT OWNER APPROVED — PENDING MERGE TO MAIN`**.
+- [x] Product Owner Status: **`ACR-2026-011 APPROVED / MERGED / CANONICAL ON MAIN — G9`**.
 
 ---
 
-DOCUMENT STATUS: PRODUCT OWNER APPROVED — PENDING MERGE TO MAIN
+DOCUMENT STATUS: ACR-2026-011 APPROVED / MERGED / CANONICAL ON MAIN — G9
