@@ -1,7 +1,8 @@
 /**
  * TRIDENTPOS Edge Pairing Store and Station Token Signer
  * Implements HMAC key management (exact 32 bytes CSPRNG), token signing before DB transaction,
- * and atomic station enrollment per ACR-2026-011 and IAM_SECURITY_MODEL.md Sec. 4 & 5.
+ * and atomic station enrollment per ACR-2026-011, IAM_SECURITY_MODEL.md Sec. 4 & 5,
+ * and QI-IAM-04 (persistent active and previous HMAC verification key across process restarts).
  */
 
 import crypto from 'node:crypto';
@@ -34,6 +35,12 @@ export interface EdgePairingStoreOptions {
   readonly defaultPairingTtlSeconds?: number;
 }
 
+interface HmacKeyMetadata {
+  activeKeyVersion: number;
+  previousKeyVersion: number | null;
+  previousKeyExpiresAt: number | null;
+}
+
 export class EdgePairingStore {
   readonly #organizationId: string;
   readonly #branchId: string;
@@ -44,8 +51,10 @@ export class EdgePairingStore {
   readonly #trustedTimeManager: TrustedTimeManager;
   readonly #defaultTtlSeconds: number;
 
-  #activeHmacKey: Buffer;
+  #activeHmacKey!: Buffer;
+  #activeKeyVersion = 1;
   #previousHmacKey: Buffer | null = null;
+  #previousKeyVersion: number | null = null;
   #previousHmacKeyExpiresAt: number | null = null;
 
   constructor(options: EdgePairingStoreOptions) {
@@ -58,43 +67,128 @@ export class EdgePairingStore {
     this.#trustedTimeManager = options.trustedTimeManager;
     this.#defaultTtlSeconds = Math.min(options.defaultPairingTtlSeconds ?? 600, 600);
 
-    this.#activeHmacKey = this.#loadOrGenerateHmacKey();
+    this.#loadOrInitializeHmacKeys();
   }
 
-  #loadOrGenerateHmacKey(): Buffer {
-    const keyName = 'station_token_hmac_key';
-    if (this.#secureStore.hasSecret(keyName)) {
-      const key = this.#secureStore.loadSecret(keyName);
-      validateHmacKeyLength(key);
-      return key;
+  #loadOrInitializeHmacKeys(): void {
+    const activeKeySecret = 'station_token_hmac_active_key';
+    const previousKeySecret = 'station_token_hmac_previous_key';
+    const metadataSecret = 'station_token_hmac_metadata';
+
+    if (this.#secureStore.hasSecret(activeKeySecret)) {
+      this.#activeHmacKey = this.#secureStore.loadSecret(activeKeySecret);
+      validateHmacKeyLength(this.#activeHmacKey);
+
+      if (this.#secureStore.hasSecret(metadataSecret)) {
+        try {
+          const meta = JSON.parse(
+            this.#secureStore.loadSecret(metadataSecret).toString('utf8'),
+          ) as HmacKeyMetadata;
+          this.#activeKeyVersion =
+            typeof meta.activeKeyVersion === 'number' ? meta.activeKeyVersion : 1;
+
+          let effectiveTime: number;
+          try {
+            effectiveTime = this.#trustedTimeManager.getTrustedEffectiveTime();
+          } catch {
+            effectiveTime = Math.floor(Date.now() / 1000);
+          }
+
+          if (
+            meta.previousKeyExpiresAt !== null &&
+            typeof meta.previousKeyExpiresAt === 'number' &&
+            effectiveTime <= meta.previousKeyExpiresAt
+          ) {
+            if (this.#secureStore.hasSecret(previousKeySecret)) {
+              this.#previousHmacKey = this.#secureStore.loadSecret(previousKeySecret);
+              validateHmacKeyLength(this.#previousHmacKey);
+              this.#previousHmacKeyExpiresAt = meta.previousKeyExpiresAt;
+              this.#previousKeyVersion = meta.previousKeyVersion;
+            }
+          } else {
+            // Expired or none: securely purge previous key
+            if (this.#secureStore.hasSecret(previousKeySecret)) {
+              this.#secureStore.deleteSecret(previousKeySecret);
+            }
+            this.#previousHmacKey = null;
+            this.#previousHmacKeyExpiresAt = null;
+            this.#previousKeyVersion = null;
+            this.#saveMetadata();
+          }
+        } catch {
+          this.#activeKeyVersion = 1;
+        }
+      }
+      return;
     }
 
-    // Generate fresh exact 32-byte key
+    // Fresh first bootstrap: generate initial exact 32-byte key
     const newKey = crypto.randomBytes(32);
     validateHmacKeyLength(newKey);
-    this.#secureStore.storeSecret(keyName, newKey);
-    return newKey;
+    this.#activeHmacKey = newKey;
+    this.#activeKeyVersion = 1;
+    this.#previousHmacKey = null;
+    this.#previousHmacKeyExpiresAt = null;
+    this.#previousKeyVersion = null;
+
+    this.#secureStore.storeSecret(activeKeySecret, newKey);
+    this.#saveMetadata();
+  }
+
+  #saveMetadata(): void {
+    const payload: HmacKeyMetadata = {
+      activeKeyVersion: this.#activeKeyVersion,
+      previousKeyVersion: this.#previousKeyVersion,
+      previousKeyExpiresAt: this.#previousHmacKeyExpiresAt,
+    };
+    this.#secureStore.storeSecret(
+      'station_token_hmac_metadata',
+      Buffer.from(JSON.stringify(payload), 'utf8'),
+    );
+  }
+
+  public getActiveKeyVersion(): number {
+    return this.#activeKeyVersion;
+  }
+
+  public getPreviousKeyVersion(): number | null {
+    return this.#previousKeyVersion;
+  }
+
+  public getPreviousKeyExpiresAt(): number | null {
+    return this.#previousHmacKeyExpiresAt;
   }
 
   /**
    * Rotates the station token HMAC key with 12-hour grace period retention for previous key.
-   * Supervised emergency invalidation can purge previous key immediately.
+   * Both active and previous keys, along with version and expiry metadata, are persisted in EdgeSecureStore.
+   * Supervised emergency invalidation purges previous key immediately from memory and storage.
    */
   public rotateHmacKey(options: { emergencyImmediateInvalidation?: boolean } = {}): void {
     const effectiveTime = this.#trustedTimeManager.getTrustedEffectiveTime();
     const newKey = crypto.randomBytes(32);
     validateHmacKeyLength(newKey);
 
+    const previousKeySecret = 'station_token_hmac_previous_key';
+
     if (options.emergencyImmediateInvalidation) {
       this.#previousHmacKey = null;
       this.#previousHmacKeyExpiresAt = null;
+      this.#previousKeyVersion = null;
+      if (this.#secureStore.hasSecret(previousKeySecret)) {
+        this.#secureStore.deleteSecret(previousKeySecret);
+      }
     } else {
       this.#previousHmacKey = this.#activeHmacKey;
+      this.#previousKeyVersion = this.#activeKeyVersion;
       this.#previousHmacKeyExpiresAt = effectiveTime + 43200; // 12 hours
+      this.#secureStore.storeSecret(previousKeySecret, this.#previousHmacKey);
     }
 
     this.#activeHmacKey = newKey;
-    this.#secureStore.storeSecret('station_token_hmac_key', newKey);
+    this.#activeKeyVersion += 1;
+    this.#secureStore.storeSecret('station_token_hmac_active_key', newKey);
+    this.#saveMetadata();
   }
 
   /**
@@ -108,9 +202,14 @@ export class EdgePairingStore {
       if (effectiveTime <= this.#previousHmacKeyExpiresAt) {
         prevKeyToUse = this.#previousHmacKey;
       } else {
-        // Expired previous key purged
+        // Expired previous key securely purged
         this.#previousHmacKey = null;
         this.#previousHmacKeyExpiresAt = null;
+        this.#previousKeyVersion = null;
+        if (this.#secureStore.hasSecret('station_token_hmac_previous_key')) {
+          this.#secureStore.deleteSecret('station_token_hmac_previous_key');
+        }
+        this.#saveMetadata();
       }
     }
 

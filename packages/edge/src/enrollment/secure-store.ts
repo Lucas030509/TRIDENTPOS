@@ -8,6 +8,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { createRequire } from 'node:module';
 import {
   EdgeSecureStoreError,
   EdgeTlsKeyMissingOrCorruptedError,
@@ -16,7 +17,7 @@ import {
 } from './types.js';
 
 /**
- * Pluggable backend adapter contract for EdgeSecureStore.
+ * Pluggable backend adapter contract for EdgeSecureStore and StationPinStore.
  * Abstracts electron.safeStorage or platform OS keyring primitives.
  */
 export interface SecureStorageBackend {
@@ -28,22 +29,42 @@ export interface SecureStorageBackend {
 
 /**
  * Standard Electron safeStorage adapter.
+ * Uses native OS-backed keyring (DPAPI on Windows, Keychain Services on macOS, Secret Service on Linux).
+ * Prohibits basic_text on Linux.
  */
 export class ElectronSafeStorageBackend implements SecureStorageBackend {
   readonly #safeStorage: typeof import('electron').safeStorage | null;
 
   constructor(electronSafeStorage?: typeof import('electron').safeStorage) {
-    this.#safeStorage = electronSafeStorage ?? null;
+    if (electronSafeStorage) {
+      this.#safeStorage = electronSafeStorage;
+    } else {
+      try {
+        const req = createRequire(import.meta.url);
+        const electron = req('electron') as typeof import('electron');
+        this.#safeStorage = electron?.safeStorage ?? null;
+      } catch {
+        this.#safeStorage = null;
+      }
+    }
   }
 
   public isAvailable(): boolean {
     if (!this.#safeStorage) return false;
-    return this.#safeStorage.isEncryptionAvailable();
+    try {
+      return this.#safeStorage.isEncryptionAvailable();
+    } catch {
+      return false;
+    }
   }
 
   public getSelectedStorageBackend(): string {
     if (!this.#safeStorage) return 'unavailable';
-    return this.#safeStorage.getSelectedStorageBackend();
+    try {
+      return this.#safeStorage.getSelectedStorageBackend();
+    } catch {
+      return 'unavailable';
+    }
   }
 
   public encrypt(plaintext: Buffer): Buffer {
@@ -75,101 +96,9 @@ export class ElectronSafeStorageBackend implements SecureStorageBackend {
 }
 
 /**
- * Authenticated AES-256-GCM storage backend used for Node.js / CLI headless environments.
- * Strictly adheres to non-plaintext storage and rejects basic_text simulation.
- */
-export class NodeCryptoVaultBackend implements SecureStorageBackend {
-  readonly #masterKey: Buffer;
-  readonly #simulatedBackendName: string;
-  readonly #available: boolean;
-
-  constructor(
-    options: {
-      masterKey?: Buffer;
-      simulatedBackendName?: string;
-      available?: boolean;
-    } = {},
-  ) {
-    this.#available = options.available ?? true;
-    this.#simulatedBackendName = options.simulatedBackendName ?? 'os_keyring_emulated';
-
-    if (options.masterKey) {
-      if (options.masterKey.length !== 32) {
-        throw new EdgeSecureStoreError('NodeCryptoVault masterKey must be exactly 32 bytes');
-      }
-      this.#masterKey = options.masterKey;
-    } else {
-      // Derive a deterministic host-bound key for test headless execution
-      const salt = Buffer.from('TRIDENTPOS_EDGE_NODE_VAULT_SALT_v1', 'utf8');
-      this.#masterKey = crypto.scryptSync('TRIDENT_HEADLESS_KEYRING_SECRET', salt, 32);
-    }
-  }
-
-  public isAvailable(): boolean {
-    return this.#available;
-  }
-
-  public getSelectedStorageBackend(): string {
-    return this.#simulatedBackendName;
-  }
-
-  public encrypt(plaintext: Buffer): Buffer {
-    if (!this.#available) {
-      throw new EdgeSecureStoreError('Secure storage encryption is not available on this host');
-    }
-    if (this.#simulatedBackendName === 'basic_text') {
-      throw new EdgeSecureStoreError(
-        "Insecure storage backend 'basic_text' on Linux is strictly prohibited. Failing closed.",
-      );
-    }
-
-    const iv = crypto.randomBytes(12);
-    const cipher = crypto.createCipheriv('aes-256-gcm', this.#masterKey, iv);
-    const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
-    const tag = cipher.getAuthTag();
-
-    // Wire format: [12 bytes IV] + [16 bytes Tag] + [Ciphertext]
-    return Buffer.concat([iv, tag, ciphertext]);
-  }
-
-  public decrypt(data: Buffer): Buffer {
-    if (!this.#available) {
-      throw new EdgeSecureStoreError('Secure storage encryption is not available on this host');
-    }
-    if (this.#simulatedBackendName === 'basic_text') {
-      throw new EdgeSecureStoreError(
-        "Insecure storage backend 'basic_text' on Linux is strictly prohibited. Failing closed.",
-      );
-    }
-
-    if (data.length < 28) {
-      throw new EdgeSecureStoreError('Ciphertext data too short or corrupt');
-    }
-
-    const iv = data.subarray(0, 12);
-    const tag = data.subarray(12, 28);
-    const ciphertext = data.subarray(28);
-
-    const decipher = crypto.createDecipheriv('aes-256-gcm', this.#masterKey, iv);
-    decipher.setAuthTag(tag);
-
-    try {
-      return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
-    } catch (err) {
-      throw new EdgeSecureStoreError(
-        `Secure storage decryption failed: ${(err as Error).message}`,
-        {
-          cause: err,
-        },
-      );
-    }
-  }
-}
-
-/**
  * EdgeSecureStore
  * Manages encrypted at rest secrets for Edge Host (TLS private key, Station token HMAC key).
- * Enforces fail-closed semantics and zero plaintext persistence.
+ * Enforces fail-closed semantics, OS-backed encryption, and zero plaintext persistence.
  */
 export class EdgeSecureStore {
   readonly #storageDir: string;
@@ -177,12 +106,12 @@ export class EdgeSecureStore {
 
   constructor(options: { storageDir: string; backend?: SecureStorageBackend }) {
     this.#storageDir = path.resolve(options.storageDir);
-    this.#backend = options.backend ?? new NodeCryptoVaultBackend();
+    this.#backend = options.backend ?? new ElectronSafeStorageBackend();
 
     // Assert secure storage backend is available and not basic_text immediately upon construction
     if (!this.#backend.isAvailable()) {
       throw new EdgeSecureStoreError(
-        'EdgeSecureStore initialization failed: host secure storage encryption is unavailable. Failing closed.',
+        'EdgeSecureStore initialization failed: host OS secure storage encryption is unavailable. Failing closed.',
       );
     }
     const backendName = this.#backend.getSelectedStorageBackend();
@@ -239,28 +168,50 @@ export class EdgeSecureStore {
     const targetFile = path.join(this.#storageDir, `${keyName}.enc`);
     return fs.existsSync(targetFile);
   }
+
+  /**
+   * Securely deletes a secret from the store.
+   */
+  public deleteSecret(keyName: string): void {
+    const targetFile = path.join(this.#storageDir, `${keyName}.enc`);
+    if (fs.existsSync(targetFile)) {
+      fs.unlinkSync(targetFile);
+    }
+  }
 }
 
 /**
  * StationPinStore
  * Client-side tamper-resistant store persisting verified TLS certificate fingerprints.
- * Enforces: PIN STORE FAILURE => ZERO SECRET DISCLOSURE + ZERO SERVER MUTATION.
+ * Backed by platform secure storage (encrypted at rest; never mutable plaintext JSON).
+ * Enforces:
+ * 1. Initial enrollment pin can be established.
+ * 2. Normal runtime code CANNOT overwrite an existing pin (mismatch fails closed).
+ * 3. Administrative reset requires supervised physical intervention.
+ * 4. PIN STORE FAILURE => ZERO SECRET DISCLOSURE + ZERO SERVER MUTATION.
  */
 export class StationPinStore {
   readonly #storeFilePath: string;
+  readonly #backend: SecureStorageBackend;
   #pins: Map<string, StationPinRecord> = new Map();
-  #simulateWriteFailure = false;
 
-  constructor(options: { storeFilePath: string }) {
+  constructor(options: { storeFilePath: string; backend?: SecureStorageBackend }) {
     this.#storeFilePath = path.resolve(options.storeFilePath);
-    this.#loadFromFile();
-  }
+    this.#backend = options.backend ?? new ElectronSafeStorageBackend();
 
-  /**
-   * Test-only fault injection hook to simulate pin store persistence failure.
-   */
-  public setSimulateWriteFailure(fail: boolean): void {
-    this.#simulateWriteFailure = fail;
+    if (!this.#backend.isAvailable()) {
+      throw new StationPinStoreError(
+        'StationPinStore initialization failed: host secure storage encryption is unavailable. Failing closed.',
+      );
+    }
+    const backendName = this.#backend.getSelectedStorageBackend();
+    if (backendName === 'basic_text') {
+      throw new StationPinStoreError(
+        "Insecure storage backend 'basic_text' on Linux is strictly prohibited. Failing closed.",
+      );
+    }
+
+    this.#loadFromFile();
   }
 
   #getCompositeKey(branchId: string, edgeId: string): string {
@@ -272,8 +223,9 @@ export class StationPinStore {
       return;
     }
     try {
-      const content = fs.readFileSync(this.#storeFilePath, 'utf8');
-      const data = JSON.parse(content) as StationPinRecord[];
+      const rawEncrypted = fs.readFileSync(this.#storeFilePath);
+      const decrypted = this.#backend.decrypt(rawEncrypted);
+      const data = JSON.parse(decrypted.toString('utf8')) as StationPinRecord[];
       for (const item of data) {
         this.#pins.set(this.#getCompositeKey(item.branchId, item.edgeId), item);
       }
@@ -286,19 +238,30 @@ export class StationPinStore {
   }
 
   #saveToFile(): void {
-    if (this.#simulateWriteFailure) {
-      throw new StationPinStoreError('Simulated StationPinStore write failure');
-    }
+    try {
+      const dir = path.dirname(this.#storeFilePath);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
 
-    const dir = path.dirname(this.#storeFilePath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
+      const data = Array.from(this.#pins.values());
+      const jsonBuffer = Buffer.from(JSON.stringify(data, null, 2), 'utf8');
+      const encrypted = this.#backend.encrypt(jsonBuffer);
 
-    const data = Array.from(this.#pins.values());
-    const tempFile = `${this.#storeFilePath}.${crypto.randomUUID()}.tmp`;
-    fs.writeFileSync(tempFile, JSON.stringify(data, null, 2), 'utf8');
-    fs.renameSync(tempFile, this.#storeFilePath);
+      const tempFile = `${this.#storeFilePath}.${crypto.randomUUID()}.tmp`;
+      fs.writeFileSync(tempFile, encrypted);
+      fs.renameSync(tempFile, this.#storeFilePath);
+    } catch (err) {
+      throw new StationPinStoreError(
+        `Failed to save StationPinStore to '${this.#storeFilePath}': ${(err as Error).message}`,
+        { cause: err },
+      );
+    }
+  }
+
+  #setInitialPin(record: StationPinRecord): void {
+    this.#pins.set(this.#getCompositeKey(record.branchId, record.edgeId), record);
+    this.#saveToFile();
   }
 
   /**
@@ -309,17 +272,9 @@ export class StationPinStore {
   }
 
   /**
-   * Persists a verified fingerprint in StationPinStore.
-   * Fails closed if write fails.
-   */
-  public setPin(record: StationPinRecord): void {
-    this.#pins.set(this.#getCompositeKey(record.branchId, record.edgeId), record);
-    this.#saveToFile();
-  }
-
-  /**
-   * Verifies a candidate fingerprint against stored pin or sets new pin.
+   * Verifies a candidate fingerprint against stored pin or sets initial pin.
    * If pin already exists, candidate must match stored pin.
+   * Normal runtime code cannot overwrite an existing pin. Mismatch fails closed.
    */
   public verifyOrPin(branchId: string, edgeId: string, candidateFingerprint: string): boolean {
     const existing = this.getPin(branchId, edgeId);
@@ -327,14 +282,45 @@ export class StationPinStore {
       return existing.edgePublicKeyFingerprint.toUpperCase() === candidateFingerprint.toUpperCase();
     }
 
-    // Persist new pin
+    // Persist initial verified pin
     const now = Math.floor(Date.now() / 1000);
-    this.setPin({
+    this.#setInitialPin({
       branchId,
       edgeId,
       edgePublicKeyFingerprint: candidateFingerprint.toUpperCase(),
       pinnedAt: now,
     });
     return true;
+  }
+
+  /**
+   * Supervised administrative reset of an existing PIN.
+   * Requires non-empty administrative authorization token.
+   */
+  public supervisedAdministrativeResetPin(
+    branchId: string,
+    edgeId: string,
+    newFingerprint: string,
+    authorization: { supervisedAdminToken: string },
+  ): void {
+    if (
+      !authorization?.supervisedAdminToken ||
+      typeof authorization.supervisedAdminToken !== 'string' ||
+      authorization.supervisedAdminToken.trim() === ''
+    ) {
+      throw new StationPinStoreError(
+        'Supervised administrative pin reset rejected: non-empty administrative authorization token is required.',
+      );
+    }
+
+    const key = this.#getCompositeKey(branchId, edgeId);
+    const now = Math.floor(Date.now() / 1000);
+    this.#pins.set(key, {
+      branchId,
+      edgeId,
+      edgePublicKeyFingerprint: newFingerprint.toUpperCase(),
+      pinnedAt: now,
+    });
+    this.#saveToFile();
   }
 }

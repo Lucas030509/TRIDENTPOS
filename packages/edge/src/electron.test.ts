@@ -12,13 +12,14 @@
 
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { app, BrowserWindow } from 'electron';
+import { app, BrowserWindow, safeStorage } from 'electron';
 import { EdgeApplicationHost } from './main.js';
 import {
   HARDENED_WEB_PREFERENCES,
   assertHardenedWebPreferences,
   ElectronSecurityViolationError,
 } from './security-profile.js';
+import { ElectronSafeStorageBackend } from './enrollment/secure-store.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -558,6 +559,76 @@ async function runElectronRuntimeTests(): Promise<void> {
     recordFail(
       'WP007-E09',
       'Electron runtime launched without sandbox-disabling command-line switches',
+      (err as Error).message,
+    );
+  }
+
+  // --------------------------------------------------------------------------
+  // WP009-E01: Real Electron safeStorage OS-backed encryption validation
+  // --------------------------------------------------------------------------
+  try {
+    const backend = new ElectronSafeStorageBackend(safeStorage);
+    const isAvailable = backend.isAvailable();
+    const selectedBackend = backend.getSelectedStorageBackend();
+
+    console.log(
+      `[Electron safeStorage]: isEncryptionAvailable=${isAvailable}, backend=${selectedBackend}`,
+    );
+
+    if (isAvailable) {
+      if (selectedBackend === 'basic_text') {
+        // On Linux if basic_text is active, must fail closed
+        let failedClosed = false;
+        try {
+          backend.encrypt(Buffer.from('secret', 'utf8'));
+        } catch (err) {
+          failedClosed = (err as Error).message.includes('basic_text');
+        }
+        if (!failedClosed) {
+          throw new Error(
+            'Expected basic_text backend to fail closed, but encrypt did not fail properly',
+          );
+        }
+      } else {
+        // OS keyring available (macOS Keychain, Windows DPAPI, or Linux Secret Service)
+        const plaintext = Buffer.from('TRIDENTPOS_PRODUCTION_OS_KEYRING_VALIDATION_SECRET', 'utf8');
+        const ciphertext = backend.encrypt(plaintext);
+
+        if (ciphertext.equals(plaintext)) {
+          throw new Error('Encrypted ciphertext equals plaintext — zero encryption protection!');
+        }
+        if (
+          ciphertext.toString('utf8').includes('TRIDENTPOS_PRODUCTION_OS_KEYRING_VALIDATION_SECRET')
+        ) {
+          throw new Error('Encrypted ciphertext leaks plaintext secret!');
+        }
+
+        const decrypted = backend.decrypt(ciphertext);
+        if (!decrypted.equals(plaintext)) {
+          throw new Error('Decrypted plaintext does not match original plaintext');
+        }
+      }
+    } else {
+      // If unavailable, verify fail-closed
+      let failedClosed = false;
+      try {
+        backend.encrypt(Buffer.from('secret', 'utf8'));
+      } catch (err) {
+        failedClosed = (err as Error).message.includes('not available');
+      }
+      if (!failedClosed) {
+        throw new Error('Expected encrypt to fail closed when safeStorage is unavailable');
+      }
+    }
+
+    recordPass(
+      'WP009-E01',
+      `Actual Electron safeStorage integration verified (available: ${isAvailable}, backend: ${selectedBackend}, fail-closed: verified)`,
+    );
+  } catch (err) {
+    recordFail(
+      'WP009-E01',
+      'Actual Electron safeStorage integration verification',
       (err as Error).message,
     );
   }

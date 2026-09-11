@@ -63,6 +63,7 @@ export interface TrustedTimeAnchorRecord {
   readonly localWallTimeAtLastCloudSync: number; // Unix epoch seconds
   readonly anchorVersion: number;
   readonly updatedAt: number; // Unix epoch seconds
+  readonly integrityTag: string;
 }
 
 // ---------------------------------------------------------------------------
