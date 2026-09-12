@@ -69,7 +69,7 @@ graph TD
 - **Bloqueo Temporal de Estación:**
   - Al 5to intento fallido consecutivo: La terminal entra en estado `STATION_LOCKED` durante $5\text{ minutos}$ (`SECURITY POLICY DEFAULT`).
   - Se genera de inmediato un evento de auditoría de severidad alta (`PinBruteForceAttemptDetected`).
-  - El desbloqueo anticipado requiere la autorización de un usuario con privilegios de supervisión local.
+  - El desbloqueo anticipado requiere la autorización de un usuario con privilegios de supervisión local, gobernado estrictamente por el permiso canónico RBAC `estacion.desbloquear` (ACR-2026-012, asignado por defecto a `ROLE-001 — Administrador` y `ROLE-002 — Gerente / Supervisor`). Queda estrictamente prohibida la autorización basada en nombres o alias no canónicos.
 
 ---
 
