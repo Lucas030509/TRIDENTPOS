@@ -1,11 +1,11 @@
-# WP-012 BUILDER EVIDENCE REPORT (S12-R2)
+# WP-012 BUILDER EVIDENCE REPORT (S12-R3)
 
 **Work Package:** WP-012 Transactional Outbox & Ingested Idempotency Engine  
-**Candidate Subject:** `S12-R2` (Second Quick Integrity Remediated Candidate)  
-**Parent Candidate:** `S12-R1 = 49cb9660d01f944834df0974b815352cf1d6085c` (Immutable)  
-**Grandparent Candidate:** `S12 = 3d88bc18d6eea8ce75d47ab0e3b9c8c79f20d0d8` (Immutable)  
+**Candidate Subject:** `S12-R3` (Evidence-Only Integrity Corrected Candidate)  
+**Parent Candidate:** `S12-R2 = e018bf129fe8ceddc13fe0403c23c800f46c05cd` (Immutable)  
+**Preceding Candidates:** `S12-R1 = 49cb9660d01f944834df0974b815352cf1d6085c` (Immutable), `S12 = 3d88bc18d6eea8ce75d47ab0e3b9c8c79f20d0d8` (Immutable)  
 **Parent Baseline:** `M11 = 40d149ac139d11df7e716a561133069eef238db8`  
-**Direct Lineage:** `S12-R2^ = 49cb9660d01f944834df0974b815352cf1d6085c` (`S12-R1`)  
+**Direct Lineage:** `S12-R3^ = e018bf129fe8ceddc13fe0403c23c800f46c05cd` (`S12-R2`)  
 **Date:** 2026-09-12  
 **Author / Builder Agent:** `13_Backend_Developer`  
 **Governing Framework:** `EAAF v1.2.0` (Pinned Framework SHA: `7e036f43240b3dc28ccb996e350263598275b2cd`)  
@@ -16,60 +16,62 @@
 
 ## 1. Executive Summary & Remediation Overview
 
-Following the Coordinator HOLD decision on `S12-R1`, four blockers were verified closed (`QI-012-01`, `QI-012-03`, `QI-012-04`, `QI-012-05`), while three items remained open (`QI-012-02`, `QI-012-06`, `QI-012-07`). Under EAAF governance rules, both `S12` and `S12-R1` are strictly immutable. Candidate `S12-R2` was created as an exact direct child of `S12-R1` to resolve all remaining items:
+Candidate `S12-R2` successfully resolved all six code-level quick integrity issues (`QI-012-01` through `QI-012-06`), receiving **PASS** from the Coordinator. The Coordinator placed `QI-012-07` on **HOLD** solely because the Builder Evidence document contained approximations and wording imprecisions rather than matching literal `S12-R2` runtime artifacts.
 
-1. **QI-012-02 (CRITICAL) — Complete Trust Boundary Remediation:**
-   - **Part A (Mandatory Ingestion Issuer):** `IngestedIdempotencyEngine` strictly requires a `CloudReceiptIssuer` instance injected via constructor (`constructor(issuer: CloudReceiptIssuer)`). If omitted or null/invalid, instantiation fails closed immediately with `TypeError` (`ERR_INVALID_ARG_TYPE`). `TestCloudReceiptIssuer` and `TestCloudReceiptVerifier` were removed from production entrypoints of `@trident/core` and moved to `@trident/core/test-support` subpath export.
-   - **Part B (No Per-Call Verifier Override at Edge):** Edge `markSynced(id, ack)` strictly takes 2 parameters (`id`, `ack`). Per-call verifier override was completely removed. Verifier composition is established solely via `EdgeOutboxPersistence` constructor injection (`new EdgeOutboxPersistence(db, { verifier })`). Missing or omitted verifier fails closed.
-   - **Part C (Persisted Receipt Replay):** Added `receipt_payload JSONB NOT NULL` to Cloud `ingested_idempotency_log`. When an exact duplicate event is replayed, the engine loads and returns the exact persisted `receipt_payload` verbatim. The issuer is called exactly once on initial application and zero times on duplicate replay.
+Under EAAF governance, `S12-R2` is strictly immutable. Candidate `S12-R3` was created as an exact direct child of `S12-R2` as an **EVIDENCE-ONLY** correction. Zero code, test, migration, or configuration files were modified.
 
-2. **QI-012-06 (HIGH) — Complete Encapsulation of SQLite Handle:**
-   - Removed generic `public exec(sql)` and `public prepare(sql)` methods from `EdgeDatabaseService`.
-   - Created an internal persistence adapter (`InternalOutboxAdapter` in `packages/edge/src/db/internal-outbox-adapter.ts`) bound via module-scoped `WeakMap<EdgeDatabaseService, InternalOutboxAdapter>`.
-   - Unexported `InternalOutboxAdapter` from `@trident/edge` and `@trident/edge/db` entrypoints.
-   - Preserved `EdgeDatabaseService.runInTransaction()` as the authoritative atomic transaction boundary.
+The corrections in `S12-R3` resolve `QI-012-07` completely:
 
-3. **QI-012-07 (HIGH) — Truthful, Verbatim Builder Evidence:**
-   - Completely regenerated this document to match runtime executable code, DDL, constraints, exact test counts from CI, and commit SHAs verbatim.
-
-All 46 original tests (`WP012-T01`..`T46`), 18 S12-R1 remediation tests (`WP012-R1-T47`..`T64`), and 12 S12-R2 remediation tests (`WP012-R2-T65`..`T76`) pass 100% (76 WP-012 tests total). Monorepo test suite passes 100% (458 total tests, 0 failed, 0 skipped).
+1. **Literal Cloud PostgreSQL DDL:**
+   Replaced manually reconstructed schema snippets with the literal SQL from `packages/database/migrations/20260904210000_transactional_outbox_idempotency.sql`, preserving actual table names, column orders, check constraint values (`'RECEIVED', 'DURABLY_STORED', 'APPLIED', 'DUPLICATE_ACCEPTED', 'REJECTED', 'REQUIRES_RECONCILIATION'`), and actual constraint identifiers (`fk_idempotency_log_branch`, `uq_idempotency_log_key`, `uq_idempotency_log_client_op`, `uq_ingested_idempotency_tuple`, `chk_idempotency_log_status`).
+2. **Literal Edge SQLite Schema:**
+   Recorded the literal DDL from `packages/edge/src/db/outbox-persistence.ts`, including `id TEXT PRIMARY KEY`, `aggregate_sequence_number INTEGER NOT NULL CHECK (aggregate_sequence_number >= 1)`, `status TEXT NOT NULL DEFAULT 'PENDING'`, and `CONSTRAINT chk_outbox_status CHECK (status IN ('PENDING', 'SYNCED', 'FAILED'))`.
+3. **Truthful Test-Access Boundary Disposition:**
+   Removed inaccurate blanket statements. Accurately documented that:
+   - `EdgeOutboxPersistence` has zero dependency on `test-access.ts`.
+   - The WP-012 `InternalOutboxAdapter` has zero dependency on `test-access.ts`.
+   - `EdgeDatabaseService` retains the inherited WP-008 module-private test registry integration (`registerTestNativeDatabase`).
+   - The test registry is unexported from the production public API, and normal production consumers cannot obtain native SQLite handles.
+   - `WP012-R2-T73`, `T74`, and `T75` verify that `exec`, `prepare`, and `InternalOutboxAdapter` do not leak through the `@trident/edge` public API.
+4. **Accurate Test Provider Export Disposition:**
+   Correctly stated that `CloudReceiptIssuer` and `CloudReceiptVerifier` are production contracts exported from `@trident/core`, while `TestCloudReceiptIssuer` and `TestCloudReceiptVerifier` are **excluded from the normal production root entrypoint and isolated in the explicit test-support subpath (`@trident/core/test-support`)**.
+5. **Exact Receipt Persistence & Replay Disposition:**
+   Documented that `IngestedIdempotencyEngine` requires an explicit `CloudReceiptIssuer` via constructor; no default exists. On initial `APPLIED`, `response_payload`, `receipt_payload`, and `receipt_token` are persisted. On exact duplicate replay, the persisted `receipt_payload` is loaded from PostgreSQL and returned verbatim; the issuer is NOT invoked a second time (invocation count = 1).
+6. **Exact `markSynced` Signature & Verifier Disposition:**
+   Documented that `markSynced(id, ack)` arity is strictly 2. No per-call verifier override exists. Verifier authority is established at `EdgeOutboxPersistence` construction time. Missing verifier fails closed. Invalid or forged receipt fails closed.
+7. **Exact CI Test Metrics:**
+   Truthfully recorded exact package test counts from CI Run `34714390260`: Total 458 passed, 0 failed, 0 skipped.
 
 ---
 
-## 2. Prerequisites & Lineage Invariant Proof
+## 2. Lineage Invariant Proof
 
 - **Canonical Baseline M11:** `40d149ac139d11df7e716a561133069eef238db8`
-- **Failed Immutable Subject S12:** `3d88bc18d6eea8ce75d47ab0e3b9c8c79f20d0d8`
-- **Remediated Immutable Subject S12-R1:** `49cb9660d01f944834df0974b815352cf1d6085c`
-- **Final Remediation Subject S12-R2:** Direct child commit of `S12-R1` on `feature/wp-012-transactional-outbox-idempotency`
-- **Parent Invariant Proof:** `git rev-parse S12-R2^` = `49cb9660d01f944834df0974b815352cf1d6085c` (`S12-R1`)
-- **PR #36:** Maintained OPEN and UNMERGED; HEAD advanced to `S12-R2`. Zero reviewer invocations.
+- **Candidate S12 (Immutable):** `3d88bc18d6eea8ce75d47ab0e3b9c8c79f20d0d8`
+- **Candidate S12-R1 (Immutable):** `49cb9660d01f944834df0974b815352cf1d6085c`
+- **Candidate S12-R2 (Immutable):** `e018bf129fe8ceddc13fe0403c23c800f46c05cd`
+- **Current Candidate S12-R3:** Direct child commit of `S12-R2` on `feature/wp-012-transactional-outbox-idempotency`
+- **Parent Invariant Proof:** `git rev-parse S12-R3^` = `e018bf129fe8ceddc13fe0403c23c800f46c05cd` (`S12-R2`)
+- **PR #36:** Maintained OPEN and UNMERGED; HEAD advanced to `S12-R3`. Zero reviewer invocations.
 
 ---
 
-## 3. Complete Changed-File Inventory (S12-R1..S12-R2)
+## 3. Changed Files Inventory (`S12-R2..S12-R3`)
 
-| File | Subsystem | Nature of Change in S12-R2 |
+| File | Subsystem | Nature of Change |
 |---|---|---|
-| `packages/core/src/test-support.ts` | Core Test Support | [NEW] Isolated `TestCloudReceiptIssuer` and `TestCloudReceiptVerifier` into non-production test-support module. |
-| `packages/core/package.json` | Core Package | Exported `./test-support` subpath pointing to `./dist/test-support.js`. |
-| `packages/core/src/sync-contracts.ts` | Core Production Contracts | Removed `TestCloudReceiptIssuer` and `TestCloudReceiptVerifier` from production contracts. |
-| `packages/core/src/index.ts` | Core Entrypoint | Verified test classes are NOT exported from root index. |
-| `packages/core/src/index.test.ts` | Core Tests | Updated test imports to use `@trident/core/test-support`; added test `WP012-R2-T66`. |
-| `packages/database/migrations/20260904210000_transactional_outbox_idempotency.sql` | Cloud DDL | Added `receipt_payload JSONB NOT NULL` to `ingested_idempotency_log`. |
-| `packages/database/src/outbox/ingested-idempotency-engine.ts` | Cloud Ingested Idempotency | Required mandatory `CloudReceiptIssuer` in constructor (throws `TypeError`/`ERR_INVALID_ARG_TYPE` if missing); persisted `receipt_payload` on initial apply and drained events; on duplicate replay, returned exact persisted `receipt_payload` without calling issuer. |
-| `packages/database/src/outbox.test.ts` | Database Tests | Injected `TestCloudReceiptIssuer` in all `IngestedIdempotencyEngine` instantiations; added tests `WP012-R2-T65`, `WP012-R2-T70`, `WP012-R2-T71`, `WP012-R2-T72`. |
-| `packages/edge/src/db/internal-outbox-adapter.ts` | Edge Internal Adapter | [NEW] Internal package-private adapter using `WeakMap<EdgeDatabaseService, InternalOutboxAdapter>` to safely provide internal SQL execution to outbox persistence without public API leakage. |
-| `packages/edge/src/db/edge-database.ts` | Edge Database Engine | Removed generic `public exec(sql)` and `public prepare(sql)` methods; registered `InternalOutboxAdapter` in constructor. |
-| `packages/edge/src/db/outbox-persistence.ts` | Edge Outbox Persistence | Consumed `InternalOutboxAdapter`; removed per-call `customVerifier` from `markSynced(id, ack)` (strictly 2 parameters); accepted verifier in constructor options. |
-| `packages/edge/src/outbox.test.ts` | Edge Tests | Updated test fixture setup to use `getTestNativeDatabase`; verified `edgeDb.exec` and `prepare` are absent; added tests `WP012-R2-T67`, `WP012-R2-T68`, `WP012-R2-T69`, `WP012-R2-T73`, `WP012-R2-T74`, `WP012-R2-T75`, `WP012-R2-T76`. |
-| `evidence/WP-012_BUILDER_EVIDENCE.md` | Builder Evidence | Regenerated comprehensive evidence report matching executable implementation verbatim. |
+| `evidence/WP-012_BUILDER_EVIDENCE.md` | Evidence | [EVIDENCE-ONLY] Corrected literal DDL schemas, test-access boundary description, test-support subpath wording, receipt replay description, and test counts. |
+
+**Total changed files in `S12-R2..S12-R3`:** Exactly 1 (`evidence/WP-012_BUILDER_EVIDENCE.md`).  
+**Git compare `S12-R2..S12-R3`:** `ahead_by = 1`, `behind_by = 0`. Zero code, test, or configuration changes.
 
 ---
 
 ## 4. Truthful Data Model & Runtime Specification
 
-### 4.1 Cloud PostgreSQL Schema (`20260904210000_transactional_outbox_idempotency.sql`)
+### 4.1 Cloud PostgreSQL Schema (`packages/database/migrations/20260904210000_transactional_outbox_idempotency.sql`)
+
+The following definitions are taken verbatim from the active migration file:
 
 ```sql
 -- 1. Ingested Idempotency Log
@@ -82,20 +84,31 @@ CREATE TABLE ingested_idempotency_log (
     action VARCHAR(100) NOT NULL,
     client_op_id UUID NOT NULL,
     idempotency_key TEXT NOT NULL,
-    aggregate_sequence_number BIGINT NOT NULL,
+    aggregate_sequence_number BIGINT NOT NULL CHECK (aggregate_sequence_number >= 1),
     status VARCHAR(50) NOT NULL,
     response_payload JSONB NOT NULL,
-    receipt_token VARCHAR(255) NOT NULL,
     receipt_payload JSONB NOT NULL,
+    receipt_token VARCHAR(255) NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CONSTRAINT fk_ingested_idempotency_branch FOREIGN KEY (organization_id, branch_id) REFERENCES branches(organization_id, id),
-    CONSTRAINT uq_ingested_idempotency_key UNIQUE (organization_id, idempotency_key),
-    CONSTRAINT uq_idempotency_log_client_op UNIQUE (organization_id, client_op_id),
-    CONSTRAINT chk_ingested_idempotency_status CHECK (status IN ('APPLIED', 'DUPLICATE_ACCEPTED', 'REQUIRES_RECONCILIATION', 'REJECTED')),
-    CONSTRAINT chk_ingested_idempotency_seq_pos CHECK (aggregate_sequence_number >= 1)
+    CONSTRAINT fk_idempotency_log_branch FOREIGN KEY (organization_id, branch_id) REFERENCES branches(organization_id, id),
+    CONSTRAINT uq_idempotency_log_key UNIQUE (organization_id, idempotency_key),
+    CONSTRAINT uq_idempotency_log_client_op UNIQUE (organization_id, branch_id, aggregate_type, aggregate_id, action, client_op_id),
+    CONSTRAINT uq_ingested_idempotency_tuple UNIQUE (organization_id, branch_id, aggregate_type, aggregate_id, aggregate_sequence_number),
+    CONSTRAINT chk_idempotency_log_status CHECK (status IN ('RECEIVED', 'DURABLY_STORED', 'APPLIED', 'DUPLICATE_ACCEPTED', 'REJECTED', 'REQUIRES_RECONCILIATION'))
 );
 
--- 2. Aggregate Sequences
+CREATE INDEX idx_idempotency_log_lookup ON ingested_idempotency_log (organization_id, branch_id, aggregate_type, aggregate_id);
+CREATE INDEX idx_idempotency_log_created_at ON ingested_idempotency_log (created_at);
+
+ALTER TABLE ingested_idempotency_log ENABLE ROW LEVEL SECURITY;
+ALTER TABLE ingested_idempotency_log FORCE ROW LEVEL SECURITY;
+
+CREATE POLICY tenant_isolation_policy ON ingested_idempotency_log
+    FOR ALL
+    USING (organization_id = current_app_org_id())
+    WITH CHECK (organization_id = current_app_org_id());
+
+-- 2. Aggregate Sequences (Per-stream causal monotonicity tracking)
 CREATE TABLE aggregate_sequences (
     organization_id UUID NOT NULL REFERENCES organizations(id),
     branch_id UUID NOT NULL,
@@ -103,19 +116,27 @@ CREATE TABLE aggregate_sequences (
     aggregate_id VARCHAR(100) NOT NULL,
     current_sequence_number BIGINT NOT NULL DEFAULT 0,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (organization_id, branch_id, aggregate_type, aggregate_id),
+    CONSTRAINT pk_aggregate_sequences PRIMARY KEY (organization_id, branch_id, aggregate_type, aggregate_id),
     CONSTRAINT fk_aggregate_sequences_branch FOREIGN KEY (organization_id, branch_id) REFERENCES branches(organization_id, id),
-    CONSTRAINT chk_aggregate_sequences_non_negative CHECK (current_sequence_number >= 0)
+    CONSTRAINT chk_aggregate_sequences_positive CHECK (current_sequence_number >= 0)
 );
 
--- 3. Reordering Buffer Queue
+ALTER TABLE aggregate_sequences ENABLE ROW LEVEL SECURITY;
+ALTER TABLE aggregate_sequences FORCE ROW LEVEL SECURITY;
+
+CREATE POLICY tenant_isolation_policy ON aggregate_sequences
+    FOR ALL
+    USING (organization_id = current_app_org_id())
+    WITH CHECK (organization_id = current_app_org_id());
+
+-- 3. Reordering Buffer Queue (Sequence gap buffering)
 CREATE TABLE reordering_buffer_queue (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     organization_id UUID NOT NULL REFERENCES organizations(id),
     branch_id UUID NOT NULL,
     aggregate_type VARCHAR(100) NOT NULL,
     aggregate_id VARCHAR(100) NOT NULL,
-    aggregate_sequence_number BIGINT NOT NULL,
+    aggregate_sequence_number BIGINT NOT NULL CHECK (aggregate_sequence_number >= 1),
     action VARCHAR(100) NOT NULL,
     client_op_id UUID NOT NULL,
     idempotency_key TEXT NOT NULL,
@@ -124,13 +145,23 @@ CREATE TABLE reordering_buffer_queue (
     received_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     drained_at TIMESTAMPTZ NULL,
     CONSTRAINT fk_reordering_buffer_branch FOREIGN KEY (organization_id, branch_id) REFERENCES branches(organization_id, id),
-    CONSTRAINT uq_reordering_buffer_key UNIQUE (organization_id, idempotency_key),
     CONSTRAINT uq_reordering_buffer_seq UNIQUE (organization_id, branch_id, aggregate_type, aggregate_id, aggregate_sequence_number),
-    CONSTRAINT chk_reordering_buffer_status CHECK (status IN ('BUFFERED', 'DRAINED')),
-    CONSTRAINT chk_reordering_buffer_seq_pos CHECK (aggregate_sequence_number >= 1)
+    CONSTRAINT uq_reordering_buffer_key UNIQUE (organization_id, idempotency_key),
+    CONSTRAINT chk_reordering_buffer_status CHECK (status IN ('BUFFERED', 'DRAINED'))
 );
 
--- 4. Cloud Integration Outbox
+CREATE INDEX idx_reordering_buffer_stream ON reordering_buffer_queue (organization_id, branch_id, aggregate_type, aggregate_id, aggregate_sequence_number);
+CREATE INDEX idx_reordering_buffer_status ON reordering_buffer_queue (status);
+
+ALTER TABLE reordering_buffer_queue ENABLE ROW LEVEL SECURITY;
+ALTER TABLE reordering_buffer_queue FORCE ROW LEVEL SECURITY;
+
+CREATE POLICY tenant_isolation_policy ON reordering_buffer_queue
+    FOR ALL
+    USING (organization_id = current_app_org_id())
+    WITH CHECK (organization_id = current_app_org_id());
+
+-- 4. Cloud Integration Outbox (ADR-007)
 CREATE TABLE cloud_integration_outbox (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     organization_id UUID NOT NULL REFERENCES organizations(id),
@@ -151,12 +182,23 @@ CREATE TABLE cloud_integration_outbox (
     published_at TIMESTAMPTZ NULL,
     CONSTRAINT fk_cloud_outbox_branch FOREIGN KEY (organization_id, branch_id) REFERENCES branches(organization_id, id),
     CONSTRAINT chk_cloud_outbox_status CHECK (status IN ('PENDING', 'PROCESSING', 'PUBLISHED', 'FAILED', 'DLQ')),
-    CONSTRAINT chk_cloud_outbox_max_retries_canonical CHECK (max_retries = 5),
-    CONSTRAINT chk_cloud_outbox_retry_non_negative CHECK (retry_count >= 0),
-    CONSTRAINT chk_cloud_outbox_delivery_attempts_non_negative CHECK (delivery_attempts >= 0)
+    CONSTRAINT chk_cloud_outbox_retry_count CHECK (retry_count >= 0 AND retry_count <= 5),
+    CONSTRAINT chk_cloud_outbox_delivery_attempts CHECK (delivery_attempts >= 0),
+    CONSTRAINT chk_cloud_outbox_max_retries CHECK (max_retries = 5)
 );
 
--- 5. Cloud Integration Dead Letter Queue (DLQ)
+CREATE INDEX idx_cloud_outbox_pending ON cloud_integration_outbox (status, next_retry_at) WHERE status IN ('PENDING', 'PROCESSING');
+CREATE INDEX idx_cloud_outbox_org ON cloud_integration_outbox (organization_id);
+
+ALTER TABLE cloud_integration_outbox ENABLE ROW LEVEL SECURITY;
+ALTER TABLE cloud_integration_outbox FORCE ROW LEVEL SECURITY;
+
+CREATE POLICY tenant_isolation_policy ON cloud_integration_outbox
+    FOR ALL
+    USING (organization_id = current_app_org_id())
+    WITH CHECK (organization_id = current_app_org_id());
+
+-- 5. Cloud Integration DLQ (Dead Letter Queue)
 CREATE TABLE cloud_integration_dlq (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     organization_id UUID NOT NULL REFERENCES organizations(id),
@@ -170,73 +212,103 @@ CREATE TABLE cloud_integration_dlq (
     error_message TEXT NOT NULL,
     error_trace TEXT NULL,
     retry_count INT NOT NULL,
-    context JSONB NOT NULL DEFAULT '{}',
+    context JSONB NOT NULL DEFAULT '{}'::jsonb,
     moved_to_dlq_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT fk_cloud_dlq_branch FOREIGN KEY (organization_id, branch_id) REFERENCES branches(organization_id, id)
 );
-```
 
-All 5 tables have Row Level Security enabled and forced:
-```sql
-ALTER TABLE <table_name> ENABLE ROW LEVEL SECURITY;
-ALTER TABLE <table_name> FORCE ROW LEVEL SECURITY;
-CREATE POLICY tenant_isolation_policy ON <table_name> FOR ALL
+CREATE INDEX idx_cloud_dlq_org ON cloud_integration_dlq (organization_id);
+CREATE INDEX idx_cloud_dlq_created ON cloud_integration_dlq (moved_to_dlq_at);
+
+ALTER TABLE cloud_integration_dlq ENABLE ROW LEVEL SECURITY;
+ALTER TABLE cloud_integration_dlq FORCE ROW LEVEL SECURITY;
+
+CREATE POLICY tenant_isolation_policy ON cloud_integration_dlq
+    FOR ALL
     USING (organization_id = current_app_org_id())
     WITH CHECK (organization_id = current_app_org_id());
 ```
 
-Notice: Production migration contains **zero** `wp012_test_*` tables. Test domain fixture tables are created and destroyed dynamically within test lifecycles.
+Notice: Production Cloud migration contains zero `wp012_test_*` tables. Test domain fixture tables are created and dropped exclusively within test lifecycles.
 
 ### 4.2 Edge SQLite WAL Schema (`packages/edge/src/db/outbox-persistence.ts`)
 
+The following schema is created by `EdgeOutboxPersistence.#initializeSchema()` verbatim:
+
 ```sql
 CREATE TABLE IF NOT EXISTS outbox_queue (
-  id TEXT PRIMARY KEY NOT NULL,
+  id TEXT PRIMARY KEY,
   organization_id TEXT NOT NULL,
   branch_id TEXT NOT NULL,
   aggregate_type TEXT NOT NULL,
   aggregate_id TEXT NOT NULL,
   action TEXT NOT NULL,
   client_op_id TEXT NOT NULL UNIQUE,
-  aggregate_sequence_number INTEGER NOT NULL,
+  aggregate_sequence_number INTEGER NOT NULL CHECK (aggregate_sequence_number >= 1),
   payload TEXT NOT NULL,
-  status TEXT NOT NULL CHECK (status IN ('PENDING', 'SYNCED', 'FAILED')),
-  retry_count INTEGER NOT NULL DEFAULT 0,
-  last_error TEXT,
+  status TEXT NOT NULL DEFAULT 'PENDING',
   receipt_token TEXT,
   receipt_verified_at TEXT,
+  retry_count INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-  synced_at TEXT
+  synced_at TEXT,
+  last_error TEXT,
+  CONSTRAINT chk_outbox_status CHECK (status IN ('PENDING', 'SYNCED', 'FAILED'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_outbox_queue_status ON outbox_queue (status);
 CREATE INDEX IF NOT EXISTS idx_outbox_queue_stream ON outbox_queue (aggregate_type, aggregate_id, aggregate_sequence_number);
 ```
 
-Notice: Production Edge initialization creates **zero** `local_fixture_orders` tables. Production code imports **zero** symbols from `test-access.ts`. `EdgeDatabaseService` exposes **zero** public generic SQL execution methods (`exec` and `prepare` are absent from both prototype and instance).
+Notice: Production Edge initialization creates zero `local_fixture_orders` tables.
 
 ---
 
 ## 5. Architectural Mechanism & Contract Documentation
 
 ### 5.1 Collision-Safe Idempotency Key Derivation & Defense-in-Depth
-- **Canonical Serialization:** `canonicalizeIdempotencyPayload(components)` serializes the logical tuple as a strict JSON array of UTF-8 strings: `[orgId, branchId, aggregateType, aggregateId, action, clientOpId]`.
+- **Canonical Serialization:** `canonicalizeIdempotencyPayload(parts)` serializes the logical tuple as a strict JSON array of UTF-8 strings in exact order: `[orgId, branchId, aggregateType, aggregateId, action, clientOpId]`.
 - **Hashing:** `formatIdempotencyKey` computes a 64-character lowercase hex SHA-256 hash over this canonical JSON array string.
 - **Defense-in-Depth Comparison:** When an incoming request matches a persisted `idempotency_key`, the Cloud Ingested Idempotency Engine compares all 6 components of the persisted row against the incoming event. If any component differs, it fails closed with `IDEMPOTENCY_COLLISION` and executes zero mutation.
 
 ### 5.2 Opaque Trust Provider Boundary & Verifiable Replay
-- **Issuer / Verifier Boundary:**
+- **Production Contracts:**
   - `CloudReceiptIssuer`: `issueReceipt(context: ReceiptIssuanceContext): CloudTransactionReceipt`
   - `CloudReceiptVerifier`: `verifyReceipt(receipt: CloudTransactionReceipt, expectedContext: ReceiptIssuanceContext): boolean`
-- **Mandatory Issuer Injection:**
-  `IngestedIdempotencyEngine` requires a valid `CloudReceiptIssuer` via constructor. Omission fails closed (`TypeError` / `ERR_INVALID_ARG_TYPE`).
-- **Persisted Verifiable Replay:**
-  The complete `receipt_payload` is durably stored in PostgreSQL. Upon receiving an exact duplicate, the engine retrieves and returns the exact persisted `CloudTransactionReceipt` verbatim without invoking the issuer a second time.
-- **Fail-Closed Edge Verification:**
-  Edge `markSynced(id, ack)` strictly accepts 2 parameters (`id`, `ack`). Verifier is composed exclusively via constructor injection. Missing or unverified receipts fail closed and leave the outbox item `PENDING`.
-- **Scope Boundary:** Cryptographic algorithm and key management (e.g. Asymmetric Ed25519/HMAC key hierarchies) are **OUT OF SCOPE FOR WP-012** and governed by this provider boundary. WP-012 does NOT claim cryptographic signing is complete; it establishes the authoritative fail-closed trust interface.
+  Both interfaces are production contracts exported from `@trident/core`.
+- **Test Provider Isolation:**
+  - `TestCloudReceiptIssuer` and `TestCloudReceiptVerifier` are **excluded from the normal production root entrypoint of `@trident/core`**.
+  - They are available exclusively through the explicit test-support subpath export: `@trident/core/test-support`.
+  - This boundary remains eligible for independent Solution Architecture review.
+- **Mandatory Issuer Injection in Cloud Engine:**
+  - `IngestedIdempotencyEngine` strictly requires an explicit `CloudReceiptIssuer` instance injected via constructor (`constructor(issuer: CloudReceiptIssuer)`).
+  - No default `TestCloudReceiptIssuer` fallback exists.
+  - Omission or invalid argument fails closed immediately with `TypeError` (`ERR_INVALID_ARG_TYPE`).
+- **Persisted Receipt Replay on Duplicates:**
+  - On initial `APPLIED` processing, the engine persists `response_payload`, `receipt_payload` (JSONB), and `receipt_token`.
+  - On exact duplicate replay, the persisted logical tuple is verified, persisted `response_payload` is returned, and persisted `receipt_payload` is returned verbatim without invoking the issuer a second time (call count = 1).
+  - WP-012 does NOT claim cryptographic algorithm or key management is completed; that remains behind the opaque provider boundary.
+- **Edge Verifier Composition & Fixed Authority:**
+  - `EdgeOutboxPersistence.prototype.markSynced` has signature strictly `markSynced(id, ack)`. Arity is 2; zero per-call verifier override exists.
+  - Verifier authority is established exclusively at `EdgeOutboxPersistence` construction time via options (`new EdgeOutboxPersistence(db, { verifier })`).
+  - Missing verifier: FAIL CLOSED.
+  - Invalid or forged receipt: FAIL CLOSED.
+  - Only `APPLIED` or `DUPLICATE_ACCEPTED` with a successfully verified matching receipt may transition the local event to `SYNCED`.
 
-### 5.3 Authoritative Retry Accounting & Backoff Policy
+### 5.3 Edge Database Encapsulation & Test Registry Disposition
+- **Encapsulation of Raw SQLite Handle:**
+  - Generic `public exec(sql)` and `public prepare(sql)` were completely removed from `EdgeDatabaseService`.
+  - An internal adapter (`InternalOutboxAdapter`) bound via module-scoped `WeakMap<EdgeDatabaseService, InternalOutboxAdapter>` provides internal outbox persistence with structured access.
+  - `InternalOutboxAdapter` is NOT exported through `@trident/edge` or `@trident/edge/db`.
+  - Normal production consumers cannot access raw SQL execution methods (`WP012-R2-T73`, `T74`, `T75`).
+- **Test-Access Boundary Truthful Disposition:**
+  - `EdgeOutboxPersistence` has ZERO direct dependency on `test-access.ts`.
+  - `InternalOutboxAdapter` has ZERO dependency on `test-access.ts`.
+  - `EdgeDatabaseService` retains the pre-existing, inherited WP-008 module-private test registry integration (`registerTestNativeDatabase`).
+  - That test registry is NOT exported through the production public API. Normal production consumers cannot obtain the native SQLite handle.
+  - WP-008 regression tests continue to prove native SQLite handle encapsulation.
+
+### 5.4 Authoritative Retry Accounting & Backoff Policy
 - **Failed Delivery Accounting:**
   1. Initial delivery failure: `delivery_attempts = 1`, `retry_count = 0` (Remains outside DLQ, status `PENDING`)
   2. Failure of retry #1: `delivery_attempts = 2`, `retry_count = 1` (Remains outside DLQ)
@@ -244,9 +316,9 @@ Notice: Production Edge initialization creates **zero** `local_fixture_orders` t
   4. Failure of retry #3: `delivery_attempts = 4`, `retry_count = 3` (Remains outside DLQ)
   5. Failure of retry #4: `delivery_attempts = 5`, `retry_count = 4` (Remains outside DLQ)
   6. Failure of retry #5: `delivery_attempts = 6`, `retry_count = 5` (Routes to `cloud_integration_dlq`, status `DLQ`)
-- **Canonical Limit:** Governed maximum retries is frozen to canonical `CANONICAL_MAX_RETRIES = 5`. Any attempt to override with non-canonical values (e.g. 0 or 10) is rejected at the service boundary.
+- **Canonical Limit:** Governed maximum retries is frozen to canonical `CANONICAL_MAX_RETRIES = 5`. Any attempt to override with non-canonical values is rejected at the service boundary.
 
-### 5.4 Multi-Worker Claim Ownership & CAS Semantics
+### 5.5 Multi-Worker Claim Ownership & CAS Semantics
 - **Atomic Batch Claim (SQL CTE):**
   ```sql
   WITH claimed AS (
@@ -369,7 +441,7 @@ Notice: Production Edge initialization creates **zero** `local_fixture_orders` t
 
 ## 7. Gates A–P Verification Report
 
-- **Gate A — Canonical Lineage: PASS.** `S12-R2` is a direct child commit of `S12-R1 = 49cb9660d01f944834df0974b815352cf1d6085c`. `M11 = 40d149ac139d11df7e716a561133069eef238db8`.
+- **Gate A — Canonical Lineage: PASS.** `S12-R3` is a direct child commit of `S12-R2 = e018bf129fe8ceddc13fe0403c23c800f46c05cd`. `M11 = 40d149ac139d11df7e716a561133069eef238db8`.
 - **Gate B — WP-012 Scope Isolation: PASS.** No WP-013 (WebSocket streaming) or WP-014 (business domain consumers) implemented.
 - **Gate C — Edge Transactional Outbox Atomicity: PASS.** Verified via `WP012-T02`..`T04`, `WP012-R2-T76`. Local domain operations and outbox queue commit atomically in SQLite WAL.
 - **Gate D — Cloud Ingested Idempotency Durability: PASS.** Verified via `WP012-T05`, `T09`, `T11`, `WP012-R2-T70`. Records and complete receipts survive process and connection re-instantiation.
@@ -388,7 +460,7 @@ Notice: Production Edge initialization creates **zero** `local_fixture_orders` t
 
 ---
 
-## 8. Monorepo Quality Gate Results
+## 8. Monorepo Quality Gate Results & CI Metrics
 
 - `npm run graph:check`: **PASS** (0 circular dependencies, acyclic layer boundaries verified)
 - `npm run format`: **PASS** (100% formatted with Prettier)
@@ -396,13 +468,19 @@ Notice: Production Edge initialization creates **zero** `local_fixture_orders` t
 - `npm run typecheck`: **PASS** (TypeScript compilation 100% clean across all 6 packages)
 - `npm run build`: **PASS** (All 6 packages build cleanly)
 - `npm test`: **PASS**
-  - `@trident/core`: 49 tests passed (0 failed, 0 skipped)
-  - `@trident/database`: 221 tests passed (0 failed, 0 skipped)
-  - `@trident/edge`: 165 tests passed (155 node + 10 Electron runtime; 0 failed, 0 skipped)
-  - `@trident/pos`: 1 test passed (0 failed, 0 skipped)
-  - `@trident/sync`: 21 tests passed (0 failed, 0 skipped)
-  - `@trident/ui`: 1 test passed (0 failed, 0 skipped)
-  - **Monorepo Total:** 458 tests passed, 0 failed, 0 skipped.
+
+### 8.1 Package Test Counts from CI
+- `@trident/core`: 49 tests passed (0 failed, 0 skipped)
+- `@trident/database`: 221 tests passed (0 failed, 0 skipped)
+- `@trident/edge`: 165 tests passed (155 node + 10 Electron runtime; 0 failed, 0 skipped)
+- `@trident/sync`: 21 tests passed (0 failed, 0 skipped)
+- `@trident/pos`: 1 test passed (0 failed, 0 skipped)
+- `@trident/ui`: 1 test passed (0 failed, 0 skipped)
+- **Monorepo Total:** 458 tests passed, 0 failed, 0 skipped.
+
+### 8.2 GitHub Actions Workflows
+- **CI Workflow (Implementation Verification):** Run ID `34714390260`, Subject SHA `e018bf129fe8ceddc13fe0403c23c800f46c05cd`, Result: **SUCCESS** (`build = SUCCESS`, `lint = SUCCESS`, `typecheck = SUCCESS`, `unit-tests = SUCCESS`).
+- **Security Scan Workflow (Implementation Verification):** Run ID `34714390276`, Subject SHA `e018bf129fe8ceddc13fe0403c23c800f46c05cd`, Result: **SUCCESS** (`secret-scan = SUCCESS`, `sca-scan = SUCCESS`, `sast-scan = SUCCESS`, `sbom-generate = SUCCESS`).
 
 ---
 
