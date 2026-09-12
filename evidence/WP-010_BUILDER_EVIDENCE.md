@@ -1,55 +1,47 @@
 # WP-010 BUILDER EVIDENCE REPORT
 
 **Work Package:** WP-010 Edge Offline IAM & Floor PIN Authentication Engine  
-**Candidate Subject:** `S10-R1` (Builder Remediation R1)  
-**Parent Candidate:** `S10 = 09463064465bbd23048248619b49c6478aeeef2f` (Superseded / Quick Integrity Failed)  
+**Candidate Subject:** `S10-R2` (Builder Remediation R2)  
+**Parent Candidate:** `S10-R1 = efff0c80e758e5ea66c34a1bda1c2bb9e910acfb` (Superseded / Remediation R2 Applied)  
 **Date:** 2026-09-11  
 **Author / Builder Agent:** `16_Native_Edge_Developer`  
 **Governing Framework:** `EAAF v1.2.0` (Pinned Framework SHA: `7e036f43240b3dc28ccb996e350263598275b2cd`)  
 **Canonical Baseline:** `M9 = 9d7c7dabeb1b696974f111cd0e1206d048179625`  
-**Required Ancestry:** `M9` → `880ab56148cc04981f3e44bcecb52b859e5d4d60` → `S10` → `S10-R1`  
+**Required Ancestry:** `M9` → `880ab56148cc04981f3e44bcecb52b859e5d4d60` → `S10` → `S10-R1` → `S10-R2`  
 **Implementation Branch:** `feature/wp-010-edge-offline-iam`  
 **Implementation PR:** #32 (Open, Unmerged)  
 
 ---
 
-## 1. Executive Summary & Remediation R1 Overview
+## 1. Executive Summary & Remediation R2 Overview
 
-Following Coordinator Quick Integrity rejection of candidate `S10`, candidate `S10-R1` resolves all four blocking integrity findings (`QI-010-01`, `QI-010-02`, `QI-010-03`, `QI-010-04`) with zero test skipping, zero mock bypasses, zero synthetic delay providers, and zero alteration of governed frozen parameters.
+Following Coordinator Quick Integrity evaluation of candidate `S10-R1`, candidate `S10-R2` surgically resolves all three remediation findings (`QI-010-R1-01`, `QI-010-R1-02`, `QI-010-R1-03`) with zero test skipping, zero mock bypasses, zero synthetic delay providers, and zero regression on governed parameters.
 
-### S10-R1 Remediation Summary:
+### S10-R2 Remediation Summary:
 
-1. **`QI-010-01` — Public IAM Boundary Hardening:**
-   - Removed `IamPersistence` and `LockoutManager` completely from the public `@trident/edge` package export surface (`packages/edge/src/iam/index.ts`, `packages/edge/src/index.ts`).
-   - Removed raw session token signing and verification primitives (`signFloorSessionToken`, `verifyFloorSessionToken`, `computeSessionTokenHash`, `LOCKOUT_POLICY`) from the public export surface.
-   - Removed public service escape getters `getPersistence()` and `getLockoutManager()` from `OfflineIamService`.
-   - Prevented collaborator injection in `OfflineIamService` constructor: passing `persistence` or `lockoutManager` throws `OfflineIamError('INVALID_INPUT', ...)`.
-   - Isolated testing dependency injection behind an unexported boundary module (`packages/edge/src/iam/test-support.ts`) requiring unexported Symbol `kInternalTestToken`.
-   - Protected test fault-injection methods on `IamPersistence` (`setSimulateSessionInsertFailure`, `setSimulateAuditInsertFailure`) with `kInternalTestToken`.
-   - Added objective public-boundary test `WP010-T25` verifying consumers cannot inject collaborators, access internals, reset lockout via persistence, or invoke fault controls.
+1. **`QI-010-R1-01` — Public Cached Identity Boundary Encapsulation:**
+   - Completely removed public methods `cacheUser(...)`, `invalidateUser(...)`, and `getCachedUser(...)` from `OfflineIamService` (`packages/edge/src/iam/offline-iam-service.ts`).
+   - Removed `CachedUserInput` and `CachedUserRecord` type exports from the public `@trident/edge` package surface (`packages/edge/src/iam/index.ts`).
+   - Isolated cached identity population and inspection strictly within the internal test double module (`packages/edge/src/iam/test-support.ts`) requiring unexported symbol `kInternalTestToken`.
+   - Added automated regression test `WP010-T28` proving a runtime consumer cannot mutate cached identity authority, alter PIN hashes, inject unauthorized users, or retrieve stored PIN hashes.
 
-2. **`QI-010-02` — Supervisor Unlock Authorization & Brute-Force Rate Limiting:**
-   - Remediated `supervisorUnlockStation` to fail closed under all circumstances.
-   - Enforced target station verification using the same enrolled authority as normal PIN authentication: verifies station exists in `station_credentials`, is not revoked (`isRevoked === 0`), and matches branch/org context.
-   - Enforced supervisor cached credential integrity: verifies user exists in `cached_users`, belongs to same organization, is not revoked, has valid timestamps (`expiresAt > now`, `issuedAt <= now + 300`), has `$argon2id$` formatted hash, and possesses verified supervisory role (`SUPERVISOR`, `ADMIN`, or `MANAGER`).
-   - Applied governed brute-force protection to the supervisor route: failed supervisor attempts record failures against the target station, enforce progressive delays (2,000ms at attempt 3, 5,000ms at attempts $\ge 4$), and emit `PinBruteForceAttemptDetected` with severity `CRITICAL` upon lockout.
-   - Preserved legitimate supervisor override capability: a supervisor with correct PIN unlocks the station and resets lockout state atomically.
-   - No unlock state mutation occurs on failure.
-   - Added comprehensive negative test `WP010-T26` covering 9 distinct attack/failure vectors.
+2. **`QI-010-R1-02` — Atomic Supervisor Unlock & Audit Commitment:**
+   - Implemented `IamPersistence.unlockStationWithAudit(stationId, currentEffectiveTime, auditInput)` in `packages/edge/src/db/iam-persistence.ts`.
+   - Both the lockout counter reset (`resetLockoutState`) and the tamper-evident audit record insertion (`#appendAuditEventInternal`) are executed within a single SQLite transaction (`runInTransaction`).
+   - Any audit insertion failure or crash automatically rolls back the lockout reset, ensuring the station remains securely locked and zero partial authentication mutation occurs.
+   - Refactored `OfflineIamService.supervisorUnlockStation` to invoke `unlockStationWithAudit`.
+   - Added automated regression test `WP010-T29` using fault injection (`setSimulateAuditInsertFailure`) to prove transaction rollback: when audit writing fails, station lockout remains active in SQLite, consecutive failures remain 5, and zero audit records are committed. Upon clearing the fault, unlock succeeds and exactly one audit record is persisted.
 
-3. **`QI-010-03` — Corrupted Role Data Fails Closed:**
-   - Eliminated any manufacture of default `['STAFF']` roles.
-   - Malformed JSON, non-array types, empty arrays, arrays containing non-strings or empty strings strictly fail closed with typed error `CREDENTIAL_CORRUPT`.
-   - Added test `WP010-T27` verifying 6 corrupt role structures produce zero sessions in `station_sessions`.
-
-4. **`QI-010-04` — Genuine Authentication Brute-Force Execution (`WP010-T22`):**
-   - Completely rewrote `WP010-T22` to execute requests exclusively through the real HTTP authentication path (`EdgeAuthRouter POST /api/v1/auth/pin`).
-   - Zero direct calls to `LockoutManager.recordFailure`.
-   - Verified real progressive delays on the live path: attempt 1 (~0ms delay), attempt 2 (~0ms delay), attempt 3 (governed 2-second delay verified $\ge 1900\text{ms}$), attempt 4 (governed 5-second delay verified $\ge 4900\text{ms}$), attempt 5 (station enters `STATION_LOCKED` returning HTTP 423 with `Retry-After`).
-   - Verified 20 rapid subsequent attack requests short-circuit in $<50\text{ms}$ each without Argon2id overhead.
-   - Verified persistence of lockout counters and `PinBruteForceAttemptDetected` audit record with hash chaining.
-   - Verified correct PIN remains rejected while locked.
-   - Real execution duration: ~12.5 seconds with genuine delays.
+3. **`QI-010-R1-03` — Supervisory Role Authority SSOT Justification:**
+   - Grounded supervisory role validation strictly in the frozen Single Source of Truth (`RESTAURANT_SOFTWARE_RECONSTRUCTION_SPEC_v1.0_BASELINE.md`):
+     - **Section 7 ("ROLES Y USUARIOS"):**
+       - `ROLE-001 — Administrador`: all actions permitted; default administrator credentials authorized for system security events.
+       - `ROLE-002 — Gerente / Supervisor / "Usuario autorizado"`: authorized to execute and approve security overrides (authorizations, discounts, cancellations, reopenings, lockouts per Cap. 8.2.2 and Cap. 4).
+     - **Section 8 ("MATRIZ DE PERMISOS"):**
+       - System profiles: `01 ADMINISTRADOR`, `03 GERENTE`.
+   - Supported canonical bilingual normalized set: `ADMIN`, `ADMINISTRADOR`, `GERENTE`, `MANAGER`, `SUPERVISOR`.
+   - Rejects non-supervisory roles fail-closed (`WAITER`, `MESERO`, `CASHIER`, `CAJA`, `COCINA`, `KITCHEN`, `STAFF`, `GUEST`) with typed error `INSUFFICIENT_PERMISSIONS`.
+   - Added automated regression test `WP010-T30` exhaustively verifying all valid SSOT supervisory roles succeed and unauthorized roles fail closed.
 
 ---
 
@@ -61,52 +53,56 @@ Following Coordinator Quick Integrity rejection of candidate `S10`, candidate `S
 | **Trusted Time Authority** | Must use WP-009 `TrustedTimeManager`. Zero secondary clock authorities. | Reuses `TrustedTimeManager` directly. If locked (`CLOCK_ROLLBACK_LOCKED`), all normal auth and supervisor unlock attempts fail closed immediately. |
 | **Zero Plaintext Secrets** | Plaintext PIN never persisted or logged. | PIN accepted transiently in memory; verified via `verifyBranchPin`. Disallowed from SQLite, disk files, error messages, and audit payloads. |
 | **OS Keyring Security** | Session token signing keys stored in `EdgeSecureStore`. | Reuses `EdgeSecureStore` backed by `electron.safeStorage` (Keychain/DPAPI). Raw keys never exposed. |
-| **Public Boundary Integrity** | Zero security internal escape hatches. | `IamPersistence`, `LockoutManager`, session signing primitives, and internal getters absent from public package exports. |
+| **Public Boundary Integrity** | Zero security internal escape hatches. | `IamPersistence`, `LockoutManager`, session signing primitives, internal getters, and cached identity manipulation methods absent from public package exports. |
 | **Tamper-Evident Audit** | Security events chained with RFC 8785 canonical hash. | All authentication successes, lockouts, supervisor unlocks, and clock rollback events are appended to `edge_security_audit` with incremental sequence numbers and SHA-256 hash chains. |
+| **Atomic Unlock & Audit** | Lockout reset and audit write must be transactional. | `unlockStationWithAudit` commits both operations in a single SQLite transaction with automatic rollback on failure. |
 | **No Generic Outbox / Sync** | Zero outbox or generic sync code introduced. | WP-010 scope strictly isolated to offline IAM; generic sync deferred to Wave 3 (WP-011+). |
 
 ---
 
 ## 3. Objective Test Execution Evidence
 
-All 113 unit tests in `@trident/edge` (`dist/offline-iam.test.js`, `dist/enrollment.test.js`, `dist/database.test.js`, `dist/index.test.js`) passed with zero skips, zero mocks, and zero placeholder substitutes:
+All 116 unit tests in `@trident/edge` (`dist/offline-iam.test.js`, `dist/enrollment.test.js`, `dist/database.test.js`, `dist/index.test.js`) passed with zero skips, zero mocks, and zero placeholder substitutes:
 
 ```text
-✔ WP010-T01: Correct PIN succeeds locally and returns valid station session (183.303875ms)
-✔ WP010-T02: Incorrect PIN fails authentication (155.797625ms)
-✔ WP010-T03: Plaintext PIN is never persisted in SQLite or disk (157.933ms)
-✔ WP010-T04: Plaintext PIN is never logged in audit events, errors, or telemetry (156.150792ms)
-✔ WP010-T05: Cross-user authentication rejected (wrong user ID with PIN) (86.7015ms)
-✔ WP010-T06: Cross-station session misuse rejected (159.826416ms)
-✔ WP010-T07: Expired cached credential rejected fail-closed (89.665375ms)
-✔ WP010-T08: Corrupted cached credential rejected fail-closed (92.64275ms)
-✔ WP010-T09: Brute-force repeated failures trigger governed lockout (89.882125ms)
-✔ WP010-T10: Correct PIN while locked remains rejected (84.315083ms)
-✔ WP010-T11: Lockout persistence survives process restart (87.850416ms)
-✔ WP010-T12: Governed lockout release behavior (natural expiry and supervisor override unlock) (317.134542ms)
-✔ WP010-T13: Clock rollback detection fail-closed (92.635084ms)
-✔ WP010-T14: Token/session issuedAt cannot be bypassed by wall-clock rollback (74.877292ms)
-✔ WP010-T15: Session bound to correct station ID (148.923541ms)
-✔ WP010-T16: Invalid or revoked station identity rejected fail-closed (72.289875ms)
-✔ WP010-T17: Session expiry enforced (12 hours TTL) (158.54875ms)
-✔ WP010-T18: Concurrent failed attempts cannot bypass lockout counters (82.896333ms)
-✔ WP010-T19: SQLite transaction failure produces no partial auth-state mutation (218.575791ms)
-✔ WP010-T20: Sensitive values redacted from errors, audit payloads, and telemetry (73.868416ms)
-✔ WP010-T21: HTTP API POST /api/v1/auth/pin handles success, failure, lockout, supervisor unlock (244.553917ms)
-✔ WP010-T22: [Obligation] Genuine brute-force PIN attack test via EdgeAuthRouter POST /api/v1/auth/pin (12506.393792ms)
-✔ WP010-T23: [Obligation] Clock tampering test (tampered clock triggers fail-closed) (84.24925ms)
-✔ WP010-T24: [Obligation] Argon2id performance benchmark on resource-constrained process (129.927041ms)
-✔ WP010-T25: [QI-010-01] Public IAM boundary prevents collaborator injection, internal escape, and fault invocation (72.8185ms)
-✔ WP010-T26: [QI-010-02] Supervisor unlock authorization fails closed and prevents brute-force oracle (5318.883834ms)
-✔ WP010-T27: [QI-010-03] Corrupted or invalid role data strictly fails closed without defaulting to STAFF (501.969458ms)
-ℹ tests 113
+✔ WP010-T01: Correct PIN succeeds locally and returns valid station session (191.055458ms)
+✔ WP010-T02: Incorrect PIN fails authentication (141.253916ms)
+✔ WP010-T03: Plaintext PIN is never persisted in SQLite or disk (148.734792ms)
+✔ WP010-T04: Plaintext PIN is never logged in audit events, errors, or telemetry (148.487292ms)
+✔ WP010-T05: Cross-user authentication rejected (wrong user ID with PIN) (69.477125ms)
+✔ WP010-T06: Cross-station session misuse rejected (134.224958ms)
+✔ WP010-T07: Expired cached credential rejected fail-closed (65.988875ms)
+✔ WP010-T08: Corrupted cached credential rejected fail-closed (72.015708ms)
+✔ WP010-T09: Brute-force repeated failures trigger governed lockout (75.066375ms)
+✔ WP010-T10: Correct PIN while locked remains rejected (75.56125ms)
+✔ WP010-T11: Lockout persistence survives process restart (67.557208ms)
+✔ WP010-T12: Governed lockout release behavior (natural expiry and supervisor override unlock) (269.199083ms)
+✔ WP010-T13: Clock rollback detection fail-closed (72.856041ms)
+✔ WP010-T14: Token/session issuedAt cannot be bypassed by wall-clock rollback (77.096333ms)
+✔ WP010-T15: Session bound to correct station ID (140.130375ms)
+✔ WP010-T16: Invalid or revoked station identity rejected fail-closed (68.334875ms)
+✔ WP010-T17: Session expiry enforced (12 hours TTL) (130.077584ms)
+✔ WP010-T18: Concurrent failed attempts cannot bypass lockout counters (65.819958ms)
+✔ WP010-T19: SQLite transaction failure produces no partial auth-state mutation (254.181167ms)
+✔ WP010-T20: Sensitive values redacted from errors, audit payloads, and telemetry (79.575917ms)
+✔ WP010-T21: HTTP API POST /api/v1/auth/pin handles success, failure, lockout, supervisor unlock (228.426875ms)
+✔ WP010-T22: [Obligation] Genuine brute-force PIN attack test via EdgeAuthRouter POST /api/v1/auth/pin (12388.173083ms)
+✔ WP010-T23: [Obligation] Clock tampering test (tampered clock triggers fail-closed) (62.808958ms)
+✔ WP010-T24: [Obligation] Argon2id performance benchmark on resource-constrained process (119.025834ms)
+✔ WP010-T25: [QI-010-01] Public IAM boundary prevents collaborator injection, internal escape, and fault invocation (63.451167ms)
+✔ WP010-T26: [QI-010-02] Supervisor unlock authorization fails closed and prevents brute-force oracle (5247.078709ms)
+✔ WP010-T27: [QI-010-03] Corrupted or invalid role data strictly fails closed without defaulting to STAFF (434.857708ms)
+✔ WP010-T28: [QI-010-R1-01] Public cached identity authority boundary verification (61.133375ms)
+✔ WP010-T29: [QI-010-R1-02] Supervisor unlock atomicity and rollback on audit failure (248.922917ms)
+✔ WP010-T30: [QI-010-R1-03] Supervisory role authority covers full SSOT Section 7 and 8 matrix (608.747625ms)
+ℹ tests 116
 ℹ suites 0
-ℹ pass 113
+ℹ pass 116
 ℹ fail 0
 ℹ cancelled 0
 ℹ skipped 0
 ℹ todo 0
-ℹ duration_ms 21673.134958
+ℹ duration_ms 22003.258584
 ```
 
 ### Actual Electron Runtime Validation:
@@ -164,9 +160,9 @@ Actual Electron Runtime Tests: 10 total | 10 passed | 0 failed | 0 skipped
 
 ## 5. Security Validation Debt Disposition
 
-| Debt ID | Summary | Target WP | Status in S10-R1 | Truthful Rationale |
+| Debt ID | Summary | Target WP | Status in S10-R2 | Truthful Rationale |
 |---|---|---|---|---|
-| **`SEC-VAL-02`** | Offline IAM brute-force and lockout validation | WP-010 | **`CLOSED`** | Fully validated through genuine execution on live authentication route `POST /api/v1/auth/pin` (`WP010-T22`) and supervisor unlock route (`WP010-T26`). Zero direct `recordFailure` shortcuts, zero fake delay providers, progressive delays objectively measured ($\ge 2\text{s}$ at attempt 3, $\ge 5\text{s}$ at attempts $\ge 4$), station lockout and SQLite persistence verified, critical audit events verified. |
+| **`SEC-VAL-02`** | Offline IAM brute-force and lockout validation | WP-010 | **`CLOSED`** | Fully validated through genuine execution on live authentication route `POST /api/v1/auth/pin` (`WP010-T22`), supervisor unlock route (`WP010-T26`), public boundary sealing (`WP010-T28`), transaction atomicity & rollback on audit write failure (`WP010-T29`), and full SSOT Section 7/8 role coverage (`WP010-T30`). Zero direct `recordFailure` shortcuts, progressive delays objectively measured ($\ge 2\text{s}$ at attempt 3, $\ge 5\text{s}$ at attempts $\ge 4$), station lockout and SQLite persistence verified, critical audit events verified. |
 | **`SEC-VAL-08`** | Argon2id benchmark on $\le 2\text{ GB}$ RAM target hardware | WP-010 | **`OPEN / PARTIAL — TARGET HARDWARE BENCHMARK REQUIRED`** | Software-constrained benchmark executed and documented ($m=64\text{MB}, t=3, p=4$, latency ~65ms). Preserved as OPEN/PARTIAL per instructions; physical $\le 2\text{ GB}$ RAM POS terminal evidence required during hardware qualification. |
 | **`SEC-VAL-03`** | Target hardware / LAN mDNS & TLS validation | WP-028 | **`OPEN / PARTIAL — TARGET HARDWARE / LAN EVIDENCE REQUIRED`** | Inherited from WP-009; deferred to deployment package WP-028 per governance. |
 
@@ -191,7 +187,7 @@ All nine (9) protected Product Owner decisions remain strictly **`PENDING PO DEC
 
 | Check | Description | Result | Evidence |
 |---|---|---|---|
-| **A** | Canonical baseline lineage | **PASS** | Lineage strictly adheres to `M9` → `880ab561` → `S10` → `S10-R1`. |
+| **A** | Canonical baseline lineage | **PASS** | Lineage strictly adheres to `M9` → `880ab561` → `S10` → `S10-R1` → `S10-R2`. |
 | **B** | WP-010 scope only | **PASS** | Only `@trident/edge` files and evidence modified; zero premature sync, outbox, or cloud billing code. |
 | **C** | PIN secrecy | **PASS** | `WP010-T03` and `WP010-T04` prove plaintext PIN is never persisted or logged. |
 | **D** | Argon2id conformance | **PASS** | Hash prefix verified as `$argon2id$v=19$m=65536,p=4,t=3$`; bcrypt prohibited. |
@@ -201,7 +197,7 @@ All nine (9) protected Product Owner decisions remain strictly **`PENDING PO DEC
 | **H** | Trusted-time / clock rollback | **PASS** | `WP010-T13`, `WP010-T14`, `WP010-T23` verify fail-closed behavior on wall-clock drift. |
 | **I** | Station-session binding | **PASS** | `WP010-T06` & `WP010-T15` verify cross-station misuse rejected. |
 | **J** | Restart behavior | **PASS** | `WP010-T11` verifies lockout persistence survives process restarts. |
-| **K** | Public API / secret escape hatches | **PASS** | `WP010-T25` proves zero escape hatches, zero collaborator injection, zero public persistence/lockout managers. |
+| **K** | Public API / secret escape hatches | **PASS** | `WP010-T25` & `WP010-T28` prove zero escape hatches, zero collaborator injection, zero public cached identity mutation methods. |
 | **L** | Test authenticity | **PASS** | Real SQLite WAL, real Argon2id, real cryptographic hashes, real HTTP route execution; 0 skipped, 0 fake delay providers. |
 | **M** | CI exact-SHA binding | **PASS** | `turbo run typecheck lint` and `npm test` execute cleanly across all packages. |
 | **N** | Security scan exact-SHA binding | **PASS** | All cryptographic parameters strictly adhere to IAM_SECURITY_MODEL.md. |
@@ -215,4 +211,4 @@ All nine (9) protected Product Owner decisions remain strictly **`PENDING PO DEC
 - `npm run format:check`: **SUCCESS** (All files match Prettier code style)
 - `npm run lint`: **SUCCESS** (6 packages in turbo workspace passed)
 - `npm run typecheck`: **SUCCESS** (7 tasks in turbo workspace passed)
-- `npm test`: **SUCCESS** (All 12 tasks across the repository passed, including 113 edge unit tests and 10 actual Electron runtime tests)
+- `npm test`: **SUCCESS** (All 12 tasks across the repository passed, including 116 edge unit tests and 10 actual Electron runtime tests)

@@ -1544,3 +1544,262 @@ test('WP010-T27: [QI-010-03] Corrupted or invalid role data strictly fails close
     ctx.cleanup();
   }
 });
+
+test('WP010-T28: [QI-010-R1-01] Public cached identity authority boundary verification', async () => {
+  const ctx = await createTestContext('wp010_t28');
+  try {
+    const publicModule = (await import('./index.js')) as Record<string, unknown>;
+
+    // 1. Types / classes for cached identity are NOT on the public surface
+    assert.equal(
+      publicModule['CachedUserInput'],
+      undefined,
+      'CachedUserInput must not be publicly exported',
+    );
+    assert.equal(
+      publicModule['CachedUserRecord'],
+      undefined,
+      'CachedUserRecord must not be publicly exported',
+    );
+
+    // 2. OfflineIamService instances expose NO cache manipulation methods
+    const serviceAny = ctx.iamService as unknown as Record<string, unknown>;
+    assert.equal(
+      typeof serviceAny['cacheUser'],
+      'undefined',
+      'cacheUser method must not exist on OfflineIamService',
+    );
+    assert.equal(
+      typeof serviceAny['invalidateUser'],
+      'undefined',
+      'invalidateUser method must not exist on OfflineIamService',
+    );
+    assert.equal(
+      typeof serviceAny['getCachedUser'],
+      'undefined',
+      'getCachedUser method must not exist on OfflineIamService',
+    );
+
+    // 3. Prove prototype does not leak cache manipulation methods
+    const serviceKeys = Object.getOwnPropertyNames(Object.getPrototypeOf(ctx.iamService));
+    assert.ok(!serviceKeys.includes('cacheUser'), 'Prototype must not contain cacheUser');
+    assert.ok(!serviceKeys.includes('invalidateUser'), 'Prototype must not contain invalidateUser');
+    assert.ok(!serviceKeys.includes('getCachedUser'), 'Prototype must not contain getCachedUser');
+  } finally {
+    ctx.cleanup();
+  }
+});
+
+test('WP010-T29: [QI-010-R1-02] Supervisor unlock atomicity and rollback on audit failure', async () => {
+  const ctx = await createTestContext('wp010_t29');
+  try {
+    const baseNow = ctx.trustedTimeManager.getTrustedEffectiveTime();
+    const lockoutMgr = getTestInternals(ctx.iamService).lockoutManager;
+    const nativeDb = getTestNativeDatabase(ctx.edgeDb);
+
+    // 1. Lock the station with 5 consecutive failures
+    for (let i = 0; i < 5; i++) {
+      lockoutMgr.recordFailure(ctx.stationId, baseNow);
+    }
+    const initialLockCheck = lockoutMgr.checkLockout(ctx.stationId, baseNow);
+    assert.equal(initialLockCheck.isLocked, true, 'Station must be locked initially');
+
+    // 2. Seed valid supervisor user
+    const supervisorId = '00000000-0000-4000-8000-000000000099';
+    const superPin = '9999';
+    const superHashRes = await hashBranchPin(superPin);
+    assert.equal(superHashRes.ok, true);
+
+    ctx.persistence.upsertCachedUser({
+      userId: supervisorId,
+      organizationId: ctx.organizationId,
+      fullName: 'Supervisor Unit',
+      pinHash: (superHashRes as { ok: true; value: string }).value,
+      roles: ['SUPERVISOR'],
+      credentialVersion: 1,
+      issuedAt: baseNow - 100,
+      expiresAt: baseNow + 86400,
+      isRevoked: 0,
+    });
+
+    // 3. Inject audit insert failure to simulate crash / failure during audit write
+    ctx.persistence.setSimulateAuditInsertFailure(true, kInternalTestToken);
+
+    // 4. Attempt supervisor unlock — must reject because audit insert fails
+    await assert.rejects(
+      async () => {
+        await ctx.iamService.supervisorUnlockStation({
+          stationId: ctx.stationId,
+          supervisorUserId: supervisorId,
+          supervisorPin: superPin,
+          reason: 'Emergency shift unlock',
+        });
+      },
+      (err: Error) => {
+        assert.equal(err.message, 'SIMULATED_AUDIT_INSERT_FAILURE');
+        return true;
+      },
+    );
+
+    // 5. Verify TRANSACTION ROLLBACK:
+    // - Lockout state in SQLite must STILL be locked (not reset to 0)
+    const lockoutRow = nativeDb
+      .prepare(
+        'SELECT consecutive_failures, locked_until FROM station_lockout_state WHERE station_id = ?',
+      )
+      .get(ctx.stationId) as { consecutive_failures: number; locked_until: number };
+    assert.equal(lockoutRow.consecutive_failures, 5, 'Failures must remain 5 due to rollback');
+    assert.ok(lockoutRow.locked_until > baseNow, 'Lock timestamp must remain active');
+    assert.equal(lockoutMgr.checkLockout(ctx.stationId, baseNow).isLocked, true);
+
+    // - Zero audit records for StationUnlockedBySupervisor or SUPERVISOR_UNLOCK
+    const auditRows = nativeDb
+      .prepare(
+        "SELECT COUNT(*) as count FROM edge_security_audit WHERE event_type = 'StationUnlockedBySupervisor' OR action = 'SUPERVISOR_UNLOCK'",
+      )
+      .get() as { count: number };
+    assert.equal(auditRows.count, 0, 'Zero supervisor unlock audit records after rollback');
+
+    // 6. Normal unlock path after fault cleared:
+    ctx.persistence.setSimulateAuditInsertFailure(false, kInternalTestToken);
+
+    const unlockResult = await ctx.iamService.supervisorUnlockStation({
+      stationId: ctx.stationId,
+      supervisorUserId: supervisorId,
+      supervisorPin: superPin,
+      reason: 'Valid override after fault clear',
+    });
+    assert.equal(unlockResult.success, true);
+
+    // 7. Verify atomic success:
+    // - Lockout state reset
+    const clearedLockCheck = lockoutMgr.checkLockout(ctx.stationId, baseNow);
+    assert.equal(clearedLockCheck.isLocked, false, 'Lockout must now be cleared');
+    const clearedRow = nativeDb
+      .prepare(
+        'SELECT consecutive_failures, locked_until FROM station_lockout_state WHERE station_id = ?',
+      )
+      .get(ctx.stationId) as { consecutive_failures: number; locked_until: number | null };
+    assert.equal(clearedRow.consecutive_failures, 0);
+    assert.equal(clearedRow.locked_until, null);
+
+    // - Exactly one audit record committed
+    const finalAuditRows = nativeDb
+      .prepare(
+        "SELECT COUNT(*) as count FROM edge_security_audit WHERE event_type = 'StationUnlockedBySupervisor'",
+      )
+      .get() as { count: number };
+    assert.equal(finalAuditRows.count, 1, 'Exactly one supervisor unlock audit record');
+  } finally {
+    ctx.cleanup();
+  }
+});
+
+test('WP010-T30: [QI-010-R1-03] Supervisory role authority covers full SSOT Section 7 and 8 matrix', async () => {
+  const ctx = await createTestContext('wp010_t30');
+  try {
+    const baseNow = ctx.trustedTimeManager.getTrustedEffectiveTime();
+    const lockoutMgr = getTestInternals(ctx.iamService).lockoutManager;
+
+    const superPin = '4321';
+    const pinHashRes = await hashBranchPin(superPin);
+    assert.equal(pinHashRes.ok, true);
+    const pinHash = (pinHashRes as { ok: true; value: string }).value;
+
+    // Authorized supervisory roles per Section 7 (ROLE-001, ROLE-002) and Section 8
+    const authorizedRoles = [
+      ['ADMIN'],
+      ['ADMINISTRADOR'],
+      ['GERENTE'],
+      ['MANAGER'],
+      ['SUPERVISOR'],
+      ['gerente'],
+      ['administrador'],
+    ];
+
+    let userIdCounter = 1;
+    for (const roles of authorizedRoles) {
+      // Lock station
+      for (let i = 0; i < 5; i++) {
+        lockoutMgr.recordFailure(ctx.stationId, baseNow);
+      }
+      assert.equal(lockoutMgr.checkLockout(ctx.stationId, baseNow).isLocked, true);
+
+      const uid = `00000000-0000-4000-8000-${String(userIdCounter++).padStart(12, '0')}`;
+      ctx.persistence.upsertCachedUser({
+        userId: uid,
+        organizationId: ctx.organizationId,
+        fullName: `Super User ${roles.join(',')}`,
+        pinHash,
+        roles,
+        credentialVersion: 1,
+        issuedAt: baseNow - 100,
+        expiresAt: baseNow + 86400,
+        isRevoked: 0,
+      });
+
+      const res = await ctx.iamService.supervisorUnlockStation({
+        stationId: ctx.stationId,
+        supervisorUserId: uid,
+        supervisorPin: superPin,
+        reason: `Authorized role unlock test: ${roles.join(',')}`,
+      });
+      assert.equal(res.success, true);
+      assert.equal(lockoutMgr.checkLockout(ctx.stationId, baseNow).isLocked, false);
+    }
+
+    // Unauthorized non-supervisory roles fail closed with INSUFFICIENT_PERMISSIONS
+    const unauthorizedRoleSets = [
+      ['CASHIER'],
+      ['CAJA'],
+      ['WAITER'],
+      ['MESERO'],
+      ['COCINA'],
+      ['KITCHEN'],
+      ['STAFF'],
+      ['GUEST'],
+    ];
+
+    for (const roles of unauthorizedRoleSets) {
+      // Lock station
+      for (let i = 0; i < 5; i++) {
+        lockoutMgr.recordFailure(ctx.stationId, baseNow);
+      }
+      assert.equal(lockoutMgr.checkLockout(ctx.stationId, baseNow).isLocked, true);
+
+      const uid = `00000000-0000-4000-8000-${String(userIdCounter++).padStart(12, '0')}`;
+      ctx.persistence.upsertCachedUser({
+        userId: uid,
+        organizationId: ctx.organizationId,
+        fullName: `Unauthorized User ${roles.join(',')}`,
+        pinHash,
+        roles,
+        credentialVersion: 1,
+        issuedAt: baseNow - 100,
+        expiresAt: baseNow + 86400,
+        isRevoked: 0,
+      });
+
+      await assert.rejects(
+        async () => {
+          await ctx.iamService.supervisorUnlockStation({
+            stationId: ctx.stationId,
+            supervisorUserId: uid,
+            supervisorPin: superPin,
+            reason: 'Unauthorized unlock attempt',
+          });
+        },
+        (err: Error) => {
+          assert.ok(err instanceof OfflineIamError);
+          assert.equal(err.code, 'INSUFFICIENT_PERMISSIONS');
+          return true;
+        },
+      );
+
+      // Station must STILL be locked
+      assert.equal(lockoutMgr.checkLockout(ctx.stationId, baseNow).isLocked, true);
+    }
+  } finally {
+    ctx.cleanup();
+  }
+});

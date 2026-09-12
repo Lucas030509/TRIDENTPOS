@@ -15,8 +15,6 @@ export type { FloorSessionTokenClaims } from './session-token.js';
 
 export { OfflineIamError } from './types.js';
 export type {
-  CachedUserInput,
-  CachedUserRecord,
   OfflineIamErrorCode,
   PinAuthRequest,
   PinAuthSuccessResponse,

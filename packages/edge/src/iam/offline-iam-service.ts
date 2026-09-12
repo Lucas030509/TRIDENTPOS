@@ -25,8 +25,6 @@ import {
   verifyFloorSessionToken,
 } from './session-token.js';
 import {
-  CachedUserInput,
-  CachedUserRecord,
   OfflineIamError,
   PinAuthRequest,
   PinAuthSuccessResponse,
@@ -601,8 +599,22 @@ export class OfflineIamService {
       );
     }
 
-    const isSupervisor =
-      roles.includes('SUPERVISOR') || roles.includes('ADMIN') || roles.includes('MANAGER');
+    // Authoritative supervisory role validation per RESTAURANT_SOFTWARE_RECONSTRUCTION_SPEC_v1.0_BASELINE.md
+    // Section 7 ("ROLES Y USUARIOS"):
+    //   - ROLE-001 — Administrador: all system operations; default authorized for security events.
+    //   - ROLE-002 — Gerente / Supervisor / "Usuario autorizado": authorized for security overrides (discounts, cancellations, reopenings, lockouts).
+    // Section 8 ("MATRIZ DE PERMISOS"): Perfiles del sistema: 01 ADMINISTRADOR, 03 GERENTE.
+    // Governed bilingual normalized supervisory role set:
+    const SUPERVISORY_AUTHORIZED_ROLES = new Set([
+      'ADMIN',
+      'ADMINISTRADOR',
+      'GERENTE',
+      'MANAGER',
+      'SUPERVISOR',
+    ]);
+    const isSupervisor = roles.some((r) =>
+      SUPERVISORY_AUTHORIZED_ROLES.has(r.trim().toUpperCase()),
+    );
     if (!isSupervisor) {
       const failureEval = this.#lockoutManager.recordFailure(request.stationId, now);
       if (failureEval.isNewLockout) {
@@ -629,10 +641,8 @@ export class OfflineIamService {
       throw new OfflineIamError('AUTHENTICATION_FAILED', 'Invalid supervisor PIN');
     }
 
-    // 8. Successful Unlock & Audit Commitment
-    this.#lockoutManager.unlock(request.stationId, now);
-
-    this.#persistence.appendAuditEvent({
+    // 8. Atomic Unlock & Audit Commitment in Single SQLite Transaction (QI-010-R1-02)
+    this.#persistence.unlockStationWithAudit(request.stationId, now, {
       eventId: crypto.randomUUID(),
       organizationId: this.#organizationId,
       branchId: this.#branchId,
@@ -680,25 +690,9 @@ export class OfflineIamService {
     });
   }
 
-  // -------------------------------------------------------------------------
-  // Cache Administration
-  // -------------------------------------------------------------------------
-
-  public cacheUser(user: CachedUserInput): void {
-    this.#persistence.upsertCachedUser(user);
-  }
-
-  public invalidateUser(userId: string): void {
-    this.#persistence.invalidateCachedUser(userId);
-  }
-
-  public getCachedUser(userId: string): CachedUserRecord | null {
-    return this.#persistence.getCachedUser(userId);
-  }
-
   /**
    * Internal test interface - only accessible via test-support.ts using unexported Symbol.
-   * Conforms to QI-010-01.
+   * Conforms to QI-010-01 and QI-010-R1-01.
    */
   [kGetTestInternals]?(token: symbol): {
     persistence: IamPersistence;

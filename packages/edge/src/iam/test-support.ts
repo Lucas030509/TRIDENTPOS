@@ -12,6 +12,9 @@ import { IamPersistence } from '../db/iam-persistence.js';
 import { EdgeSecureStore } from '../enrollment/secure-store.js';
 import { TrustedTimeManager } from '../enrollment/trusted-time.js';
 import { OfflineIamService } from './offline-iam-service.js';
+import type { CachedUserInput, CachedUserRecord } from './types.js';
+
+export type { CachedUserInput, CachedUserRecord };
 
 export const kInternalTestToken = Symbol('kInternalTestToken');
 export const kGetTestInternals = Symbol('kGetTestInternals');

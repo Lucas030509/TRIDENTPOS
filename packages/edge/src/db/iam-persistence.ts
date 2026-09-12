@@ -308,6 +308,40 @@ export class IamPersistence {
       .run(stationId, now);
   }
 
+  /**
+   * Atomically resets station lockout and writes the supervisor unlock audit event.
+   * Conforms to QI-010-R1-02: Lockout state and audit event are committed in a single
+   * SQLite transaction, guaranteeing that any audit insert failure automatically rolls back
+   * the lockout reset.
+   */
+  public unlockStationWithAudit(
+    stationId: string,
+    currentEffectiveTime: number,
+    auditInput: {
+      eventId: string;
+      organizationId: string;
+      branchId: string;
+      edgeId: string;
+      stationId?: string | null;
+      eventType: string;
+      severity: 'INFO' | 'WARN' | 'ERROR' | 'CRITICAL';
+      action: string;
+      metadata: Record<string, unknown>;
+      createdAt: number;
+    },
+  ): { audit: EdgeSecurityAuditRecord } {
+    return this.#edgeDb.runInTransaction(() => {
+      this.resetLockoutState(stationId, currentEffectiveTime);
+
+      if (this.#simulateAuditInsertFailure) {
+        throw new Error('SIMULATED_AUDIT_INSERT_FAILURE');
+      }
+
+      const audit = this.#appendAuditEventInternal(auditInput);
+      return { audit };
+    });
+  }
+
   // -------------------------------------------------------------------------
   // Station Sessions & Atomic Session Commit
   // -------------------------------------------------------------------------
@@ -528,6 +562,9 @@ export class IamPersistence {
     createdAt: number;
   }): EdgeSecurityAuditRecord {
     return this.#edgeDb.runInTransaction(() => {
+      if (this.#simulateAuditInsertFailure) {
+        throw new Error('SIMULATED_AUDIT_INSERT_FAILURE');
+      }
       return this.#appendAuditEventInternal(auditInput);
     });
   }
