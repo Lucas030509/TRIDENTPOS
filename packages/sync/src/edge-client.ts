@@ -24,18 +24,32 @@ import {
 } from '@trident/core';
 
 export interface IEdgeOutboxManager {
-  getPendingEvents(limit?: number): Array<{
-    id: string;
-    organizationId: string;
-    branchId: string;
-    clientOpId: string;
-    aggregateType: string;
-    aggregateId: string;
-    aggregateSequenceNumber: number;
-    action: string;
-    payload: unknown;
-  }>;
-  markSynced(id: string, ack: import('@trident/core').SyncEventAckDTO): boolean;
+  getPendingEvents(limit?: number):
+    | Promise<
+        Array<{
+          id: string;
+          organizationId: string;
+          branchId: string;
+          clientOpId: string;
+          aggregateType: string;
+          aggregateId: string;
+          aggregateSequenceNumber: number;
+          action: string;
+          payload: unknown;
+        }>
+      >
+    | Array<{
+        id: string;
+        organizationId: string;
+        branchId: string;
+        clientOpId: string;
+        aggregateType: string;
+        aggregateId: string;
+        aggregateSequenceNumber: number;
+        action: string;
+        payload: unknown;
+      }>;
+  markSynced(id: string, ack: import('@trident/core').SyncEventAckDTO): Promise<boolean> | boolean;
 }
 
 export interface IEdgeSyncPersistenceManager {
@@ -52,14 +66,17 @@ export interface IEdgeSyncPersistenceManager {
 export interface EdgeSyncClientOptions {
   readonly wsUrl: string;
   readonly auth: AuthContext;
+  readonly authToken?: string | (() => Promise<string> | string);
   readonly outbox?: IEdgeOutboxManager;
   readonly syncPersistence?: IEdgeSyncPersistenceManager;
   readonly config?: Partial<SyncReconnectConfig>;
+  readonly deterministicBackoff?: boolean;
 }
 
 export class EdgeSyncClient {
   readonly #wsUrl: string;
   readonly #auth: AuthContext;
+  readonly #authToken?: string | (() => Promise<string> | string);
   readonly #outbox?: IEdgeOutboxManager;
   readonly #syncPersistence?: IEdgeSyncPersistenceManager;
   readonly #config: SyncReconnectConfig;
@@ -81,12 +98,17 @@ export class EdgeSyncClient {
 
   #pendingRequests = new Map<
     string,
-    { resolve: (msg: SyncStreamMessage) => void; reject: (err: Error) => void; timer: NodeJS.Timeout }
+    {
+      resolve: (msg: SyncStreamMessage) => void;
+      reject: (err: Error) => void;
+      timer: NodeJS.Timeout;
+    }
   >();
 
   constructor(options: EdgeSyncClientOptions) {
     this.#wsUrl = options.wsUrl;
     this.#auth = options.auth;
+    this.#authToken = options.authToken;
     this.#outbox = options.outbox;
     this.#syncPersistence = options.syncPersistence;
 
@@ -98,7 +120,7 @@ export class EdgeSyncClient {
     this.#backoff = new ExponentialBackoffPolicy({
       baseDelayMs: this.#config.baseDelayMs,
       maxDelayMs: this.#config.maxDelayMs,
-      deterministic: true,
+      deterministic: options.deterministicBackoff ?? false,
     });
   }
 
@@ -184,23 +206,30 @@ export class EdgeSyncClient {
     this.#state = 'DISCONNECTED';
   }
 
-  #performConnect(): Promise<void> {
+  async #performConnect(): Promise<void> {
+    if (this.#stopped || this.#wanBlocked) {
+      return;
+    }
+
+    if (!this.#killSwitch.enabled) {
+      this.#state = 'DISABLED';
+      return;
+    }
+
+    this.#state = this.#reconnectAttempts === 0 ? 'CONNECTING' : 'RECONNECTING';
+
+    let headers: Record<string, string> = {};
+    if (this.#authToken) {
+      const token =
+        typeof this.#authToken === 'function' ? await this.#authToken() : this.#authToken;
+      headers = { Authorization: `Bearer ${token}` };
+    }
+
     return new Promise((resolve, reject) => {
-      if (this.#stopped || this.#wanBlocked) {
-        resolve();
-        return;
-      }
-
-      if (!this.#killSwitch.enabled) {
-        this.#state = 'DISABLED';
-        resolve();
-        return;
-      }
-
-      this.#state = this.#reconnectAttempts === 0 ? 'CONNECTING' : 'RECONNECTING';
-
       try {
-        const ws = new WebSocket(this.#wsUrl);
+        const ws = new WebSocket(this.#wsUrl, {
+          headers,
+        });
         this.#ws = ws;
 
         let opened = false;
@@ -345,8 +374,14 @@ export class EdgeSyncClient {
           this.#heartbeatTimeoutTimer = null;
         }
         const pongPayload = msg.payload as { killSwitch?: SyncEngineKillSwitch };
-        if (pongPayload?.killSwitch && pongPayload.killSwitch.enabled !== this.#killSwitch.enabled) {
-          this.setKillSwitch(pongPayload.killSwitch.enabled, pongPayload.killSwitch.reason ?? undefined);
+        if (
+          pongPayload?.killSwitch &&
+          pongPayload.killSwitch.enabled !== this.#killSwitch.enabled
+        ) {
+          this.setKillSwitch(
+            pongPayload.killSwitch.enabled,
+            pongPayload.killSwitch.reason ?? undefined,
+          );
         }
         return;
       }
@@ -380,11 +415,16 @@ export class EdgeSyncClient {
       return { flushed: 0, synced: 0 };
     }
 
-    if (!this.#killSwitch.enabled || this.#state !== 'CONNECTED' || !this.#ws || this.#ws.readyState !== WebSocket.OPEN) {
+    if (
+      !this.#killSwitch.enabled ||
+      this.#state !== 'CONNECTED' ||
+      !this.#ws ||
+      this.#ws.readyState !== WebSocket.OPEN
+    ) {
       return { flushed: 0, synced: 0 };
     }
 
-    const pending = this.#outbox.getPendingEvents(limit);
+    const pending = await this.#outbox.getPendingEvents(limit);
     if (pending.length === 0) {
       return { flushed: 0, synced: 0 };
     }
@@ -424,7 +464,7 @@ export class EdgeSyncClient {
     for (const result of ack.results) {
       const localRecord = pending.find((p) => p.clientOpId === result.clientOpId);
       if (localRecord) {
-        const marked = this.#outbox.markSynced(localRecord.id, result);
+        const marked = await this.#outbox.markSynced(localRecord.id, result);
         if (marked) {
           syncedCount++;
         }
@@ -438,15 +478,16 @@ export class EdgeSyncClient {
       batchId,
     });
 
-    if (this.#syncPersistence && pending.length > 0) {
-      const maxSeq = Math.max(...pending.map((p) => p.aggregateSequenceNumber));
+    if (this.#syncPersistence && syncedCount > 0) {
+      const current = this.#syncPersistence.getCheckpoint('OUTBOX_INGESTION');
+      const nextSeq = (current?.lastSyncedSequence ?? 0) + syncedCount;
       this.#syncPersistence.upsertCheckpoint({
         id: crypto.randomUUID(),
         organizationId: this.#auth.organizationId,
         branchId: this.#auth.branchId,
         streamType: 'OUTBOX_INGESTION',
         checkpointType: 'UPSTREAM_SEQUENCE',
-        lastSyncedSequence: maxSeq,
+        lastSyncedSequence: nextSeq,
         lastSnapshotVersion: 0,
         lastSyncTimestamp: new Date().toISOString(),
         metadata: { batchId, syncedCount },
@@ -461,7 +502,12 @@ export class EdgeSyncClient {
    */
   public async pullCatalogDeltas(): Promise<CatalogDeltaResponse | null> {
     if (!this.#syncPersistence) return null;
-    if (!this.#killSwitch.enabled || this.#state !== 'CONNECTED' || !this.#ws || this.#ws.readyState !== WebSocket.OPEN) {
+    if (
+      !this.#killSwitch.enabled ||
+      this.#state !== 'CONNECTED' ||
+      !this.#ws ||
+      this.#ws.readyState !== WebSocket.OPEN
+    ) {
       return null;
     }
 
@@ -500,7 +546,10 @@ export class EdgeSyncClient {
     return delta;
   }
 
-  #sendAndAwaitResponse<T>(msg: SyncStreamMessage, timeoutMs = 15000): Promise<SyncStreamMessage<T>> {
+  #sendAndAwaitResponse<T>(
+    msg: SyncStreamMessage,
+    timeoutMs = 15000,
+  ): Promise<SyncStreamMessage<T>> {
     return new Promise((resolve, reject) => {
       if (!this.#ws || this.#ws.readyState !== WebSocket.OPEN) {
         reject(new Error('Cannot send message: WebSocket is not open'));
@@ -522,7 +571,11 @@ export class EdgeSyncClient {
     });
   }
 
-  #emitTelemetry(eventType: import('@trident/core').SyncTelemetryEventType, durationMs?: number, details?: Record<string, unknown>): void {
+  #emitTelemetry(
+    eventType: import('@trident/core').SyncTelemetryEventType,
+    durationMs?: number,
+    details?: Record<string, unknown>,
+  ): void {
     if (this.#syncPersistence) {
       this.#syncPersistence.recordTelemetry({
         id: crypto.randomUUID(),
@@ -530,7 +583,11 @@ export class EdgeSyncClient {
         branchId: this.#auth.branchId,
         eventType,
         durationMs: durationMs ?? null,
-        recordsCount: details?.syncedCount ? Number(details.syncedCount) : (details?.entitiesCount ? Number(details.entitiesCount) : 0),
+        recordsCount: details?.syncedCount
+          ? Number(details.syncedCount)
+          : details?.entitiesCount
+            ? Number(details.entitiesCount)
+            : 0,
         details,
         occurredAt: new Date().toISOString(),
       });

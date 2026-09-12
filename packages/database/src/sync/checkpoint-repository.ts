@@ -11,6 +11,26 @@ export class SyncCheckpointRepository {
     client: pg.PoolClient | pg.Pool,
     checkpoint: Omit<SyncCheckpointRecord, 'id' | 'createdAt' | 'updatedAt'>,
   ): Promise<SyncCheckpointRecord> {
+    // 1. Fail-closed monotonicity pre-check
+    const existing = await this.getCheckpoint(
+      client,
+      checkpoint.organizationId,
+      checkpoint.branchId,
+      checkpoint.streamType,
+    );
+    if (existing) {
+      if (checkpoint.lastSyncedSequence < existing.lastSyncedSequence) {
+        throw new Error(
+          `CHECKPOINT_REGRESSION_REJECTED: Incoming lastSyncedSequence (${checkpoint.lastSyncedSequence}) < current (${existing.lastSyncedSequence}) for stream '${checkpoint.streamType}'`,
+        );
+      }
+      if (checkpoint.lastSnapshotVersion < existing.lastSnapshotVersion) {
+        throw new Error(
+          `CHECKPOINT_REGRESSION_REJECTED: Incoming lastSnapshotVersion (${checkpoint.lastSnapshotVersion}) < current (${existing.lastSnapshotVersion}) for stream '${checkpoint.streamType}'`,
+        );
+      }
+    }
+
     const query = `
       INSERT INTO sync_checkpoints (
         organization_id,
@@ -30,6 +50,8 @@ export class SyncCheckpointRepository {
         last_sync_timestamp = EXCLUDED.last_sync_timestamp,
         metadata = EXCLUDED.metadata,
         updated_at = NOW()
+      WHERE EXCLUDED.last_synced_sequence >= sync_checkpoints.last_synced_sequence
+        AND EXCLUDED.last_snapshot_version >= sync_checkpoints.last_snapshot_version
       RETURNING
         id,
         organization_id AS "organizationId",
@@ -57,7 +79,9 @@ export class SyncCheckpointRepository {
 
     const row = res.rows[0];
     if (!row) {
-      throw new Error('Failed to upsert sync checkpoint');
+      throw new Error(
+        `CHECKPOINT_REGRESSION_REJECTED: Concurrency conflict or sequence regression detected for stream '${checkpoint.streamType}'`,
+      );
     }
 
     return {

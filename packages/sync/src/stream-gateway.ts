@@ -12,18 +12,81 @@ import {
   AuthContext,
   CatalogDeltaRequest,
   CatalogDeltaResponse,
+  ERROR_CODE_CONTROL_PLANE_FORBIDDEN,
   ERROR_CODE_MALFORMED_STREAM_MESSAGE,
   ERROR_CODE_ORGANIZATION_BRANCH_MISMATCH,
   ERROR_CODE_SYNC_KILL_SWITCH_ENGAGED,
   ERROR_CODE_UNAUTHORIZED_TENANT,
+  JwtVerifierConfig,
   SyncBatchAckDTO,
   SyncBatchDTO,
   SyncEngineKillSwitch,
   SyncStreamMessage,
   createSyncStreamMessage,
   isValidSyncStreamMessage,
+  isValidUuid,
+  verifyAccessToken,
 } from '@trident/core';
-import type { IDownstreamDeltaProvider, ISyncBatchProcessor } from './types.js';
+import type {
+  IDownstreamDeltaProvider,
+  ISyncBatchProcessor,
+  IWebSocketAuthenticator,
+} from './types.js';
+
+export { IWebSocketAuthenticator };
+
+export class JwtWebSocketAuthenticator implements IWebSocketAuthenticator {
+  readonly #config: JwtVerifierConfig;
+
+  constructor(config: JwtVerifierConfig) {
+    this.#config = config;
+  }
+
+  public async authenticate(req: http.IncomingMessage): Promise<AuthContext | null> {
+    const authHeader = req.headers['authorization'];
+    if (!authHeader || typeof authHeader !== 'string') {
+      return null;
+    }
+    const match = authHeader.match(/^Bearer\s+(.+)$/i);
+    if (!match || !match[1]) {
+      return null;
+    }
+    const token = match[1];
+    const result = await verifyAccessToken(token, this.#config);
+    if (!result.ok) {
+      return null;
+    }
+    const claims = result.value.rawClaims;
+    const organizationId = (claims.organizationId ?? claims.org_id) as string | undefined;
+    const branchId = (claims.branchId ?? claims.branch_id) as string | undefined;
+    if (!organizationId || !branchId || !isValidUuid(organizationId) || !isValidUuid(branchId)) {
+      return null;
+    }
+    return {
+      organizationId,
+      branchId,
+      isControlPlane: Boolean(claims.isControlPlane ?? claims.is_control_plane),
+      roles: Array.isArray(claims.roles) ? claims.roles.map(String) : [],
+      permissions: Array.isArray(claims.permissions) ? claims.permissions.map(String) : [],
+    };
+  }
+}
+
+export class CallbackWebSocketAuthenticator implements IWebSocketAuthenticator {
+  readonly #handler: (
+    req: http.IncomingMessage,
+  ) => Promise<AuthContext | null> | AuthContext | null;
+
+  constructor(
+    handler: (req: http.IncomingMessage) => Promise<AuthContext | null> | AuthContext | null,
+  ) {
+    this.#handler = handler;
+  }
+
+  public authenticate(req: http.IncomingMessage): Promise<AuthContext | null> | AuthContext | null {
+    return this.#handler(req);
+  }
+}
 
 export interface CloudSyncGatewayOptions {
   readonly server?: http.Server;
@@ -31,14 +94,18 @@ export interface CloudSyncGatewayOptions {
   readonly path?: string;
   readonly batchProcessor: ISyncBatchProcessor;
   readonly deltaProvider?: IDownstreamDeltaProvider;
-  readonly authResolver?: (req: http.IncomingMessage) => Promise<AuthContext | null> | AuthContext | null;
+  readonly authenticator: IWebSocketAuthenticator;
+}
+
+interface AuthenticatedIncomingMessage extends http.IncomingMessage {
+  __authContext?: AuthContext;
 }
 
 export class CloudWebSocketSyncGateway {
   readonly #wss: WebSocketServer;
   readonly #batchProcessor: ISyncBatchProcessor;
   readonly #deltaProvider?: IDownstreamDeltaProvider;
-  readonly #authResolver?: (req: http.IncomingMessage) => Promise<AuthContext | null> | AuthContext | null;
+  readonly #authenticator: IWebSocketAuthenticator;
   readonly #clients = new Map<WebSocket, AuthContext>();
   #killSwitch: SyncEngineKillSwitch = {
     enabled: true, // true = sync active
@@ -46,49 +113,65 @@ export class CloudWebSocketSyncGateway {
   };
 
   constructor(options: CloudSyncGatewayOptions) {
+    // Fail closed immediately if authenticator is missing
+    if (!options.authenticator || typeof options.authenticator.authenticate !== 'function') {
+      throw new Error(
+        'GATEWAY_INITIALIZATION_ERROR: Missing required authenticator. CloudWebSocketSyncGateway must fail closed without trusted authentication boundary.',
+      );
+    }
+
     this.#batchProcessor = options.batchProcessor;
     this.#deltaProvider = options.deltaProvider;
-    this.#authResolver = options.authResolver;
+    this.#authenticator = options.authenticator;
 
     const path = options.path ?? '/api/v1/sync/stream';
 
-    if (options.server) {
-      this.#wss = new WebSocketServer({
-        noServer: true,
-      });
+    const verifyClient = (
+      info: { origin: string; secure: boolean; req: http.IncomingMessage },
+      callback: (res: boolean, code?: number, message?: string) => void,
+    ) => {
+      const url = info.req.url?.split('?')[0];
+      if (url !== path) {
+        callback(false, 404, 'Not Found');
+        return;
+      }
 
-      options.server.on('upgrade', async (req, socket, head) => {
-        const url = req.url?.split('?')[0];
-        if (url !== path) {
-          return;
-        }
-
-        let auth: AuthContext | null = null;
-        if (this.#authResolver) {
-          auth = await this.#authResolver(req);
+      Promise.resolve(this.#authenticator.authenticate(info.req))
+        .then((auth) => {
           if (!auth) {
-            socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
-            socket.destroy();
+            callback(false, 401, 'Unauthorized');
             return;
           }
-        }
-
-        this.#wss.handleUpgrade(req, socket, head, (ws) => {
-          if (auth) {
-            this.#clients.set(ws, auth);
-          }
-          this.#wss.emit('connection', ws, req);
+          (info.req as AuthenticatedIncomingMessage).__authContext = auth;
+          callback(true);
+        })
+        .catch(() => {
+          callback(false, 401, 'Unauthorized');
         });
+    };
+
+    if (options.server) {
+      this.#wss = new WebSocketServer({
+        server: options.server,
+        path,
+        verifyClient,
       });
     } else {
       this.#wss = new WebSocketServer({
         port: options.port ?? 0,
         path,
+        verifyClient,
       });
     }
 
     this.#wss.on('connection', (ws, req) => {
-      this.#handleConnection(ws, req);
+      const auth = (req as AuthenticatedIncomingMessage).__authContext;
+      if (!auth) {
+        ws.terminate();
+        return;
+      }
+      this.#clients.set(ws, auth);
+      this.#handleConnection(ws, auth);
     });
   }
 
@@ -106,6 +189,7 @@ export class CloudWebSocketSyncGateway {
 
   /**
    * Sets kill switch state and notifies all connected clients.
+   * Privileged server-side control plane API.
    */
   public setKillSwitch(enabled: boolean, reason?: string, updatedBy?: string): void {
     this.#killSwitch = {
@@ -142,7 +226,7 @@ export class CloudWebSocketSyncGateway {
     });
   }
 
-  #handleConnection(ws: WebSocket, req: http.IncomingMessage): void {
+  #handleConnection(ws: WebSocket, auth: AuthContext): void {
     ws.on('message', async (data: Buffer | string) => {
       try {
         const text = typeof data === 'string' ? data : data.toString('utf8');
@@ -150,50 +234,55 @@ export class CloudWebSocketSyncGateway {
         try {
           parsed = JSON.parse(text);
         } catch {
-          this.#sendError(ws, 'unknown', 'unknown', ERROR_CODE_MALFORMED_STREAM_MESSAGE, 'Invalid JSON format');
+          this.#sendError(
+            ws,
+            auth.organizationId,
+            auth.branchId,
+            ERROR_CODE_MALFORMED_STREAM_MESSAGE,
+            'Invalid JSON format',
+          );
           return;
         }
 
         if (!isValidSyncStreamMessage(parsed)) {
-          this.#sendError(ws, 'unknown', 'unknown', ERROR_CODE_MALFORMED_STREAM_MESSAGE, 'Message does not conform to SyncStreamMessage');
+          this.#sendError(
+            ws,
+            auth.organizationId,
+            auth.branchId,
+            ERROR_CODE_MALFORMED_STREAM_MESSAGE,
+            'Message does not conform to SyncStreamMessage',
+          );
           return;
         }
 
         const msg = parsed as SyncStreamMessage;
 
-        // Establish or verify authenticated session context (Pattern B)
-        let auth = this.#clients.get(ws);
-        if (!auth) {
-          if (this.#authResolver) {
-            const resolved = await this.#authResolver(req);
-            if (resolved) {
-              auth = resolved;
-            }
-          }
-          if (!auth) {
-            // Default to message authority ONLY if no resolver is configured (test harness mode)
-            auth = {
-              organizationId: msg.organizationId,
-              branchId: msg.branchId,
-            };
-          }
-          this.#clients.set(ws, auth);
-        }
-
         // Fencing check: incoming payload cannot override authenticated tenant authority
         if (msg.organizationId !== auth.organizationId) {
-          this.#sendError(ws, auth.organizationId, auth.branchId, ERROR_CODE_UNAUTHORIZED_TENANT, 'Message organizationId does not match verified session authority');
+          this.#sendError(
+            ws,
+            auth.organizationId,
+            auth.branchId,
+            ERROR_CODE_UNAUTHORIZED_TENANT,
+            'Message organizationId does not match verified session authority',
+          );
           return;
         }
         if (msg.branchId !== auth.branchId) {
-          this.#sendError(ws, auth.organizationId, auth.branchId, ERROR_CODE_ORGANIZATION_BRANCH_MISMATCH, 'Message branchId does not match verified session authority');
+          this.#sendError(
+            ws,
+            auth.organizationId,
+            auth.branchId,
+            ERROR_CODE_ORGANIZATION_BRANCH_MISMATCH,
+            'Message branchId does not match verified session authority',
+          );
           return;
         }
 
         await this.#routeMessage(ws, auth, msg);
       } catch (err: unknown) {
         const errMsg = err instanceof Error ? err.message : 'Unknown gateway routing error';
-        this.#sendError(ws, 'unknown', 'unknown', 'GATEWAY_INTERNAL_ERROR', errMsg);
+        this.#sendError(ws, auth.organizationId, auth.branchId, 'GATEWAY_INTERNAL_ERROR', errMsg);
       }
     });
 
@@ -209,10 +298,7 @@ export class CloudWebSocketSyncGateway {
           'HEARTBEAT_PONG',
           auth.organizationId,
           auth.branchId,
-          {
-            serverTime: new Date().toISOString(),
-            killSwitch: this.#killSwitch,
-          },
+          { serverTime: new Date().toISOString() },
           msg.messageId,
         );
         ws.send(JSON.stringify(pong));
@@ -220,21 +306,42 @@ export class CloudWebSocketSyncGateway {
       }
 
       case 'UPSTREAM_BATCH': {
-        // Enforce Kill Switch
         if (!this.#killSwitch.enabled) {
           this.#sendError(
             ws,
             auth.organizationId,
             auth.branchId,
             ERROR_CODE_SYNC_KILL_SWITCH_ENGAGED,
-            `Sync engine is currently disabled: ${this.#killSwitch.reason ?? 'Kill switch active'}`,
+            'Sync engine kill switch is currently engaged',
           );
           return;
         }
 
         const batch = msg.payload as SyncBatchDTO;
-        const ack = await this.#batchProcessor.processBatch(auth, batch);
 
+        // Enforce that batch payload matches verified server session authority
+        if (batch.organizationId !== auth.organizationId) {
+          this.#sendError(
+            ws,
+            auth.organizationId,
+            auth.branchId,
+            ERROR_CODE_UNAUTHORIZED_TENANT,
+            'Batch organizationId does not match verified session authority',
+          );
+          return;
+        }
+        if (batch.branchId !== auth.branchId) {
+          this.#sendError(
+            ws,
+            auth.organizationId,
+            auth.branchId,
+            ERROR_CODE_ORGANIZATION_BRANCH_MISMATCH,
+            'Batch branchId does not match verified session authority',
+          );
+          return;
+        }
+
+        const ack = await this.#batchProcessor.processBatch(auth, batch);
         const responseMsg = createSyncStreamMessage<SyncBatchAckDTO>(
           'UPSTREAM_ACK',
           auth.organizationId,
@@ -248,7 +355,13 @@ export class CloudWebSocketSyncGateway {
 
       case 'DOWNSTREAM_DELTA_REQUEST': {
         if (!this.#deltaProvider) {
-          this.#sendError(ws, auth.organizationId, auth.branchId, 'DELTA_PROVIDER_NOT_AVAILABLE', 'No downstream delta provider configured on gateway');
+          this.#sendError(
+            ws,
+            auth.organizationId,
+            auth.branchId,
+            'DELTA_PROVIDER_NOT_AVAILABLE',
+            'No downstream delta provider configured on gateway',
+          );
           return;
         }
 
@@ -267,13 +380,37 @@ export class CloudWebSocketSyncGateway {
       }
 
       case 'KILL_SWITCH_COMMAND': {
+        // Blocker R1-06: Treat kill switch as a privileged control-plane operation
+        const hasControlPlaneAuth = Boolean(
+          auth.isControlPlane ||
+          auth.roles?.includes('CLOUD_OPS') ||
+          auth.permissions?.includes('sync.kill_switch.manage'),
+        );
+
+        if (!hasControlPlaneAuth) {
+          this.#sendError(
+            ws,
+            auth.organizationId,
+            auth.branchId,
+            ERROR_CODE_CONTROL_PLANE_FORBIDDEN,
+            'Ordinary Edge stations cannot mutate global sync kill switch',
+          );
+          return;
+        }
+
         const command = msg.payload as { enabled: boolean; reason?: string };
-        this.setKillSwitch(command.enabled, command.reason, 'CLIENT_DISPATCHER');
+        this.setKillSwitch(command.enabled, command.reason, `CONTROL_PLANE:${auth.organizationId}`);
         break;
       }
 
       default: {
-        this.#sendError(ws, auth.organizationId, auth.branchId, 'UNSUPPORTED_MESSAGE_TYPE', `Type '${msg.type}' not supported by gateway`);
+        this.#sendError(
+          ws,
+          auth.organizationId,
+          auth.branchId,
+          'UNSUPPORTED_MESSAGE_TYPE',
+          `Type '${msg.type}' not supported by gateway`,
+        );
       }
     }
   }
@@ -290,12 +427,7 @@ export class CloudWebSocketSyncGateway {
       code,
       message,
     };
-    const errorMsg = createSyncStreamMessage(
-      'SYNC_ERROR',
-      organizationId,
-      branchId,
-      errPayload,
-    );
+    const errorMsg = createSyncStreamMessage('SYNC_ERROR', organizationId, branchId, errPayload);
     ws.send(JSON.stringify(errorMsg));
   }
 }

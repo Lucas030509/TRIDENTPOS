@@ -16,6 +16,9 @@ import crypto from 'node:crypto';
 export interface AuthContext {
   readonly organizationId: string;
   readonly branchId: string;
+  readonly isControlPlane?: boolean;
+  readonly roles?: readonly string[];
+  readonly permissions?: readonly string[];
 }
 
 export interface IdempotencyKeyComponents {
@@ -277,6 +280,7 @@ export interface ExponentialBackoffOptions {
   readonly maxDelayMs: number;
   readonly multiplier?: number;
   readonly deterministic?: boolean; // For reproducible test execution
+  readonly jitterRatio?: number; // Governed jitter percentage (defaults to 0.20 = 20%)
 }
 
 export class ExponentialBackoffPolicy implements BackoffPolicy {
@@ -284,12 +288,14 @@ export class ExponentialBackoffPolicy implements BackoffPolicy {
   readonly #maxDelayMs: number;
   readonly #multiplier: number;
   readonly #deterministic: boolean;
+  readonly #jitterRatio: number;
 
   constructor(options: ExponentialBackoffOptions) {
     this.#baseDelayMs = options.baseDelayMs;
     this.#maxDelayMs = options.maxDelayMs;
     this.#multiplier = options.multiplier ?? 2;
     this.#deterministic = options.deterministic ?? false;
+    this.#jitterRatio = options.jitterRatio ?? 0.2;
   }
 
   public getDelayMs(retryCount: number): number {
@@ -299,8 +305,8 @@ export class ExponentialBackoffPolicy implements BackoffPolicy {
     if (this.#deterministic) {
       return capped;
     }
-    // Subtle jitter within 10%
-    const jitter = capped * 0.1 * Math.random();
+    // Governed jitter within specified ratio (default 20%)
+    const jitter = capped * this.#jitterRatio * Math.random();
     return Math.min(capped + jitter, this.#maxDelayMs);
   }
 
@@ -332,6 +338,8 @@ export const ERROR_CODE_SYNC_KILL_SWITCH_ENGAGED = 'SYNC_KILL_SWITCH_ENGAGED';
 export const ERROR_CODE_DELTA_CHECKSUM_MISMATCH = 'DELTA_CHECKSUM_MISMATCH';
 export const ERROR_CODE_SYNC_STREAM_DISCONNECTED = 'SYNC_STREAM_DISCONNECTED';
 export const ERROR_CODE_MALFORMED_STREAM_MESSAGE = 'MALFORMED_STREAM_MESSAGE';
+export const ERROR_CODE_CHECKPOINT_REGRESSION = 'CHECKPOINT_REGRESSION_REJECTED';
+export const ERROR_CODE_CONTROL_PLANE_FORBIDDEN = 'CONTROL_PLANE_FORBIDDEN';
 
 // ---------------------------------------------------------------------------
 // WP-013: Bidirectional WebSocket Sync Stream Framing (ADR-005 / Sec. 4)
@@ -478,11 +486,7 @@ export interface SyncEngineKillSwitch {
 }
 
 export type SyncConnectionState =
-  | 'DISCONNECTED'
-  | 'CONNECTING'
-  | 'CONNECTED'
-  | 'RECONNECTING'
-  | 'DISABLED';
+  'DISCONNECTED' | 'CONNECTING' | 'CONNECTED' | 'RECONNECTING' | 'DISABLED';
 
 export interface SyncReconnectConfig {
   readonly baseDelayMs: number;
@@ -498,4 +502,3 @@ export const DEFAULT_SYNC_RECONNECT_CONFIG: SyncReconnectConfig = {
   heartbeatIntervalMs: 5000, // 5 seconds per ADR-005
   heartbeatTimeoutMs: 10000,
 };
-

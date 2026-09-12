@@ -25,7 +25,11 @@ export class CloudCatalogDeltaService implements IDownstreamDeltaProvider {
   readonly #catalogStore = new Map<string, CatalogEntityRecord[]>();
   #currentSnapshotVersion = 1;
 
-  public setEntities(orgId: string, entities: CatalogEntityRecord[], snapshotVersion?: number): void {
+  public setEntities(
+    orgId: string,
+    entities: CatalogEntityRecord[],
+    snapshotVersion?: number,
+  ): void {
     if (snapshotVersion !== undefined) {
       this.#currentSnapshotVersion = snapshotVersion;
     } else {
@@ -59,7 +63,10 @@ export class CloudCatalogDeltaService implements IDownstreamDeltaProvider {
 
     return {
       snapshotVersion: this.#currentSnapshotVersion,
-      deltaVersion: entities.length > 0 ? Math.max(...entities.map((e) => e.version)) : request.sinceSnapshotVersion,
+      deltaVersion:
+        entities.length > 0
+          ? Math.max(...entities.map((e) => e.version))
+          : request.sinceSnapshotVersion,
       checksum,
       entities,
       hasMore: false,

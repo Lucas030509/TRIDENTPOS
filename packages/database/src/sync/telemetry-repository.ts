@@ -60,7 +60,8 @@ export class SyncTelemetryRepository {
       ...row,
       durationMs: row.durationMs !== null ? Number(row.durationMs) : null,
       recordsCount: Number(row.recordsCount),
-      occurredAt: row.occurredAt instanceof Date ? row.occurredAt.toISOString() : String(row.occurredAt),
+      occurredAt:
+        row.occurredAt instanceof Date ? row.occurredAt.toISOString() : String(row.occurredAt),
     };
   }
 
@@ -124,7 +125,8 @@ export class SyncTelemetryRepository {
       ...row,
       durationMs: row.durationMs !== null ? Number(row.durationMs) : null,
       recordsCount: Number(row.recordsCount),
-      occurredAt: row.occurredAt instanceof Date ? row.occurredAt.toISOString() : String(row.occurredAt),
+      occurredAt:
+        row.occurredAt instanceof Date ? row.occurredAt.toISOString() : String(row.occurredAt),
     }));
   }
 }

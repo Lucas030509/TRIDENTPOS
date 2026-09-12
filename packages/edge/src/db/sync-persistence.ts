@@ -82,6 +82,20 @@ export class EdgeSyncPersistence {
   }
 
   public upsertCheckpoint(checkpoint: SyncCheckpointRecord): void {
+    const existing = this.getCheckpoint(checkpoint.streamType);
+    if (existing) {
+      if (checkpoint.lastSyncedSequence < existing.lastSyncedSequence) {
+        throw new Error(
+          `CHECKPOINT_REGRESSION_REJECTED: Incoming lastSyncedSequence (${checkpoint.lastSyncedSequence}) < current (${existing.lastSyncedSequence}) for stream '${checkpoint.streamType}'`,
+        );
+      }
+      if (checkpoint.lastSnapshotVersion < existing.lastSnapshotVersion) {
+        throw new Error(
+          `CHECKPOINT_REGRESSION_REJECTED: Incoming lastSnapshotVersion (${checkpoint.lastSnapshotVersion}) < current (${existing.lastSnapshotVersion}) for stream '${checkpoint.streamType}'`,
+        );
+      }
+    }
+
     const id = checkpoint.id || crypto.randomUUID();
     const metadataStr = JSON.stringify(checkpoint.metadata ?? {});
     const now = new Date().toISOString();
@@ -105,10 +119,12 @@ export class EdgeSyncPersistence {
         last_snapshot_version = excluded.last_snapshot_version,
         last_sync_timestamp = excluded.last_sync_timestamp,
         metadata = excluded.metadata,
-        updated_at = excluded.updated_at;
+        updated_at = excluded.updated_at
+      WHERE excluded.last_synced_sequence >= edge_sync_checkpoints.last_synced_sequence
+        AND excluded.last_snapshot_version >= edge_sync_checkpoints.last_snapshot_version;
     `);
 
-    stmt.run(
+    const info = stmt.run(
       id,
       checkpoint.organizationId,
       checkpoint.branchId,
@@ -120,6 +136,12 @@ export class EdgeSyncPersistence {
       metadataStr,
       now,
     );
+
+    if (info.changes === 0 && existing) {
+      throw new Error(
+        `CHECKPOINT_REGRESSION_REJECTED: Concurrency conflict or sequence regression detected for stream '${checkpoint.streamType}'`,
+      );
+    }
   }
 
   public getCheckpoint(streamType: string): SyncCheckpointRecord | null {
@@ -302,13 +324,7 @@ export class EdgeSyncPersistence {
         if (entity.action === 'DELETE') {
           deleteEntityStmt.run(entity.entityType, entity.entityId);
         } else {
-          upsertEntityStmt.run(
-            entity.entityType,
-            entity.entityId,
-            entity.version,
-            payloadStr,
-            now,
-          );
+          upsertEntityStmt.run(entity.entityType, entity.entityId, entity.version, payloadStr, now);
         }
       }
 

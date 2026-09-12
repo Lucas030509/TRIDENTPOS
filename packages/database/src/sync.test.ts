@@ -110,7 +110,12 @@ describe('TRIDENTPOS WP-013 Cloud Sync Repositories & RLS Suite', () => {
     assert.equal(created.branchId, branchA1Id);
     assert.equal(created.lastSyncedSequence, 42);
 
-    const retrieved = await checkpointRepo.getCheckpoint(pool, tenantAId, branchA1Id, 'OUTBOX_INGESTION');
+    const retrieved = await checkpointRepo.getCheckpoint(
+      pool,
+      tenantAId,
+      branchA1Id,
+      'OUTBOX_INGESTION',
+    );
     assert.ok(retrieved);
     assert.equal(retrieved.id, created.id);
     assert.equal(retrieved.lastSyncedSequence, 42);
@@ -133,10 +138,91 @@ describe('TRIDENTPOS WP-013 Cloud Sync Repositories & RLS Suite', () => {
     assert.equal(updated.lastSyncedSequence, 84);
     assert.equal(updated.lastSnapshotVersion, 5);
 
-    const retrieved = await checkpointRepo.getCheckpoint(pool, tenantAId, branchA1Id, 'OUTBOX_INGESTION');
+    const retrieved = await checkpointRepo.getCheckpoint(
+      pool,
+      tenantAId,
+      branchA1Id,
+      'OUTBOX_INGESTION',
+    );
     assert.ok(retrieved);
     assert.equal(retrieved.lastSyncedSequence, 84);
     assert.equal(retrieved.lastSnapshotVersion, 5);
+  });
+
+  it('WP013-DB-06: Checkpoint sequence regression 84 -> 40 is rejected fail-closed', async () => {
+    await assert.rejects(
+      async () => {
+        await checkpointRepo.upsertCheckpoint(pool, {
+          organizationId: tenantAId,
+          branchId: branchA1Id,
+          streamType: 'OUTBOX_INGESTION',
+          checkpointType: 'INGESTION',
+          lastSyncedSequence: 40, // Regressing from 84 to 40
+          lastSnapshotVersion: 5,
+          lastSyncTimestamp: new Date().toISOString(),
+          metadata: {},
+        });
+      },
+      (err: Error) => {
+        return err.message.includes('CHECKPOINT_REGRESSION_REJECTED') && err.message.includes('40');
+      },
+    );
+
+    // Verify current persisted checkpoint remains untouched at 84
+    const current = await checkpointRepo.getCheckpoint(
+      pool,
+      tenantAId,
+      branchA1Id,
+      'OUTBOX_INGESTION',
+    );
+    assert.ok(current);
+    assert.equal(current.lastSyncedSequence, 84);
+  });
+
+  it('WP013-DB-07: Checkpoint snapshot version regression 5 -> 3 is rejected fail-closed', async () => {
+    await assert.rejects(
+      async () => {
+        await checkpointRepo.upsertCheckpoint(pool, {
+          organizationId: tenantAId,
+          branchId: branchA1Id,
+          streamType: 'OUTBOX_INGESTION',
+          checkpointType: 'INGESTION',
+          lastSyncedSequence: 90, // Valid advance
+          lastSnapshotVersion: 3, // Regressing from 5 to 3
+          lastSyncTimestamp: new Date().toISOString(),
+          metadata: {},
+        });
+      },
+      (err: Error) => {
+        return err.message.includes('CHECKPOINT_REGRESSION_REJECTED') && err.message.includes('3');
+      },
+    );
+
+    // Verify current persisted checkpoint remains untouched at 84 / 5
+    const current = await checkpointRepo.getCheckpoint(
+      pool,
+      tenantAId,
+      branchA1Id,
+      'OUTBOX_INGESTION',
+    );
+    assert.ok(current);
+    assert.equal(current.lastSnapshotVersion, 5);
+  });
+
+  it('WP013-DB-08: Equal checkpoint values remain idempotently acceptable', async () => {
+    const res = await checkpointRepo.upsertCheckpoint(pool, {
+      organizationId: tenantAId,
+      branchId: branchA1Id,
+      streamType: 'OUTBOX_INGESTION',
+      checkpointType: 'INGESTION',
+      lastSyncedSequence: 84, // Equal
+      lastSnapshotVersion: 5, // Equal
+      lastSyncTimestamp: new Date().toISOString(),
+      metadata: { idempotent: true },
+    });
+
+    assert.equal(res.lastSyncedSequence, 84);
+    assert.equal(res.lastSnapshotVersion, 5);
   });
 
   it('WP013-DB-03: SyncCheckpointRepository respects branch foreign key constraint', async () => {
