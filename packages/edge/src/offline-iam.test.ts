@@ -42,14 +42,19 @@ import { hashBranchPin } from '@trident/core';
 import {
   EdgeDatabaseService,
   OfflineIamService,
+  OfflineIamServiceOptions,
   OfflineIamError,
   EdgeAuthRouter,
-  LOCKOUT_POLICY,
-  signFloorSessionToken,
-  verifyFloorSessionToken,
   SESSION_TOKEN_TTL_SECONDS,
 } from './index.js';
 
+import { LOCKOUT_POLICY } from './iam/lockout-manager.js';
+import { signFloorSessionToken, verifyFloorSessionToken } from './iam/session-token.js';
+import {
+  kInternalTestToken,
+  getTestInternals,
+  createTestOfflineIamService,
+} from './iam/test-support.js';
 import { EdgeSecureStore } from './enrollment/secure-store.js';
 import { TrustedTimeManager } from './enrollment/trusted-time.js';
 import { TestIsolatedSecureStorageBackend } from './enrollment/test-support.js';
@@ -144,7 +149,7 @@ async function createTestContext(prefix = 'wp010_test'): Promise<TestContext> {
     isRevoked: 0,
   });
 
-  const iamService = new OfflineIamService({
+  const iamService = createTestOfflineIamService({
     edgeDb,
     secureStore,
     trustedTimeManager,
@@ -439,7 +444,7 @@ test('WP010-T09: Brute-force repeated failures trigger governed lockout', async 
   const ctx = await createTestContext('wp010_t09');
   try {
     const now = ctx.trustedTimeManager.getTrustedEffectiveTime();
-    const lockoutMgr = ctx.iamService.getLockoutManager();
+    const lockoutMgr = getTestInternals(ctx.iamService).lockoutManager;
 
     // 4 failed attempts
     for (let i = 1; i <= 4; i++) {
@@ -482,7 +487,7 @@ test('WP010-T10: Correct PIN while locked remains rejected', async () => {
   const ctx = await createTestContext('wp010_t10');
   try {
     const now = ctx.trustedTimeManager.getTrustedEffectiveTime();
-    const lockoutMgr = ctx.iamService.getLockoutManager();
+    const lockoutMgr = getTestInternals(ctx.iamService).lockoutManager;
 
     // Trigger 5 failures
     for (let i = 0; i < 5; i++) {
@@ -513,7 +518,7 @@ test('WP010-T11: Lockout persistence survives process restart', async () => {
   const ctx = await createTestContext('wp010_t11');
   try {
     const now = ctx.trustedTimeManager.getTrustedEffectiveTime();
-    const lockoutMgr = ctx.iamService.getLockoutManager();
+    const lockoutMgr = getTestInternals(ctx.iamService).lockoutManager;
 
     // Trigger lockout
     for (let i = 0; i < 5; i++) {
@@ -554,7 +559,7 @@ test('WP010-T12: Governed lockout release behavior (natural expiry and superviso
   const ctx = await createTestContext('wp010_t12');
   try {
     const baseNow = ctx.trustedTimeManager.getTrustedEffectiveTime();
-    const lockoutMgr = ctx.iamService.getLockoutManager();
+    const lockoutMgr = getTestInternals(ctx.iamService).lockoutManager;
 
     // Trigger lockout
     for (let i = 0; i < 5; i++) {
@@ -784,7 +789,7 @@ test('WP010-T18: Concurrent failed attempts cannot bypass lockout counters', asy
   const ctx = await createTestContext('wp010_t18');
   try {
     const now = ctx.trustedTimeManager.getTrustedEffectiveTime();
-    const lockoutMgr = ctx.iamService.getLockoutManager();
+    const lockoutMgr = getTestInternals(ctx.iamService).lockoutManager;
 
     // Execute 10 rapid concurrent failure recordings
     const tasks = Array.from({ length: 10 }).map(() =>
@@ -805,7 +810,7 @@ test('WP010-T19: SQLite transaction failure produces no partial auth-state mutat
   const ctx = await createTestContext('wp010_t19');
   try {
     // Inject failure during session insert
-    ctx.persistence.setSimulateSessionInsertFailure(true);
+    ctx.persistence.setSimulateSessionInsertFailure(true, kInternalTestToken);
 
     await assert.rejects(async () => {
       await ctx.iamService.authenticateWithPin({
@@ -823,8 +828,8 @@ test('WP010-T19: SQLite transaction failure produces no partial auth-state mutat
     assert.equal(countRow.count, 0);
 
     // Inject failure during audit insert
-    ctx.persistence.setSimulateSessionInsertFailure(false);
-    ctx.persistence.setSimulateAuditInsertFailure(true);
+    ctx.persistence.setSimulateSessionInsertFailure(false, kInternalTestToken);
+    ctx.persistence.setSimulateAuditInsertFailure(true, kInternalTestToken);
 
     await assert.rejects(async () => {
       await ctx.iamService.authenticateWithPin({
@@ -931,50 +936,103 @@ test('WP010-T21: HTTP API POST /api/v1/auth/pin handles success, failure, lockou
 // Canonical WP-010 Obligation Tests
 // ---------------------------------------------------------------------------
 
-test('WP010-T22: [Obligation] Brute-force PIN attack test (100 rapid attack requests)', async () => {
+test('WP010-T22: [Obligation] Genuine brute-force PIN attack test via EdgeAuthRouter POST /api/v1/auth/pin', async () => {
   const ctx = await createTestContext('wp010_t22');
   try {
-    const now = ctx.trustedTimeManager.getTrustedEffectiveTime();
-    const attackAttempts = 100;
-    let lockedCount = 0;
-    let failedCount = 0;
+    const wrongPinPayload = JSON.stringify({
+      stationId: ctx.stationId,
+      userId: ctx.userId,
+      pin: '9999',
+    });
 
-    const lockoutMgr = ctx.iamService.getLockoutManager();
+    // Attempt 1: normal failure, status 401
+    const t0 = performance.now();
+    const res1 = await ctx.router.handleRequest('POST', '/api/v1/auth/pin', wrongPinPayload);
+    const d1 = performance.now() - t0;
+    assert.equal(res1.status, 401);
+    assert.equal(JSON.parse(res1.body).error, 'AUTHENTICATION_FAILED');
+    assert.ok(d1 < 1500, `Attempt 1 should not have progressive delay (took ${d1}ms)`);
 
-    for (let i = 1; i <= attackAttempts; i++) {
-      const evaluation = lockoutMgr.recordFailure(ctx.stationId, now);
-      if (evaluation.isLocked) {
-        lockedCount++;
-      } else {
-        failedCount++;
-      }
+    // Attempt 2: normal failure, status 401
+    const t1 = performance.now();
+    const res2 = await ctx.router.handleRequest('POST', '/api/v1/auth/pin', wrongPinPayload);
+    const d2 = performance.now() - t1;
+    assert.equal(res2.status, 401);
+    assert.equal(JSON.parse(res2.body).error, 'AUTHENTICATION_FAILED');
+    assert.ok(d2 < 1500, `Attempt 2 should not have progressive delay (took ${d2}ms)`);
+
+    // Attempt 3: governed 2-second delay, status 401
+    const t2 = performance.now();
+    const res3 = await ctx.router.handleRequest('POST', '/api/v1/auth/pin', wrongPinPayload);
+    const d3 = performance.now() - t2;
+    assert.equal(res3.status, 401);
+    assert.equal(JSON.parse(res3.body).error, 'AUTHENTICATION_FAILED');
+    assert.ok(d3 >= 1900, `Attempt 3 must enforce governed 2s progressive delay (took ${d3}ms)`);
+
+    // Attempt 4: governed 5-second delay, status 401
+    const t3 = performance.now();
+    const res4 = await ctx.router.handleRequest('POST', '/api/v1/auth/pin', wrongPinPayload);
+    const d4 = performance.now() - t3;
+    assert.equal(res4.status, 401);
+    assert.equal(JSON.parse(res4.body).error, 'AUTHENTICATION_FAILED');
+    assert.ok(d4 >= 4900, `Attempt 4 must enforce governed 5s progressive delay (took ${d4}ms)`);
+
+    // Attempt 5: triggers STATION_LOCKED, status 423
+    const t4 = performance.now();
+    const res5 = await ctx.router.handleRequest('POST', '/api/v1/auth/pin', wrongPinPayload);
+    const d5 = performance.now() - t4;
+    assert.ok(d5 >= 0);
+    assert.equal(res5.status, 423);
+    const body5 = JSON.parse(res5.body);
+    assert.equal(body5.error, 'STATION_LOCKED');
+    assert.ok(body5.retryAfter > 0);
+    assert.ok(res5.headers['Retry-After']);
+
+    // Subsequent rapid attack attempts (attempts 6-25): rejected by lockout without Argon2id overhead (<50ms each)
+    const rapidAttempts = 20;
+    for (let i = 0; i < rapidAttempts; i++) {
+      const tRapid = performance.now();
+      const rapidRes = await ctx.router.handleRequest('POST', '/api/v1/auth/pin', wrongPinPayload);
+      const dRapid = performance.now() - tRapid;
+      assert.equal(rapidRes.status, 423);
+      assert.equal(JSON.parse(rapidRes.body).error, 'STATION_LOCKED');
+      assert.ok(
+        dRapid < 50,
+        `Locked attack request ${i + 6} should short-circuit quickly (took ${dRapid}ms)`,
+      );
     }
-
-    // Exactly 4 failures allowed before lockout threshold (5) is engaged
-    assert.equal(failedCount, 4);
-    assert.equal(lockedCount, 96);
 
     // Check persisted lockout state in SQLite
     const finalState = ctx.persistence.getLockoutState(ctx.stationId);
-    assert.equal(finalState?.consecutiveFailures, 100);
-    assert.ok(finalState?.lockedUntil !== null);
-    assert.equal(finalState.lockedUntil, now + LOCKOUT_POLICY.LOCKOUT_DURATION_SECONDS);
+    assert.ok(finalState !== null);
+    assert.ok(finalState.consecutiveFailures >= 5);
+    assert.ok(finalState.lockedUntil !== null);
 
-    // Confirm that attempt immediately fails with STATION_LOCKED
-    await assert.rejects(
-      async () => {
-        await ctx.iamService.authenticateWithPin({
-          stationId: ctx.stationId,
-          userId: ctx.userId,
-          pin: '0000',
-        });
-      },
-      (err: Error) => {
-        assert.ok(err instanceof OfflineIamError);
-        assert.equal(err.code, 'STATION_LOCKED');
-        return true;
-      },
+    // Audit event PinBruteForceAttemptDetected emitted
+    const nativeDb = getTestNativeDatabase(ctx.edgeDb);
+    const auditRows = nativeDb
+      .prepare(
+        "SELECT * FROM edge_security_audit WHERE event_type = 'PinBruteForceAttemptDetected'",
+      )
+      .all() as Array<{ severity: string; action: string; metadata_json: string }>;
+    assert.ok(auditRows.length >= 1, 'Lockout audit event must be persisted');
+    const lockAudit = auditRows[0]!;
+    assert.equal(lockAudit.severity, 'CRITICAL');
+    assert.equal(lockAudit.action, 'STATION_LOCKOUT');
+
+    // Correct PIN remains rejected while locked
+    const correctPinPayload = JSON.stringify({
+      stationId: ctx.stationId,
+      userId: ctx.userId,
+      pin: ctx.plainPin, // Correct PIN
+    });
+    const correctRes = await ctx.router.handleRequest(
+      'POST',
+      '/api/v1/auth/pin',
+      correctPinPayload,
     );
+    assert.equal(correctRes.status, 423);
+    assert.equal(JSON.parse(correctRes.body).error, 'STATION_LOCKED');
   } finally {
     ctx.cleanup();
   }
@@ -1052,3 +1110,437 @@ async function ctx_verify(hash: string, plain: string): Promise<boolean> {
   const res = await verifyBranchPin(hash, plain);
   return res.ok && res.value === true;
 }
+
+// ---------------------------------------------------------------------------
+// Coordinator Quick Integrity Verification Tests (S10-R1)
+// ---------------------------------------------------------------------------
+
+test('WP010-T25: [QI-010-01] Public IAM boundary prevents collaborator injection, internal escape, and fault invocation', async () => {
+  const ctx = await createTestContext('wp010_t25');
+  try {
+    const publicModule = (await import('./index.js')) as Record<string, unknown>;
+
+    // 1. Prohibited exports must NOT exist on public package surface
+    assert.equal(publicModule['IamPersistence'], undefined);
+    assert.equal(publicModule['LockoutManager'], undefined);
+    assert.equal(publicModule['signFloorSessionToken'], undefined);
+    assert.equal(publicModule['verifyFloorSessionToken'], undefined);
+    assert.equal(publicModule['computeSessionTokenHash'], undefined);
+    assert.equal(publicModule['LOCKOUT_POLICY'], undefined);
+
+    // 2. Cannot inject custom lockout manager or persistence in OfflineIamService constructor
+    const fakeLockoutManager = { recordFailure: () => ({ isLocked: false }) };
+    const fakePersistence = { recordFailedAttempt: () => {} };
+
+    assert.throws(
+      () => {
+        new OfflineIamService({
+          edgeDb: ctx.edgeDb,
+          secureStore: ctx.secureStore,
+          trustedTimeManager: ctx.trustedTimeManager,
+          edgeId: ctx.edgeId,
+          organizationId: ctx.organizationId,
+          branchId: ctx.branchId,
+          lockoutManager: fakeLockoutManager,
+        } as unknown as OfflineIamServiceOptions);
+      },
+      (err: Error) => {
+        assert.ok(err instanceof OfflineIamError);
+        assert.equal(err.code, 'INVALID_INPUT');
+        return true;
+      },
+    );
+
+    assert.throws(
+      () => {
+        new OfflineIamService({
+          edgeDb: ctx.edgeDb,
+          secureStore: ctx.secureStore,
+          trustedTimeManager: ctx.trustedTimeManager,
+          edgeId: ctx.edgeId,
+          organizationId: ctx.organizationId,
+          branchId: ctx.branchId,
+          persistence: fakePersistence,
+        } as unknown as OfflineIamServiceOptions);
+      },
+      (err: Error) => {
+        assert.ok(err instanceof OfflineIamError);
+        assert.equal(err.code, 'INVALID_INPUT');
+        return true;
+      },
+    );
+
+    // 3. No public getters exposing mutable internals
+    const serviceRecord = ctx.iamService as unknown as Record<string, unknown>;
+    assert.equal(serviceRecord['getPersistence'], undefined);
+    assert.equal(serviceRecord['getLockoutManager'], undefined);
+
+    // 4. Test fault controls fail closed when invoked without internal test token
+    assert.throws(() => {
+      ctx.persistence.setSimulateSessionInsertFailure(true);
+    }, /Unauthorized test fault control invocation/);
+    assert.throws(() => {
+      ctx.persistence.setSimulateAuditInsertFailure(true);
+    }, /Unauthorized test fault control invocation/);
+
+    // 5. Internal test token rejection when arbitrary symbol is passed
+    assert.throws(() => {
+      ctx.persistence.setSimulateSessionInsertFailure(true, Symbol('fakeToken'));
+    }, /Unauthorized test fault control invocation/);
+  } finally {
+    ctx.cleanup();
+  }
+});
+
+test('WP010-T26: [QI-010-02] Supervisor unlock authorization fails closed and prevents brute-force oracle', async () => {
+  const ctx = await createTestContext('wp010_t26');
+  try {
+    const baseNow = ctx.trustedTimeManager.getTrustedEffectiveTime();
+
+    // First lock the station
+    const lockoutMgr = getTestInternals(ctx.iamService).lockoutManager;
+    for (let i = 0; i < 5; i++) {
+      lockoutMgr.recordFailure(ctx.stationId, baseNow);
+    }
+    assert.equal(lockoutMgr.checkLockout(ctx.stationId, baseNow).isLocked, true);
+
+    const supervisorId = '00000000-0000-4000-8000-000000000088';
+    const supervisorPin = '7777';
+    const superHashRes = await hashBranchPin(supervisorPin);
+    assert.equal(superHashRes.ok, true);
+    const validSupervisorPinHash = (superHashRes as { ok: true; value: string }).value;
+
+    // Seed valid supervisor
+    ctx.persistence.upsertCachedUser({
+      userId: supervisorId,
+      organizationId: ctx.organizationId,
+      fullName: 'Supervisor Alice',
+      pinHash: validSupervisorPinHash,
+      roles: ['SUPERVISOR'],
+      credentialVersion: 1,
+      issuedAt: baseNow - 100,
+      expiresAt: baseNow + 86400,
+      isRevoked: 0,
+    });
+
+    // 1. Invalid target station (non-existent station)
+    await assert.rejects(
+      async () => {
+        await ctx.iamService.supervisorUnlockStation({
+          stationId: '00000000-0000-4000-8000-999999999999',
+          supervisorUserId: supervisorId,
+          supervisorPin,
+          reason: 'Authorization test override',
+        });
+      },
+      (err: Error) => {
+        assert.ok(err instanceof OfflineIamError);
+        assert.equal(err.code, 'STATION_NOT_FOUND');
+        return true;
+      },
+    );
+
+    // 2. Revoked target station
+    const revokedStationId = '00000000-0000-4000-8000-000000000077';
+    const nativeDb = getTestNativeDatabase(ctx.edgeDb);
+    nativeDb
+      .prepare(
+        `INSERT INTO station_credentials (
+          station_id, organization_id, branch_id, station_code,
+          station_type, station_public_key, enrolled_at, is_revoked, revoked_at
+        ) VALUES (?, ?, ?, 'STATION-REV', 'PRIMARY', 'MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA', ?, 1, ?)`,
+      )
+      .run(revokedStationId, ctx.organizationId, ctx.branchId, baseNow, baseNow);
+
+    await assert.rejects(
+      async () => {
+        await ctx.iamService.supervisorUnlockStation({
+          stationId: revokedStationId,
+          supervisorUserId: supervisorId,
+          supervisorPin,
+          reason: 'Authorization test override',
+        });
+      },
+      (err: Error) => {
+        assert.ok(err instanceof OfflineIamError);
+        assert.equal(err.code, 'STATION_REVOKED');
+        return true;
+      },
+    );
+
+    // 3. Cross-branch target station
+    const crossBranchStationId = '00000000-0000-4000-8000-000000000066';
+    nativeDb
+      .prepare(
+        `INSERT INTO station_credentials (
+          station_id, organization_id, branch_id, station_code,
+          station_type, station_public_key, enrolled_at, is_revoked, revoked_at
+        ) VALUES (?, ?, '00000000-0000-4000-8000-999999999998', 'STATION-OTHER', 'PRIMARY', 'MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA', ?, 0, NULL)`,
+      )
+      .run(crossBranchStationId, ctx.organizationId, baseNow);
+
+    await assert.rejects(
+      async () => {
+        await ctx.iamService.supervisorUnlockStation({
+          stationId: crossBranchStationId,
+          supervisorUserId: supervisorId,
+          supervisorPin,
+          reason: 'Authorization test override',
+        });
+      },
+      (err: Error) => {
+        assert.ok(err instanceof OfflineIamError);
+        assert.equal(err.code, 'STATION_NOT_FOUND');
+        return true;
+      },
+    );
+
+    // 4. Revoked supervisor
+    const revokedSupervisorId = '00000000-0000-4000-8000-000000000055';
+    ctx.persistence.upsertCachedUser({
+      userId: revokedSupervisorId,
+      organizationId: ctx.organizationId,
+      fullName: 'Revoked Supervisor',
+      pinHash: validSupervisorPinHash,
+      roles: ['SUPERVISOR'],
+      credentialVersion: 1,
+      issuedAt: baseNow - 100,
+      expiresAt: baseNow + 86400,
+      isRevoked: 1,
+    });
+
+    await assert.rejects(
+      async () => {
+        await ctx.iamService.supervisorUnlockStation({
+          stationId: ctx.stationId,
+          supervisorUserId: revokedSupervisorId,
+          supervisorPin,
+          reason: 'Authorization test override',
+        });
+      },
+      (err: Error) => {
+        assert.ok(err instanceof OfflineIamError);
+        assert.equal(err.code, 'AUTHENTICATION_FAILED');
+        return true;
+      },
+    );
+
+    // 5. Cross-organization supervisor
+    const crossOrgSupervisorId = '00000000-0000-4000-8000-000000000044';
+    ctx.persistence.upsertCachedUser({
+      userId: crossOrgSupervisorId,
+      organizationId: '00000000-0000-4000-8000-999999999997',
+      fullName: 'Cross Org Supervisor',
+      pinHash: validSupervisorPinHash,
+      roles: ['SUPERVISOR'],
+      credentialVersion: 1,
+      issuedAt: baseNow - 100,
+      expiresAt: baseNow + 86400,
+      isRevoked: 0,
+    });
+
+    await assert.rejects(
+      async () => {
+        await ctx.iamService.supervisorUnlockStation({
+          stationId: ctx.stationId,
+          supervisorUserId: crossOrgSupervisorId,
+          supervisorPin,
+          reason: 'Authorization test override',
+        });
+      },
+      (err: Error) => {
+        assert.ok(err instanceof OfflineIamError);
+        assert.equal(err.code, 'AUTHENTICATION_FAILED');
+        return true;
+      },
+    );
+
+    // 6. Expired supervisor credential
+    const expiredSupervisorId = '00000000-0000-4000-8000-000000000033';
+    ctx.persistence.upsertCachedUser({
+      userId: expiredSupervisorId,
+      organizationId: ctx.organizationId,
+      fullName: 'Expired Supervisor',
+      pinHash: validSupervisorPinHash,
+      roles: ['SUPERVISOR'],
+      credentialVersion: 1,
+      issuedAt: baseNow - 86400,
+      expiresAt: baseNow - 10,
+      isRevoked: 0,
+    });
+
+    await assert.rejects(
+      async () => {
+        await ctx.iamService.supervisorUnlockStation({
+          stationId: ctx.stationId,
+          supervisorUserId: expiredSupervisorId,
+          supervisorPin,
+          reason: 'Authorization test override',
+        });
+      },
+      (err: Error) => {
+        assert.ok(err instanceof OfflineIamError);
+        assert.equal(err.code, 'CREDENTIAL_EXPIRED');
+        return true;
+      },
+    );
+
+    // 7. Corrupt supervisor credential (non-Argon2id hash)
+    const corruptSupervisorId = '00000000-0000-4000-8000-000000000022';
+    ctx.persistence.upsertCachedUser({
+      userId: corruptSupervisorId,
+      organizationId: ctx.organizationId,
+      fullName: 'Corrupt Supervisor',
+      pinHash: 'plain_md5_hash_not_argon',
+      roles: ['SUPERVISOR'],
+      credentialVersion: 1,
+      issuedAt: baseNow - 100,
+      expiresAt: baseNow + 86400,
+      isRevoked: 0,
+    });
+
+    await assert.rejects(
+      async () => {
+        await ctx.iamService.supervisorUnlockStation({
+          stationId: ctx.stationId,
+          supervisorUserId: corruptSupervisorId,
+          supervisorPin,
+          reason: 'Authorization test override',
+        });
+      },
+      (err: Error) => {
+        assert.ok(err instanceof OfflineIamError);
+        assert.equal(err.code, 'CREDENTIAL_CORRUPT');
+        return true;
+      },
+    );
+
+    // 8. Insufficient privileges (lacks supervisory role)
+    const nonSupervisorId = '00000000-0000-4000-8000-000000000011';
+    ctx.persistence.upsertCachedUser({
+      userId: nonSupervisorId,
+      organizationId: ctx.organizationId,
+      fullName: 'Staff Only',
+      pinHash: validSupervisorPinHash,
+      roles: ['WAITER', 'CASHIER'],
+      credentialVersion: 1,
+      issuedAt: baseNow - 100,
+      expiresAt: baseNow + 86400,
+      isRevoked: 0,
+    });
+
+    await assert.rejects(
+      async () => {
+        await ctx.iamService.supervisorUnlockStation({
+          stationId: ctx.stationId,
+          supervisorUserId: nonSupervisorId,
+          supervisorPin,
+          reason: 'Authorization test override',
+        });
+      },
+      (err: Error) => {
+        assert.ok(err instanceof OfflineIamError);
+        assert.equal(err.code, 'INSUFFICIENT_PERMISSIONS');
+        return true;
+      },
+    );
+
+    // 9. Wrong supervisor PIN repeatedly (brute-force rate limiting and lockout enforcement)
+    // Attempt with wrong PIN
+    await assert.rejects(
+      async () => {
+        await ctx.iamService.supervisorUnlockStation({
+          stationId: ctx.stationId,
+          supervisorUserId: supervisorId,
+          supervisorPin: '0000',
+          reason: 'Authorization test override',
+        });
+      },
+      (err: Error) => {
+        assert.ok(err instanceof OfflineIamError);
+        assert.equal(err.code, 'AUTHENTICATION_FAILED');
+        return true;
+      },
+    );
+
+    // Verify station is STILL locked (no unlock state mutation on failure)
+    assert.equal(lockoutMgr.checkLockout(ctx.stationId, baseNow).isLocked, true);
+
+    // Finally, test valid supervisor unlock succeeds
+    const unlockRes = await ctx.iamService.supervisorUnlockStation({
+      stationId: ctx.stationId,
+      supervisorUserId: supervisorId,
+      supervisorPin: supervisorPin,
+      reason: 'Valid override unlock',
+    });
+    assert.equal(unlockRes.success, true);
+    assert.equal(lockoutMgr.checkLockout(ctx.stationId, baseNow).isLocked, false);
+  } finally {
+    ctx.cleanup();
+  }
+});
+
+test('WP010-T27: [QI-010-03] Corrupted or invalid role data strictly fails closed without defaulting to STAFF', async () => {
+  const ctx = await createTestContext('wp010_t27');
+  try {
+    const nativeDb = getTestNativeDatabase(ctx.edgeDb);
+    const pinHash = ctx.pinHash;
+    const now = ctx.trustedTimeManager.getTrustedEffectiveTime();
+
+    const corruptCases = [
+      { id: '00000000-0000-4000-8000-000000000101', rolesJson: '{not-json' },
+      { id: '00000000-0000-4000-8000-000000000102', rolesJson: '{"role":"STAFF"}' },
+      { id: '00000000-0000-4000-8000-000000000103', rolesJson: '[]' },
+      { id: '00000000-0000-4000-8000-000000000104', rolesJson: '[123, 456]' },
+      { id: '00000000-0000-4000-8000-000000000105', rolesJson: '[""]' },
+      { id: '00000000-0000-4000-8000-000000000106', rolesJson: 'null' },
+    ];
+
+    for (const testCase of corruptCases) {
+      nativeDb
+        .prepare(
+          `INSERT INTO cached_users (
+            user_id, organization_id, full_name, pin_hash, roles_json,
+            credential_version, issued_at, expires_at, is_revoked
+          ) VALUES (?, ?, 'Corrupt User', ?, ?, 1, ?, ?, 0)`,
+        )
+        .run(
+          testCase.id,
+          ctx.organizationId,
+          pinHash,
+          testCase.rolesJson,
+          String(now - 100),
+          String(now + 86400),
+        );
+
+      await assert.rejects(
+        async () => {
+          await ctx.iamService.authenticateWithPin({
+            stationId: ctx.stationId,
+            userId: testCase.id,
+            pin: ctx.plainPin,
+          });
+        },
+        (err: Error) => {
+          assert.ok(err instanceof OfflineIamError);
+          assert.equal(err.code, 'CREDENTIAL_CORRUPT');
+          return true;
+        },
+      );
+    }
+
+    // Verify ZERO station sessions were created across all corrupt attempts
+    const sessionCount = nativeDb
+      .prepare('SELECT COUNT(*) as count FROM station_sessions')
+      .get() as {
+      count: number;
+    };
+    assert.equal(
+      sessionCount.count,
+      0,
+      'Zero station sessions must be created when roles are corrupt',
+    );
+  } finally {
+    ctx.cleanup();
+  }
+});

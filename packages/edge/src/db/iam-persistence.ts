@@ -17,6 +17,8 @@ import {
 } from '../iam/types.js';
 import { EdgeSecurityAuditRecord } from '../enrollment/types.js';
 
+import { kInternalTestToken } from '../iam/test-support.js';
+
 export interface StationCredentialInfo {
   readonly stationId: string;
   readonly organizationId: string;
@@ -40,11 +42,17 @@ export class IamPersistence {
     this.#initializeSchema();
   }
 
-  public setSimulateSessionInsertFailure(fail: boolean): void {
+  public setSimulateSessionInsertFailure(fail: boolean, token?: symbol): void {
+    if (token !== kInternalTestToken) {
+      throw new Error('Unauthorized test fault control invocation: invalid internal token');
+    }
     this.#simulateSessionInsertFailure = fail;
   }
 
-  public setSimulateAuditInsertFailure(fail: boolean): void {
+  public setSimulateAuditInsertFailure(fail: boolean, token?: symbol): void {
+    if (token !== kInternalTestToken) {
+      throw new Error('Unauthorized test fault control invocation: invalid internal token');
+    }
     this.#simulateAuditInsertFailure = fail;
   }
 

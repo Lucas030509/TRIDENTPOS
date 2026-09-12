@@ -93,7 +93,7 @@ export class LockoutManager {
     let delayMs = 0;
     if (newFailures === 3) {
       delayMs = LOCKOUT_POLICY.PROGRESSIVE_DELAY_ATTEMPT_3_MS;
-    } else if (newFailures === 4) {
+    } else if (newFailures >= 4) {
       delayMs = LOCKOUT_POLICY.PROGRESSIVE_DELAY_ATTEMPT_4_MS;
     }
 

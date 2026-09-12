@@ -35,6 +35,8 @@ import {
   SupervisorUnlockResponse,
 } from './types.js';
 
+import { kInternalTestToken, kGetTestInternals } from './test-support.js';
+
 export interface OfflineIamServiceOptions {
   readonly edgeDb: EdgeDatabaseService;
   readonly secureStore: EdgeSecureStore;
@@ -42,8 +44,6 @@ export interface OfflineIamServiceOptions {
   readonly edgeId: string;
   readonly organizationId: string;
   readonly branchId: string;
-  readonly persistence?: IamPersistence;
-  readonly lockoutManager?: LockoutManager;
   readonly logger?: (msg: string) => void;
 }
 
@@ -58,7 +58,24 @@ export class OfflineIamService {
   readonly #lockoutManager: LockoutManager;
   readonly #logger?: (msg: string) => void;
 
-  constructor(options: OfflineIamServiceOptions) {
+  constructor(
+    options: OfflineIamServiceOptions,
+    _internalTestToken?: symbol,
+    _injectedPersistence?: IamPersistence,
+  ) {
+    // Defensive check against unauthorized collaborator injection
+    const rawOpts = options as unknown as Record<string, unknown>;
+    if ('persistence' in rawOpts || 'lockoutManager' in rawOpts) {
+      throw new OfflineIamError(
+        'INVALID_INPUT',
+        'Unauthorized internal dependency injection: persistence and lockoutManager cannot be supplied',
+      );
+    }
+
+    if (arguments.length > 1 && _internalTestToken !== kInternalTestToken) {
+      throw new OfflineIamError('INVALID_INPUT', 'Unauthorized internal test token supplied');
+    }
+
     this.#edgeDb = options.edgeDb;
     this.#secureStore = options.secureStore;
     this.#trustedTimeManager = options.trustedTimeManager;
@@ -67,8 +84,11 @@ export class OfflineIamService {
     this.#branchId = options.branchId;
     this.#logger = options.logger;
 
-    this.#persistence = options.persistence ?? new IamPersistence(this.#edgeDb);
-    this.#lockoutManager = options.lockoutManager ?? new LockoutManager(this.#persistence);
+    this.#persistence =
+      _internalTestToken === kInternalTestToken && _injectedPersistence
+        ? _injectedPersistence
+        : new IamPersistence(this.#edgeDb);
+    this.#lockoutManager = new LockoutManager(this.#persistence);
 
     this.#ensureHmacKey();
   }
@@ -272,17 +292,40 @@ export class OfflineIamService {
     // Reset lockout counters on success
     this.#lockoutManager.recordSuccess(request.stationId, now);
 
+    // Strict role validation (fail-closed per QI-010-03)
     let roles: string[];
     try {
       roles = JSON.parse(user.rolesJson);
-      if (!Array.isArray(roles)) roles = ['STAFF'];
     } catch {
-      roles = ['STAFF'];
+      this.#lockoutManager.recordFailure(request.stationId, now);
+      throw new OfflineIamError(
+        'CREDENTIAL_CORRUPT',
+        'Malformed user roles JSON: unparseable format',
+      );
+    }
+
+    if (
+      !Array.isArray(roles) ||
+      roles.length === 0 ||
+      !roles.every((r) => typeof r === 'string' && r.trim().length > 0)
+    ) {
+      this.#lockoutManager.recordFailure(request.stationId, now);
+      throw new OfflineIamError(
+        'CREDENTIAL_CORRUPT',
+        'Malformed user roles data: must be a non-empty array of valid role identifiers',
+      );
     }
 
     // Determine active role
-    let activeRole = roles[0] ?? 'STAFF';
-    if (request.activeRole && roles.includes(request.activeRole)) {
+    let activeRole = roles[0]!;
+    if (request.activeRole) {
+      if (!roles.includes(request.activeRole)) {
+        this.#lockoutManager.recordFailure(request.stationId, now);
+        throw new OfflineIamError(
+          'INSUFFICIENT_PERMISSIONS',
+          `Requested activeRole '${request.activeRole}' is not assigned to this user`,
+        );
+      }
       activeRole = request.activeRole;
     }
 
@@ -400,12 +443,13 @@ export class OfflineIamService {
   }
 
   // -------------------------------------------------------------------------
-  // Supervisor Unlock Override Flow
+  // Supervisor Unlock Override Flow (QI-010-02)
   // -------------------------------------------------------------------------
 
   public async supervisorUnlockStation(
     request: SupervisorUnlockRequest,
   ): Promise<SupervisorUnlockResponse> {
+    // 1. Input Validation
     if (!request.stationId || !isValidUuid(request.stationId)) {
       throw new OfflineIamError('INVALID_INPUT', 'Malformed or missing stationId UUID');
     }
@@ -413,41 +457,181 @@ export class OfflineIamService {
       throw new OfflineIamError('INVALID_INPUT', 'Malformed or missing supervisorUserId UUID');
     }
 
-    const now = this.#trustedTimeManager.getTrustedEffectiveTime();
+    // 2. Clock Rollback & Trusted Time Enforcement
+    if (this.#trustedTimeManager.isLocked()) {
+      throw new OfflineIamError(
+        'CLOCK_ROLLBACK_LOCKED',
+        'Supervisor unlock blocked: system is CLOCK_ROLLBACK_LOCKED',
+      );
+    }
 
+    let now: number;
+    try {
+      now = this.#trustedTimeManager.getTrustedEffectiveTime();
+    } catch (err) {
+      throw new OfflineIamError('CLOCK_ROLLBACK_LOCKED', (err as Error).message);
+    }
+
+    // 3. Target Station Verification (same governed enrolled authority)
+    const station = this.#persistence.getStationCredential(request.stationId);
+    if (!station) {
+      throw new OfflineIamError(
+        'STATION_NOT_FOUND',
+        'Target station is not enrolled or recognized',
+      );
+    }
+    if (station.isRevoked === 1) {
+      throw new OfflineIamError('STATION_REVOKED', 'Target station identity has been revoked');
+    }
+    if (station.branchId !== this.#branchId || station.organizationId !== this.#organizationId) {
+      throw new OfflineIamError(
+        'STATION_NOT_FOUND',
+        'Target station does not belong to this branch or organization context',
+      );
+    }
+
+    // 4. PIN Format Validation
+    const pinValidation = validatePinFormat(request.supervisorPin);
+    if (!pinValidation.ok) {
+      const failureEval = this.#lockoutManager.recordFailure(request.stationId, now);
+      if (failureEval.isNewLockout) {
+        this.#emitLockoutAuditEvent(request.stationId, failureEval, now);
+      }
+      throw new OfflineIamError('INVALID_PIN_FORMAT', pinValidation.error.message);
+    }
+
+    // 5. Supervisor Credential Lookup & Integrity Checks
     const supervisor = this.#persistence.getCachedUser(request.supervisorUserId);
     if (!supervisor || supervisor.isRevoked === 1) {
+      const failureEval = this.#lockoutManager.recordFailure(request.stationId, now);
+      if (failureEval.isNewLockout) {
+        this.#emitLockoutAuditEvent(request.stationId, failureEval, now);
+      }
       throw new OfflineIamError(
         'AUTHENTICATION_FAILED',
         'Supervisor not found or revoked in offline cache',
       );
     }
 
+    if (supervisor.organizationId !== this.#organizationId) {
+      const failureEval = this.#lockoutManager.recordFailure(request.stationId, now);
+      if (failureEval.isNewLockout) {
+        this.#emitLockoutAuditEvent(request.stationId, failureEval, now);
+      }
+      throw new OfflineIamError(
+        'AUTHENTICATION_FAILED',
+        'Supervisor does not belong to this organization',
+      );
+    }
+
+    // Parse and validate supervisor cache expiration & timestamps
+    let expiresAtSec: number;
+    let issuedAtSec: number;
+    try {
+      expiresAtSec = this.#parseTimestampSeconds(supervisor.expiresAt);
+      issuedAtSec = this.#parseTimestampSeconds(supervisor.issuedAt);
+    } catch {
+      const failureEval = this.#lockoutManager.recordFailure(request.stationId, now);
+      if (failureEval.isNewLockout) {
+        this.#emitLockoutAuditEvent(request.stationId, failureEval, now);
+      }
+      throw new OfflineIamError('CREDENTIAL_CORRUPT', 'Malformed supervisor credential timestamps');
+    }
+
+    if (expiresAtSec <= now) {
+      const failureEval = this.#lockoutManager.recordFailure(request.stationId, now);
+      if (failureEval.isNewLockout) {
+        this.#emitLockoutAuditEvent(request.stationId, failureEval, now);
+      }
+      throw new OfflineIamError(
+        'CREDENTIAL_EXPIRED',
+        `Supervisor credentials expired at ${expiresAtSec} (current trusted time: ${now})`,
+      );
+    }
+
+    if (issuedAtSec > now + 300) {
+      const failureEval = this.#lockoutManager.recordFailure(request.stationId, now);
+      if (failureEval.isNewLockout) {
+        this.#emitLockoutAuditEvent(request.stationId, failureEval, now);
+      }
+      throw new OfflineIamError(
+        'CREDENTIAL_FUTURE_TIMESTAMP',
+        `Supervisor credential issuedAt is in the future (${issuedAtSec} > ${now})`,
+      );
+    }
+
+    if (!supervisor.pinHash || !supervisor.pinHash.startsWith('$argon2id$')) {
+      const failureEval = this.#lockoutManager.recordFailure(request.stationId, now);
+      if (failureEval.isNewLockout) {
+        this.#emitLockoutAuditEvent(request.stationId, failureEval, now);
+      }
+      throw new OfflineIamError(
+        'CREDENTIAL_CORRUPT',
+        'Corrupted supervisor PIN hash: non-Argon2id format',
+      );
+    }
+
+    // 6. Strict Role Parsing & Supervisory Capability Check (Fail Closed)
     let roles: string[];
     try {
       roles = JSON.parse(supervisor.rolesJson);
     } catch {
-      roles = [];
+      const failureEval = this.#lockoutManager.recordFailure(request.stationId, now);
+      if (failureEval.isNewLockout) {
+        this.#emitLockoutAuditEvent(request.stationId, failureEval, now);
+      }
+      throw new OfflineIamError(
+        'CREDENTIAL_CORRUPT',
+        'Malformed supervisor roles JSON: unparseable format',
+      );
+    }
+
+    if (
+      !Array.isArray(roles) ||
+      roles.length === 0 ||
+      !roles.every((r) => typeof r === 'string' && r.trim().length > 0)
+    ) {
+      const failureEval = this.#lockoutManager.recordFailure(request.stationId, now);
+      if (failureEval.isNewLockout) {
+        this.#emitLockoutAuditEvent(request.stationId, failureEval, now);
+      }
+      throw new OfflineIamError(
+        'CREDENTIAL_CORRUPT',
+        'Malformed supervisor roles data: must be a non-empty array of valid role identifiers',
+      );
     }
 
     const isSupervisor =
       roles.includes('SUPERVISOR') || roles.includes('ADMIN') || roles.includes('MANAGER');
     if (!isSupervisor) {
+      const failureEval = this.#lockoutManager.recordFailure(request.stationId, now);
+      if (failureEval.isNewLockout) {
+        this.#emitLockoutAuditEvent(request.stationId, failureEval, now);
+      }
       throw new OfflineIamError(
         'INSUFFICIENT_PERMISSIONS',
         'User lacks supervisor privileges required for lockout unlock',
       );
     }
 
+    // 7. Argon2id PIN Verification with Governed Brute-Force Rate Limiting
     const verifyResult = await verifyBranchPin(supervisor.pinHash, request.supervisorPin);
-    if (!verifyResult.ok || !verifyResult.value) {
+    const pinMatches = verifyResult.ok && verifyResult.value === true;
+
+    if (!pinMatches) {
+      const failureEval = this.#lockoutManager.recordFailure(request.stationId, now);
+      if (failureEval.isNewLockout) {
+        this.#emitLockoutAuditEvent(request.stationId, failureEval, now);
+      }
+      if (failureEval.delayMs > 0) {
+        await new Promise((res) => setTimeout(res, failureEval.delayMs));
+      }
       throw new OfflineIamError('AUTHENTICATION_FAILED', 'Invalid supervisor PIN');
     }
 
-    // Unlock station
+    // 8. Successful Unlock & Audit Commitment
     this.#lockoutManager.unlock(request.stationId, now);
 
-    // Append supervisor audit record
     this.#persistence.appendAuditEvent({
       eventId: crypto.randomUUID(),
       organizationId: this.#organizationId,
@@ -473,6 +657,29 @@ export class OfflineIamService {
     };
   }
 
+  #emitLockoutAuditEvent(
+    stationId: string,
+    failureEval: { consecutiveFailures: number; lockedUntil: number | null },
+    now: number,
+  ): void {
+    this.#persistence.appendAuditEvent({
+      eventId: crypto.randomUUID(),
+      organizationId: this.#organizationId,
+      branchId: this.#branchId,
+      edgeId: this.#edgeId,
+      stationId,
+      eventType: 'PinBruteForceAttemptDetected',
+      severity: 'CRITICAL',
+      action: 'STATION_LOCKOUT',
+      metadata: {
+        stationId,
+        consecutiveFailures: failureEval.consecutiveFailures,
+        lockedUntil: failureEval.lockedUntil,
+      },
+      createdAt: now,
+    });
+  }
+
   // -------------------------------------------------------------------------
   // Cache Administration
   // -------------------------------------------------------------------------
@@ -489,11 +696,20 @@ export class OfflineIamService {
     return this.#persistence.getCachedUser(userId);
   }
 
-  public getPersistence(): IamPersistence {
-    return this.#persistence;
-  }
-
-  public getLockoutManager(): LockoutManager {
-    return this.#lockoutManager;
+  /**
+   * Internal test interface - only accessible via test-support.ts using unexported Symbol.
+   * Conforms to QI-010-01.
+   */
+  [kGetTestInternals]?(token: symbol): {
+    persistence: IamPersistence;
+    lockoutManager: LockoutManager;
+  } {
+    if (token !== kInternalTestToken) {
+      throw new Error('Unauthorized test internal access: invalid token');
+    }
+    return {
+      persistence: this.#persistence,
+      lockoutManager: this.#lockoutManager,
+    };
   }
 }
