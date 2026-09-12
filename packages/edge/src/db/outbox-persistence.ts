@@ -6,10 +6,14 @@
  */
 
 import crypto from 'node:crypto';
-import type Database from 'better-sqlite3';
-import { isValidUuidV4, SyncEventAckDTO } from '@trident/core';
+import {
+  CloudReceiptVerifier,
+  ReceiptIssuanceContext,
+  SyncEventAckDTO,
+  isValidCloudReceipt,
+  isValidUuidV4,
+} from '@trident/core';
 import { EdgeDatabaseService } from './edge-database.js';
-import { getTestNativeDatabase } from './test-access.js';
 
 export interface EdgeOutboxRecord {
   readonly id: string;
@@ -44,16 +48,16 @@ export interface EnqueueOutboxInput {
 
 export class EdgeOutboxPersistence {
   readonly #edgeDb: EdgeDatabaseService;
-  readonly #nativeDb: Database.Database;
+  readonly #verifier: CloudReceiptVerifier | null;
 
-  constructor(edgeDb: EdgeDatabaseService) {
+  constructor(edgeDb: EdgeDatabaseService, verifier?: CloudReceiptVerifier | null) {
     this.#edgeDb = edgeDb;
-    this.#nativeDb = getTestNativeDatabase(edgeDb);
+    this.#verifier = verifier ?? null;
     this.#initializeSchema();
   }
 
   #initializeSchema(): void {
-    this.#nativeDb.exec(`
+    this.#edgeDb.exec(`
       CREATE TABLE IF NOT EXISTS outbox_queue (
         id TEXT PRIMARY KEY,
         organization_id TEXT NOT NULL,
@@ -62,7 +66,7 @@ export class EdgeOutboxPersistence {
         aggregate_id TEXT NOT NULL,
         action TEXT NOT NULL,
         client_op_id TEXT NOT NULL UNIQUE,
-        aggregate_sequence_number INTEGER NOT NULL,
+        aggregate_sequence_number INTEGER NOT NULL CHECK (aggregate_sequence_number >= 1),
         payload TEXT NOT NULL,
         status TEXT NOT NULL DEFAULT 'PENDING',
         receipt_token TEXT,
@@ -76,16 +80,6 @@ export class EdgeOutboxPersistence {
 
       CREATE INDEX IF NOT EXISTS idx_outbox_queue_status ON outbox_queue (status);
       CREATE INDEX IF NOT EXISTS idx_outbox_queue_stream ON outbox_queue (aggregate_type, aggregate_id, aggregate_sequence_number);
-
-      -- Fixture table for proving atomic local domain mutations + outbox commits
-      CREATE TABLE IF NOT EXISTS local_fixture_orders (
-        id TEXT PRIMARY KEY NOT NULL,
-        organization_id TEXT NOT NULL,
-        branch_id TEXT NOT NULL,
-        table_number TEXT NOT NULL,
-        total_amount REAL NOT NULL,
-        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
-      );
     `);
   }
 
@@ -97,14 +91,14 @@ export class EdgeOutboxPersistence {
     if (!isValidUuidV4(input.clientOpId)) {
       throw new Error('clientOpId must be a valid UUIDv4');
     }
-    if (input.aggregateSequenceNumber < 1) {
-      throw new Error('aggregateSequenceNumber must be >= 1');
+    if (!Number.isSafeInteger(input.aggregateSequenceNumber) || input.aggregateSequenceNumber < 1) {
+      throw new Error('aggregateSequenceNumber must be a safe positive integer >= 1');
     }
 
     const id = input.id ?? crypto.randomUUID();
     const payloadStr = JSON.stringify(input.payload);
 
-    const stmt = this.#nativeDb.prepare(`
+    const stmt = this.#edgeDb.prepare(`
       INSERT INTO outbox_queue (
         id,
         organization_id,
@@ -170,18 +164,25 @@ export class EdgeOutboxPersistence {
 
   /**
    * Marks an outbox record as SYNCED.
-   * GOVERNED INVARIANT (Sec 7.5):
+   * GOVERNED INVARIANT (Sec 7.5 & QI-012-02):
    * An Edge outbox row may become SYNCED only when:
-   * 1. ACK is APPLIED or DUPLICATE_ACCEPTED
-   * 2. ACK carries valid Cloud receipt/signature material
-   * 3. Receipt clientOpId matches outbox row clientOpId
-   * 4. Receipt aggregateSequenceNumber matches outbox row aggregateSequenceNumber
-   * If ACK is RECEIVED, DURABLY_STORED, or receipt is missing/invalid: MUST NOT mark SYNCED.
+   * 1. ACK status is APPLIED or DUPLICATE_ACCEPTED
+   * 2. ACK carries valid Cloud receipt material (not empty, safe positive sequence)
+   * 3. CloudReceiptVerifier is configured and verifies serverSignature cryptographically/determinstically
+   * 4. Receipt clientOpId matches outbox row clientOpId
+   * 5. Receipt aggregateSequenceNumber matches outbox row aggregateSequenceNumber
+   * If verifier missing, signature forged, or receipt invalid: MUST NOT mark SYNCED (fails closed).
    */
-  public markSynced(id: string, ack: SyncEventAckDTO): boolean {
-    const fetchStmt = this.#nativeDb.prepare(`
+  public markSynced(
+    id: string,
+    ack: SyncEventAckDTO,
+    customVerifier?: CloudReceiptVerifier,
+  ): boolean {
+    const fetchStmt = this.#edgeDb.prepare(`
       SELECT
         id,
+        organization_id AS organizationId,
+        branch_id AS branchId,
         client_op_id AS clientOpId,
         aggregate_sequence_number AS aggregateSequenceNumber,
         status
@@ -190,7 +191,14 @@ export class EdgeOutboxPersistence {
     `);
 
     const row = fetchStmt.get(id) as
-      | { id: string; clientOpId: string; aggregateSequenceNumber: number; status: string }
+      | {
+          id: string;
+          organizationId: string;
+          branchId: string;
+          clientOpId: string;
+          aggregateSequenceNumber: number;
+          status: string;
+        }
       | undefined;
 
     if (!row) {
@@ -198,26 +206,45 @@ export class EdgeOutboxPersistence {
     }
 
     const isTerminalStatus = ack.status === 'APPLIED' || ack.status === 'DUPLICATE_ACCEPTED';
-
     if (!isTerminalStatus) {
       return false;
     }
 
     const receipt = ack.receipt;
+    if (!receipt || !isValidCloudReceipt(receipt)) {
+      return false;
+    }
+
     if (
-      !receipt ||
-      typeof receipt.receiptId !== 'string' ||
-      receipt.receiptId.trim().length === 0 ||
-      typeof receipt.serverSignature !== 'string' ||
-      receipt.serverSignature.trim().length === 0 ||
       receipt.clientOpId !== row.clientOpId ||
       receipt.aggregateSequenceNumber !== row.aggregateSequenceNumber
     ) {
       return false;
     }
 
+    const verifier = customVerifier ?? this.#verifier;
+    if (!verifier) {
+      // QI-012-02: Missing CloudReceiptVerifier fails closed
+      return false;
+    }
+
+    const context: ReceiptIssuanceContext = {
+      organizationId: row.organizationId,
+      branchId: row.branchId,
+      clientOpId: row.clientOpId,
+      aggregateSequenceNumber: row.aggregateSequenceNumber,
+    };
+
+    const verificationResult = verifier.verifyReceipt(receipt, context);
+    const isVerified = typeof verificationResult === 'boolean' ? verificationResult : false;
+
+    if (!isVerified) {
+      // QI-012-02: Forged or invalid signature rejected
+      return false;
+    }
+
     return this.#edgeDb.runInTransaction(() => {
-      const updateStmt = this.#nativeDb.prepare(`
+      const updateStmt = this.#edgeDb.prepare(`
         UPDATE outbox_queue
         SET
           status = 'SYNCED',
@@ -236,7 +263,7 @@ export class EdgeOutboxPersistence {
    * Retrieves pending outbox events for synchronization.
    */
   public getPendingEvents(limit = 100): EdgeOutboxRecord[] {
-    const stmt = this.#nativeDb.prepare(`
+    const stmt = this.#edgeDb.prepare(`
       SELECT
         id,
         organization_id AS organizationId,
@@ -271,7 +298,7 @@ export class EdgeOutboxPersistence {
    * Returns current pending outbox backlog count.
    */
   public getBacklogCount(): number {
-    const stmt = this.#nativeDb.prepare(`
+    const stmt = this.#edgeDb.prepare(`
       SELECT COUNT(*) AS count
       FROM outbox_queue
       WHERE status = 'PENDING';
@@ -301,7 +328,7 @@ export class EdgeOutboxPersistence {
    * Helper to retrieve record by ID (for tests).
    */
   public getById(id: string): EdgeOutboxRecord | undefined {
-    const stmt = this.#nativeDb.prepare(`
+    const stmt = this.#edgeDb.prepare(`
       SELECT
         id,
         organization_id AS organizationId,

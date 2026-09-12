@@ -15,7 +15,7 @@ CREATE TABLE ingested_idempotency_log (
     action VARCHAR(100) NOT NULL,
     client_op_id UUID NOT NULL,
     idempotency_key TEXT NOT NULL,
-    aggregate_sequence_number BIGINT NOT NULL,
+    aggregate_sequence_number BIGINT NOT NULL CHECK (aggregate_sequence_number >= 1),
     status VARCHAR(50) NOT NULL,
     response_payload JSONB NOT NULL,
     receipt_token VARCHAR(255) NOT NULL,
@@ -23,6 +23,7 @@ CREATE TABLE ingested_idempotency_log (
     CONSTRAINT fk_idempotency_log_branch FOREIGN KEY (organization_id, branch_id) REFERENCES branches(organization_id, id),
     CONSTRAINT uq_idempotency_log_key UNIQUE (organization_id, idempotency_key),
     CONSTRAINT uq_idempotency_log_client_op UNIQUE (organization_id, branch_id, aggregate_type, aggregate_id, action, client_op_id),
+    CONSTRAINT uq_ingested_idempotency_tuple UNIQUE (organization_id, branch_id, aggregate_type, aggregate_id, aggregate_sequence_number),
     CONSTRAINT chk_idempotency_log_status CHECK (status IN ('RECEIVED', 'DURABLY_STORED', 'APPLIED', 'DUPLICATE_ACCEPTED', 'REJECTED', 'REQUIRES_RECONCILIATION'))
 );
 
@@ -46,7 +47,8 @@ CREATE TABLE aggregate_sequences (
     current_sequence_number BIGINT NOT NULL DEFAULT 0,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT pk_aggregate_sequences PRIMARY KEY (organization_id, branch_id, aggregate_type, aggregate_id),
-    CONSTRAINT fk_aggregate_sequences_branch FOREIGN KEY (organization_id, branch_id) REFERENCES branches(organization_id, id)
+    CONSTRAINT fk_aggregate_sequences_branch FOREIGN KEY (organization_id, branch_id) REFERENCES branches(organization_id, id),
+    CONSTRAINT chk_aggregate_sequences_positive CHECK (current_sequence_number >= 0)
 );
 
 ALTER TABLE aggregate_sequences ENABLE ROW LEVEL SECURITY;
@@ -64,7 +66,7 @@ CREATE TABLE reordering_buffer_queue (
     branch_id UUID NOT NULL,
     aggregate_type VARCHAR(100) NOT NULL,
     aggregate_id VARCHAR(100) NOT NULL,
-    aggregate_sequence_number BIGINT NOT NULL,
+    aggregate_sequence_number BIGINT NOT NULL CHECK (aggregate_sequence_number >= 1),
     action VARCHAR(100) NOT NULL,
     client_op_id UUID NOT NULL,
     idempotency_key TEXT NOT NULL,
@@ -100,6 +102,7 @@ CREATE TABLE cloud_integration_outbox (
     payload JSONB NOT NULL,
     status VARCHAR(50) NOT NULL DEFAULT 'PENDING',
     retry_count INT NOT NULL DEFAULT 0,
+    delivery_attempts INT NOT NULL DEFAULT 0,
     max_retries INT NOT NULL DEFAULT 5,
     next_retry_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     last_error TEXT NULL,
@@ -107,7 +110,11 @@ CREATE TABLE cloud_integration_outbox (
     locked_at TIMESTAMPTZ NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     published_at TIMESTAMPTZ NULL,
-    CONSTRAINT chk_cloud_outbox_status CHECK (status IN ('PENDING', 'PROCESSING', 'PUBLISHED', 'FAILED', 'DLQ'))
+    CONSTRAINT fk_cloud_outbox_branch FOREIGN KEY (organization_id, branch_id) REFERENCES branches(organization_id, id),
+    CONSTRAINT chk_cloud_outbox_status CHECK (status IN ('PENDING', 'PROCESSING', 'PUBLISHED', 'FAILED', 'DLQ')),
+    CONSTRAINT chk_cloud_outbox_retry_count CHECK (retry_count >= 0 AND retry_count <= 5),
+    CONSTRAINT chk_cloud_outbox_delivery_attempts CHECK (delivery_attempts >= 0),
+    CONSTRAINT chk_cloud_outbox_max_retries CHECK (max_retries = 5)
 );
 
 CREATE INDEX idx_cloud_outbox_pending ON cloud_integration_outbox (status, next_retry_at) WHERE status IN ('PENDING', 'PROCESSING');
@@ -125,6 +132,7 @@ CREATE POLICY tenant_isolation_policy ON cloud_integration_outbox
 CREATE TABLE cloud_integration_dlq (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     organization_id UUID NOT NULL REFERENCES organizations(id),
+    branch_id UUID NULL,
     originating_outbox_id UUID NOT NULL,
     event_type VARCHAR(100) NOT NULL,
     aggregate_type VARCHAR(100) NOT NULL,
@@ -135,7 +143,8 @@ CREATE TABLE cloud_integration_dlq (
     error_trace TEXT NULL,
     retry_count INT NOT NULL,
     context JSONB NOT NULL DEFAULT '{}'::jsonb,
-    moved_to_dlq_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    moved_to_dlq_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT fk_cloud_dlq_branch FOREIGN KEY (organization_id, branch_id) REFERENCES branches(organization_id, id)
 );
 
 CREATE INDEX idx_cloud_dlq_org ON cloud_integration_dlq (organization_id);
@@ -149,31 +158,7 @@ CREATE POLICY tenant_isolation_policy ON cloud_integration_dlq
     USING (organization_id = current_app_org_id())
     WITH CHECK (organization_id = current_app_org_id());
 
--- 6. Test Domain Fixture (for WP012-T30, WP012-T31 atomicity testing)
-CREATE TABLE wp012_test_domain_fixtures (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    organization_id UUID NOT NULL REFERENCES organizations(id),
-    branch_id UUID NOT NULL,
-    entity_name VARCHAR(100) NOT NULL,
-    value VARCHAR(255) NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CONSTRAINT fk_test_domain_fixtures_branch FOREIGN KEY (organization_id, branch_id) REFERENCES branches(organization_id, id)
-);
-
-ALTER TABLE wp012_test_domain_fixtures ENABLE ROW LEVEL SECURITY;
-ALTER TABLE wp012_test_domain_fixtures FORCE ROW LEVEL SECURITY;
-
-CREATE POLICY tenant_isolation_policy ON wp012_test_domain_fixtures
-    FOR ALL
-    USING (organization_id = current_app_org_id())
-    WITH CHECK (organization_id = current_app_org_id());
-
 -- Down
-DROP POLICY IF EXISTS tenant_isolation_policy ON wp012_test_domain_fixtures;
-ALTER TABLE IF EXISTS wp012_test_domain_fixtures NO FORCE ROW LEVEL SECURITY;
-ALTER TABLE IF EXISTS wp012_test_domain_fixtures DISABLE ROW LEVEL SECURITY;
-DROP TABLE IF EXISTS wp012_test_domain_fixtures CASCADE;
-
 DROP POLICY IF EXISTS tenant_isolation_policy ON cloud_integration_dlq;
 ALTER TABLE IF EXISTS cloud_integration_dlq NO FORCE ROW LEVEL SECURITY;
 ALTER TABLE IF EXISTS cloud_integration_dlq DISABLE ROW LEVEL SECURITY;

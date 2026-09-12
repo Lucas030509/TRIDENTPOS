@@ -3,32 +3,42 @@
  * Conforms strictly to:
  * - SYNC_AND_OFFLINE_ARCHITECTURE.md Sec 2
  * - ADR-006 (Ingested Idempotency, Causal Aggregate Sequencing, Gap Buffering)
- * - COORDINATOR_PROMPT_WP012_START.md
+ * - COORDINATOR_PROMPT_WP012_START.md & COORDINATOR_PROMPT_WP012_S12-R1_REMEDIATION.md
  */
 
 import type pg from 'pg';
 import {
   AuthContext,
-  createCloudReceipt,
+  CloudReceiptIssuer,
   ERROR_CODE_ORGANIZATION_BRANCH_MISMATCH,
   ERROR_CODE_SEQUENCE_GAP,
   ERROR_CODE_UNAUTHORIZED_TENANT,
+  ReceiptIssuanceContext,
+  SyncEventDTO,
+  TestCloudReceiptIssuer,
   formatIdempotencyKey,
   isValidUuidV4,
-  SyncEventDTO,
 } from '@trident/core';
 import type { DomainMutationHandler, ProcessEventResult, ReorderingBufferRecord } from './types.js';
 
 export class IngestedIdempotencyEngine {
+  readonly #issuer: CloudReceiptIssuer;
+
+  constructor(issuer?: CloudReceiptIssuer | null) {
+    this.#issuer = issuer ?? new TestCloudReceiptIssuer();
+  }
+
   /**
    * Processes a single sync event within an authoritative PostgreSQL client transaction.
    * Enforces:
    * 1. Multi-instance concurrency via aggregate advisory transaction lock
    * 2. Authoritative AuthContext tenant/branch fencing
-   * 3. Deterministic logical idempotency deduplication with cached response replay
-   * 4. Greenfield causal sequence starting at 1
-   * 5. Sequence gap detection and durable buffering in reordering_buffer_queue
-   * 6. Contiguous draining of buffered events when the missing sequence arrives
+   * 3. Safe positive integer validation on aggregateSequenceNumber
+   * 4. Collision-safe idempotency key generation & defense-in-depth logical tuple verification
+   * 5. Greenfield causal sequence starting at 1
+   * 6. Sequence gap detection and durable buffering in reordering_buffer_queue
+   * 7. Contiguous draining of buffered events when the missing sequence arrives
+   * 8. Receipt issuance through trusted CloudReceiptIssuer boundary
    */
   public async processEvent(
     client: pg.PoolClient,
@@ -49,6 +59,9 @@ export class IngestedIdempotencyEngine {
     }
     if (!isValidUuidV4(event.clientOpId)) {
       throw new Error('clientOpId must be a valid UUIDv4');
+    }
+    if (!Number.isSafeInteger(event.aggregateSequenceNumber) || event.aggregateSequenceNumber < 1) {
+      throw new Error('aggregateSequenceNumber must be a safe positive integer >= 1');
     }
 
     const orgId = auth.organizationId;
@@ -71,8 +84,14 @@ export class IngestedIdempotencyEngine {
       lockKey,
     ]);
 
-    // 3. Check for exact duplicate in ingested_idempotency_log
+    // 3. Check for duplicate in ingested_idempotency_log
+    // QI-012-01: Explicit defense-in-depth comparison of persisted logical components
     const existingLogRes = await client.query<{
+      branch_id: string;
+      aggregate_type: string;
+      aggregate_id: string;
+      action: string;
+      client_op_id: string;
       status: string;
       response_payload: unknown;
       receipt_token: string;
@@ -80,7 +99,17 @@ export class IngestedIdempotencyEngine {
       created_at: Date;
     }>(
       `
-      SELECT status, response_payload, receipt_token, aggregate_sequence_number, created_at
+      SELECT
+        branch_id,
+        aggregate_type,
+        aggregate_id,
+        action,
+        client_op_id,
+        status,
+        response_payload,
+        receipt_token,
+        aggregate_sequence_number,
+        created_at
       FROM ingested_idempotency_log
       WHERE organization_id = $1 AND idempotency_key = $2;
       `,
@@ -89,6 +118,20 @@ export class IngestedIdempotencyEngine {
 
     if (existingLogRes.rows.length > 0 && existingLogRes.rows[0]) {
       const existing = existingLogRes.rows[0];
+
+      // QI-012-01: Verify that every component of the logical tuple strictly matches
+      if (
+        existing.branch_id !== branchId ||
+        existing.aggregate_type !== event.aggregateType ||
+        existing.aggregate_id !== event.aggregateId ||
+        existing.action !== event.action ||
+        existing.client_op_id !== event.clientOpId
+      ) {
+        throw new Error(
+          'IDEMPOTENCY_COLLISION: Idempotency key matched but logical tuple components differ',
+        );
+      }
+
       return {
         status: 'DUPLICATE_ACCEPTED',
         receipt: {
@@ -121,14 +164,24 @@ export class IngestedIdempotencyEngine {
     const expectedSequence = currentSequence + 1;
     const incomingSequence = event.aggregateSequenceNumber;
 
+    const issuanceContext: ReceiptIssuanceContext = {
+      organizationId: orgId,
+      branchId,
+      aggregateType: event.aggregateType,
+      aggregateId: event.aggregateId,
+      action: event.action,
+      clientOpId: event.clientOpId,
+      aggregateSequenceNumber: incomingSequence,
+    };
+
     // 5. Causal Sequence Evaluation
     // Case A: incoming < expectedSequence => Stale sequence
     if (incomingSequence < expectedSequence) {
       // Sequence already consumed. Produce ZERO new mutations.
-      const receiptToken = `receipt_${orgId}_${branchId}_${event.clientOpId}_${incomingSequence}`;
+      const receipt = await Promise.resolve(this.#issuer.issueReceipt(issuanceContext));
       return {
         status: 'DUPLICATE_ACCEPTED',
-        receipt: createCloudReceipt(receiptToken, receiptToken, event.clientOpId, incomingSequence),
+        receipt,
         responsePayload: { message: 'Sequence already consumed' },
         wasDuplicate: true,
       };
@@ -203,14 +256,8 @@ export class IngestedIdempotencyEngine {
       [orgId, branchId, event.aggregateType, event.aggregateId, incomingSequence],
     );
 
-    // Generate Cloud receipt
-    const receiptToken = `receipt_${orgId}_${branchId}_${event.clientOpId}_${incomingSequence}`;
-    const receipt = createCloudReceipt(
-      receiptToken,
-      receiptToken,
-      event.clientOpId,
-      incomingSequence,
-    );
+    // Generate Cloud receipt via trusted CloudReceiptIssuer
+    const receipt = await Promise.resolve(this.#issuer.issueReceipt(issuanceContext));
 
     // Persist into ingested_idempotency_log
     await client.query(
@@ -302,13 +349,17 @@ export class IngestedIdempotencyEngine {
         [orgId, branchId, event.aggregateType, event.aggregateId, nextSeq],
       );
 
-      const drainedReceiptToken = `receipt_${orgId}_${branchId}_${bufferedEvent.clientOpId}_${nextSeq}`;
-      const drainedReceipt = createCloudReceipt(
-        drainedReceiptToken,
-        drainedReceiptToken,
-        bufferedEvent.clientOpId,
-        nextSeq,
-      );
+      const drainedContext: ReceiptIssuanceContext = {
+        organizationId: orgId,
+        branchId,
+        aggregateType: event.aggregateType,
+        aggregateId: event.aggregateId,
+        action: bufferedEvent.action,
+        clientOpId: bufferedEvent.clientOpId,
+        aggregateSequenceNumber: nextSeq,
+      };
+
+      const drainedReceipt = await Promise.resolve(this.#issuer.issueReceipt(drainedContext));
 
       // Record in idempotency log
       await client.query(

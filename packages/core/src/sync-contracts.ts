@@ -4,11 +4,13 @@
  * - SYNC_AND_OFFLINE_ARCHITECTURE.md Sec. 2
  * - ADR-006 (Transactional Outbox Local & Ingested Idempotency)
  * - ADR-007 (Durable Cloud Integration Events)
- * - EAAF v1.2.0 WP-012
+ * - EAAF v1.2.0 WP-012 / S12-R1
  */
 
+import crypto from 'node:crypto';
+
 // ---------------------------------------------------------------------------
-// Idempotency Key & Identity Definitions
+// Idempotency Key & Identity Definitions (QI-012-01: Collision-Safe Encoding)
 // ---------------------------------------------------------------------------
 
 export interface AuthContext {
@@ -26,8 +28,35 @@ export interface IdempotencyKeyComponents {
 }
 
 /**
+ * Returns an unambiguous, collision-safe canonical JSON array string
+ * over all 6 logical components of the operation tuple:
+ * [orgId, branchId, aggregateType, aggregateId, action, clientOpId]
+ */
+export function canonicalizeIdempotencyPayload(parts: IdempotencyKeyComponents): string {
+  if (
+    !parts.orgId ||
+    !parts.branchId ||
+    !parts.aggregateType ||
+    !parts.aggregateId ||
+    !parts.action ||
+    !parts.clientOpId
+  ) {
+    throw new Error('All idempotency key components must be non-empty strings');
+  }
+
+  return JSON.stringify([
+    parts.orgId,
+    parts.branchId,
+    parts.aggregateType,
+    parts.aggregateId,
+    parts.action,
+    parts.clientOpId,
+  ]);
+}
+
+/**
  * Derives the canonical deterministic logical idempotency key:
- * orgId : branchId : aggregateType : aggregateId : action : clientOpId
+ * SHA-256 hex digest over the unambiguous canonical representation.
  */
 export function formatIdempotencyKey(
   partsOrOrgId: IdempotencyKeyComponents | string,
@@ -37,25 +66,20 @@ export function formatIdempotencyKey(
   action?: string,
   clientOpId?: string,
 ): string {
-  if (typeof partsOrOrgId === 'object' && partsOrOrgId !== null) {
-    const p = partsOrOrgId;
-    if (
-      !p.orgId ||
-      !p.branchId ||
-      !p.aggregateType ||
-      !p.aggregateId ||
-      !p.action ||
-      !p.clientOpId
-    ) {
-      throw new Error('All idempotency key components must be non-empty strings');
-    }
-    return `${p.orgId}:${p.branchId}:${p.aggregateType}:${p.aggregateId}:${p.action}:${p.clientOpId}`;
-  }
+  const p: IdempotencyKeyComponents =
+    typeof partsOrOrgId === 'object' && partsOrOrgId !== null
+      ? partsOrOrgId
+      : {
+          orgId: partsOrOrgId,
+          branchId: branchId!,
+          aggregateType: aggregateType!,
+          aggregateId: aggregateId!,
+          action: action!,
+          clientOpId: clientOpId!,
+        };
 
-  if (!partsOrOrgId || !branchId || !aggregateType || !aggregateId || !action || !clientOpId) {
-    throw new Error('All idempotency key components must be non-empty strings');
-  }
-  return `${partsOrOrgId}:${branchId}:${aggregateType}:${aggregateId}:${action}:${clientOpId}`;
+  const canonical = canonicalizeIdempotencyPayload(p);
+  return crypto.createHash('sha256').update(canonical, 'utf8').digest('hex');
 }
 
 const UUID_V4_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -90,22 +114,119 @@ export const VALID_SYNC_ACK_STATUSES: ReadonlySet<SyncAckStatus> = new Set([
 ]);
 
 // ---------------------------------------------------------------------------
-// Cloud Transaction Receipt Contract (ADR-006 Sec. 5)
+// Cloud Transaction Receipt Contract & Trust Provider Boundary (QI-012-02)
 // ---------------------------------------------------------------------------
 
 export interface CloudTransactionReceipt {
   readonly receiptId: string;
   readonly appliedAt: string; // ISO 8601
   readonly serverSignature: string; // Opaque server verification token
-  readonly clientOpId?: string;
-  readonly aggregateSequenceNumber?: number;
+  readonly clientOpId: string;
+  readonly aggregateSequenceNumber: number;
+}
+
+export interface ReceiptIssuanceContext {
+  readonly organizationId: string;
+  readonly branchId: string;
+  readonly clientOpId: string;
+  readonly aggregateSequenceNumber: number;
+  readonly aggregateType?: string;
+  readonly aggregateId?: string;
+  readonly action?: string;
+}
+
+export interface CloudReceiptIssuer {
+  issueReceipt(
+    context: ReceiptIssuanceContext,
+  ): Promise<CloudTransactionReceipt> | CloudTransactionReceipt;
+}
+
+export interface CloudReceiptVerifier {
+  verifyReceipt(
+    receipt: CloudTransactionReceipt,
+    expectedContext: ReceiptIssuanceContext,
+  ): Promise<boolean> | boolean;
+}
+
+/**
+ * Deterministic Test Cloud Receipt Issuer for integration testing.
+ * Uses a deterministic HMAC-SHA256 over canonical context.
+ */
+export class TestCloudReceiptIssuer implements CloudReceiptIssuer {
+  readonly #testSecret: string;
+
+  constructor(testSecret = 'trident-test-trust-secret-key-wp012') {
+    this.#testSecret = testSecret;
+  }
+
+  public issueReceipt(context: ReceiptIssuanceContext): CloudTransactionReceipt {
+    const canonical = JSON.stringify([
+      context.organizationId,
+      context.branchId,
+      context.clientOpId,
+      context.aggregateSequenceNumber,
+      this.#testSecret,
+    ]);
+    const sig = crypto.createHmac('sha256', this.#testSecret).update(canonical).digest('hex');
+    const token = `receipt_${context.organizationId}_${context.clientOpId}_${context.aggregateSequenceNumber}`;
+    return {
+      receiptId: token,
+      appliedAt: new Date().toISOString(),
+      serverSignature: sig,
+      clientOpId: context.clientOpId,
+      aggregateSequenceNumber: context.aggregateSequenceNumber,
+    };
+  }
+}
+
+/**
+ * Deterministic Test Cloud Receipt Verifier for integration testing.
+ * Re-computes and constant-time compares HMAC-SHA256 signature.
+ */
+export class TestCloudReceiptVerifier implements CloudReceiptVerifier {
+  readonly #testSecret: string;
+
+  constructor(testSecret = 'trident-test-trust-secret-key-wp012') {
+    this.#testSecret = testSecret;
+  }
+
+  public verifyReceipt(
+    receipt: CloudTransactionReceipt,
+    expectedContext: ReceiptIssuanceContext,
+  ): boolean {
+    if (!receipt || typeof receipt !== 'object') return false;
+    if (!receipt.receiptId || !receipt.serverSignature) return false;
+    if (receipt.clientOpId !== expectedContext.clientOpId) return false;
+    if (receipt.aggregateSequenceNumber !== expectedContext.aggregateSequenceNumber) return false;
+
+    const canonical = JSON.stringify([
+      expectedContext.organizationId,
+      expectedContext.branchId,
+      expectedContext.clientOpId,
+      expectedContext.aggregateSequenceNumber,
+      this.#testSecret,
+    ]);
+    const expectedSig = crypto
+      .createHmac('sha256', this.#testSecret)
+      .update(canonical)
+      .digest('hex');
+
+    try {
+      const a = Buffer.from(receipt.serverSignature, 'hex');
+      const b = Buffer.from(expectedSig, 'hex');
+      if (a.length !== b.length || a.length === 0) return false;
+      return crypto.timingSafeEqual(a, b);
+    } catch {
+      return false;
+    }
+  }
 }
 
 export function createCloudReceipt(
   receiptId: string,
   serverSignature: string,
-  clientOpId?: string,
-  aggregateSequenceNumber?: number,
+  clientOpId: string,
+  aggregateSequenceNumber: number,
 ): CloudTransactionReceipt {
   return {
     receiptId,
@@ -125,7 +246,12 @@ export function isValidCloudReceipt(receipt: unknown): receipt is CloudTransacti
     typeof r.appliedAt === 'string' &&
     r.appliedAt.length > 0 &&
     typeof r.serverSignature === 'string' &&
-    r.serverSignature.length > 0
+    r.serverSignature.length > 0 &&
+    typeof r.clientOpId === 'string' &&
+    isValidUuidV4(r.clientOpId) &&
+    typeof r.aggregateSequenceNumber === 'number' &&
+    Number.isSafeInteger(r.aggregateSequenceNumber) &&
+    r.aggregateSequenceNumber >= 1
   );
 }
 
@@ -137,6 +263,8 @@ export type EdgeOutboxStatus = 'PENDING' | 'IN_FLIGHT' | 'SYNCED' | 'FAILED';
 
 export interface EdgeOutboxRecord {
   readonly id: string; // UUIDv4
+  readonly organizationId: string;
+  readonly branchId: string;
   readonly clientOpId: string; // UUIDv4
   readonly idempotencyKey: string;
   readonly aggregateType: string;
@@ -146,6 +274,9 @@ export interface EdgeOutboxRecord {
   readonly payloadJson: string;
   readonly status: EdgeOutboxStatus;
   readonly retryCount: number;
+  readonly lastError: string | null;
+  readonly cloudReceiptToken: string | null;
+  readonly cloudReceiptSignature: string | null;
   readonly createdAt: string;
   readonly syncedAt: string | null;
 }
@@ -205,8 +336,10 @@ export interface SyncBatchAckDTO {
 }
 
 // ---------------------------------------------------------------------------
-// Canonical Backoff Policy
+// Canonical Backoff Policy & Retry Rules (QI-012-03)
 // ---------------------------------------------------------------------------
+
+export const CANONICAL_MAX_RETRIES = 5;
 
 export interface BackoffPolicy {
   getDelayMs(retryCount: number): number;
@@ -268,3 +401,4 @@ export const ERROR_CODE_MAX_RETRIES_EXCEEDED = 'MAX_RETRIES_EXCEEDED';
 export const ERROR_CODE_INVALID_SYNC_PAYLOAD = 'INVALID_SYNC_PAYLOAD';
 export const ERROR_CODE_NON_RETRYABLE_ERROR = 'NON_RETRYABLE_ERROR';
 export const ERROR_CODE_OUTBOX_DISPATCH_FAILED = 'OUTBOX_DISPATCH_FAILED';
+export const ERROR_CODE_STALE_CLAIM = 'STALE_CLAIM';

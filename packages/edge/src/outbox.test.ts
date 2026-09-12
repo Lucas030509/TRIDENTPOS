@@ -3,7 +3,7 @@
  * Conforms strictly to:
  * - ADR-006 (Transactional Outbox and Ingested Idempotency)
  * - SYNC_AND_OFFLINE_ARCHITECTURE.md Sec 2
- * - COORDINATOR_PROMPT_WP012_START.md
+ * - COORDINATOR_PROMPT_WP012_START.md & COORDINATOR_PROMPT_WP012_S12-R1_REMEDIATION.md
  */
 
 import { describe, it, before, after } from 'node:test';
@@ -12,16 +12,24 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { EdgeDatabaseService } from './db/edge-database.js';
 import { getTestNativeDatabase } from './db/test-access.js';
 import { EdgeOutboxPersistence, EnqueueOutboxInput } from './db/outbox-persistence.js';
-import { createCloudReceipt, SyncEventAckDTO } from '@trident/core';
+import {
+  SyncEventAckDTO,
+  TestCloudReceiptIssuer,
+  TestCloudReceiptVerifier,
+  createCloudReceipt,
+} from '@trident/core';
 
 describe('TRIDENTPOS WP-012 Edge Transactional Outbox & Durability Suite', () => {
   let tempDir: string;
   let dbPath: string;
   let edgeDb: EdgeDatabaseService;
   let outbox: EdgeOutboxPersistence;
+  const testIssuer = new TestCloudReceiptIssuer();
+  const testVerifier = new TestCloudReceiptVerifier();
 
   const testOrgId = crypto.randomUUID();
   const testBranchId = crypto.randomUUID();
@@ -32,11 +40,25 @@ describe('TRIDENTPOS WP-012 Edge Transactional Outbox & Durability Suite', () =>
     edgeDb = new EdgeDatabaseService({
       databasePath: dbPath,
     });
-    outbox = new EdgeOutboxPersistence(edgeDb);
+
+    // QI-012-06: Create test fixture table exclusively in test setup, NOT in production schema
+    edgeDb.exec(`
+      CREATE TABLE IF NOT EXISTS local_fixture_orders (
+        id TEXT PRIMARY KEY NOT NULL,
+        organization_id TEXT NOT NULL,
+        branch_id TEXT NOT NULL,
+        table_number TEXT NOT NULL,
+        total_amount REAL NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      );
+    `);
+
+    outbox = new EdgeOutboxPersistence(edgeDb, testVerifier);
   });
 
   after(() => {
     if (edgeDb && edgeDb.isOpen()) {
+      edgeDb.exec('DROP TABLE IF EXISTS local_fixture_orders;');
       edgeDb.close();
     }
     if (fs.existsSync(tempDir)) {
@@ -193,7 +215,12 @@ describe('TRIDENTPOS WP-012 Edge Transactional Outbox & Durability Suite', () =>
       payload: { paid: true },
     });
 
-    const receipt = createCloudReceipt('receipt_tok_25', 'sig_cloud_valid_25', clientOpId, 1);
+    const receipt = testIssuer.issueReceipt({
+      organizationId: testOrgId,
+      branchId: testBranchId,
+      clientOpId,
+      aggregateSequenceNumber: 1,
+    });
 
     const ack: SyncEventAckDTO = {
       clientOpId,
@@ -209,7 +236,7 @@ describe('TRIDENTPOS WP-012 Edge Transactional Outbox & Durability Suite', () =>
 
     const updated = outbox.getById(record.id);
     assert.equal(updated?.status, 'SYNCED');
-    assert.equal(updated?.receiptToken, 'sig_cloud_valid_25');
+    assert.equal(updated?.receiptToken, receipt.serverSignature);
     assert.ok(updated?.receiptVerifiedAt);
     assert.ok(updated?.syncedAt);
   });
@@ -227,7 +254,12 @@ describe('TRIDENTPOS WP-012 Edge Transactional Outbox & Durability Suite', () =>
       payload: { paid: true },
     });
 
-    const receipt = createCloudReceipt('receipt_tok_26', 'sig_cloud_valid_26', clientOpId, 2);
+    const receipt = testIssuer.issueReceipt({
+      organizationId: testOrgId,
+      branchId: testBranchId,
+      clientOpId,
+      aggregateSequenceNumber: 2,
+    });
 
     const ack: SyncEventAckDTO = {
       clientOpId,
@@ -243,7 +275,7 @@ describe('TRIDENTPOS WP-012 Edge Transactional Outbox & Durability Suite', () =>
 
     const updated = outbox.getById(record.id);
     assert.equal(updated?.status, 'SYNCED');
-    assert.equal(updated?.receiptToken, 'sig_cloud_valid_26');
+    assert.equal(updated?.receiptToken, receipt.serverSignature);
   });
 
   it('WP012-T27: RECEIVED does NOT mark Edge row SYNCED', () => {
@@ -404,5 +436,240 @@ describe('TRIDENTPOS WP-012 Edge Transactional Outbox & Durability Suite', () =>
 
     tempDb.close();
     fs.rmSync(tempDirAlert, { recursive: true, force: true });
+  });
+
+  it('WP012-R1-T50: Arbitrary non-empty forged receipt signature cannot mark Edge row SYNCED', () => {
+    const clientOpId = crypto.randomUUID();
+    const record = outbox.enqueue({
+      organizationId: testOrgId,
+      branchId: testBranchId,
+      aggregateType: 'ORDER',
+      aggregateId: 'agg_r1_50',
+      action: 'PAY',
+      clientOpId,
+      aggregateSequenceNumber: 1,
+      payload: { paid: true },
+    });
+
+    // Fabricated arbitrary forged signature
+    const forgedReceipt = createCloudReceipt(
+      'receipt_fake_token',
+      'forged_non_empty_signature_1234567890abcdef',
+      clientOpId,
+      1,
+    );
+
+    const ack: SyncEventAckDTO = {
+      clientOpId,
+      aggregateType: 'ORDER',
+      aggregateId: 'agg_r1_50',
+      aggregateSequenceNumber: 1,
+      status: 'APPLIED',
+      receipt: forgedReceipt,
+    };
+
+    const marked = outbox.markSynced(record.id, ack);
+    assert.equal(marked, false, 'Forged signature must fail closed and NOT mark SYNCED');
+
+    const updated = outbox.getById(record.id);
+    assert.equal(updated?.status, 'PENDING');
+  });
+
+  it('WP012-R1-T51: Missing CloudReceiptVerifier fails closed', () => {
+    const tempDirNoVerifier = fs.mkdtempSync(path.join(os.tmpdir(), 'wp012-edge-noverifier-'));
+    const tempDb = new EdgeDatabaseService({
+      databasePath: path.join(tempDirNoVerifier, 'noverifier.db'),
+    });
+    // Explicitly null verifier
+    const noVerifierOutbox = new EdgeOutboxPersistence(tempDb, null);
+
+    const clientOpId = crypto.randomUUID();
+    const record = noVerifierOutbox.enqueue({
+      organizationId: testOrgId,
+      branchId: testBranchId,
+      aggregateType: 'ORDER',
+      aggregateId: 'agg_r1_51',
+      action: 'PAY',
+      clientOpId,
+      aggregateSequenceNumber: 1,
+      payload: { paid: true },
+    });
+
+    const receipt = testIssuer.issueReceipt({
+      organizationId: testOrgId,
+      branchId: testBranchId,
+      clientOpId,
+      aggregateSequenceNumber: 1,
+    });
+
+    const ack: SyncEventAckDTO = {
+      clientOpId,
+      aggregateType: 'ORDER',
+      aggregateId: 'agg_r1_51',
+      aggregateSequenceNumber: 1,
+      status: 'APPLIED',
+      receipt,
+    };
+
+    const marked = noVerifierOutbox.markSynced(record.id, ack);
+    assert.equal(marked, false, 'Without verifier, markSynced must fail closed');
+
+    const updated = noVerifierOutbox.getById(record.id);
+    assert.equal(updated?.status, 'PENDING');
+
+    tempDb.close();
+    fs.rmSync(tempDirNoVerifier, { recursive: true, force: true });
+  });
+
+  it('WP012-R1-T52: Trusted deterministic TEST verifier permits valid APPLIED receipt', () => {
+    const clientOpId = crypto.randomUUID();
+    const record = outbox.enqueue({
+      organizationId: testOrgId,
+      branchId: testBranchId,
+      aggregateType: 'ORDER',
+      aggregateId: 'agg_r1_52',
+      action: 'PAY',
+      clientOpId,
+      aggregateSequenceNumber: 1,
+      payload: { paid: true },
+    });
+
+    const validReceipt = testIssuer.issueReceipt({
+      organizationId: testOrgId,
+      branchId: testBranchId,
+      clientOpId,
+      aggregateSequenceNumber: 1,
+    });
+
+    const ack: SyncEventAckDTO = {
+      clientOpId,
+      aggregateType: 'ORDER',
+      aggregateId: 'agg_r1_52',
+      aggregateSequenceNumber: 1,
+      status: 'APPLIED',
+      receipt: validReceipt,
+    };
+
+    const marked = outbox.markSynced(record.id, ack);
+    assert.equal(marked, true, 'Valid receipt with trusted test verifier must mark SYNCED');
+
+    const updated = outbox.getById(record.id);
+    assert.equal(updated?.status, 'SYNCED');
+    assert.equal(updated?.receiptToken, validReceipt.serverSignature);
+  });
+
+  it('WP012-R1-T60: Production Edge outbox implementation has no runtime dependency on test-access', () => {
+    const currentDir = path.dirname(fileURLToPath(import.meta.url));
+    const jsPath = path.resolve(currentDir, 'db', 'outbox-persistence.js');
+    const tsPath = path.resolve(currentDir, '..', 'src', 'db', 'outbox-persistence.ts');
+    const targetPath = fs.existsSync(jsPath) ? jsPath : tsPath;
+    const content = fs.readFileSync(targetPath, 'utf-8');
+    assert.equal(
+      content.includes('test-access'),
+      false,
+      'Production outbox-persistence must NOT import or reference test-access',
+    );
+    if (fs.existsSync(tsPath)) {
+      const tsContent = fs.readFileSync(tsPath, 'utf-8');
+      assert.equal(
+        tsContent.includes('test-access'),
+        false,
+        'TypeScript source outbox-persistence.ts must NOT import or reference test-access',
+      );
+    }
+  });
+
+  it('WP012-R1-T62: Production Edge initialization contains no local_fixture_orders test table', () => {
+    const tempDirClean = fs.mkdtempSync(path.join(os.tmpdir(), 'wp012-edge-clean-'));
+    const cleanDb = new EdgeDatabaseService({
+      databasePath: path.join(tempDirClean, 'clean.db'),
+    });
+    // Create production EdgeOutboxPersistence
+    new EdgeOutboxPersistence(cleanDb);
+
+    const nativeDb = getTestNativeDatabase(cleanDb);
+    const fixtureTable = nativeDb
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='local_fixture_orders';")
+      .get();
+    assert.equal(
+      fixtureTable,
+      undefined,
+      'Production initialization must NOT create local_fixture_orders test table',
+    );
+
+    cleanDb.close();
+    fs.rmSync(tempDirClean, { recursive: true, force: true });
+  });
+
+  it('WP012-R1-T63: Fractional aggregateSequenceNumber rejected at Edge persistence boundary', () => {
+    assert.throws(
+      () => {
+        outbox.enqueue({
+          organizationId: testOrgId,
+          branchId: testBranchId,
+          aggregateType: 'ORDER',
+          aggregateId: 'agg_frac',
+          action: 'PAY',
+          clientOpId: crypto.randomUUID(),
+          aggregateSequenceNumber: 1.5,
+          payload: {},
+        });
+      },
+      /safe positive integer/,
+      'Fractional aggregateSequenceNumber must be rejected',
+    );
+  });
+
+  it('WP012-R1-T64: Unsafe integer aggregateSequenceNumber rejected', () => {
+    assert.throws(
+      () => {
+        outbox.enqueue({
+          organizationId: testOrgId,
+          branchId: testBranchId,
+          aggregateType: 'ORDER',
+          aggregateId: 'agg_unsafe',
+          action: 'PAY',
+          clientOpId: crypto.randomUUID(),
+          aggregateSequenceNumber: Number.MAX_SAFE_INTEGER + 100,
+          payload: {},
+        });
+      },
+      /safe positive integer/,
+      'Unsafe integer aggregateSequenceNumber must be rejected',
+    );
+
+    assert.throws(
+      () => {
+        outbox.enqueue({
+          organizationId: testOrgId,
+          branchId: testBranchId,
+          aggregateType: 'ORDER',
+          aggregateId: 'agg_nan',
+          action: 'PAY',
+          clientOpId: crypto.randomUUID(),
+          aggregateSequenceNumber: Number.NaN,
+          payload: {},
+        });
+      },
+      /safe positive integer/,
+      'NaN aggregateSequenceNumber must be rejected',
+    );
+
+    assert.throws(
+      () => {
+        outbox.enqueue({
+          organizationId: testOrgId,
+          branchId: testBranchId,
+          aggregateType: 'ORDER',
+          aggregateId: 'agg_zero',
+          action: 'PAY',
+          clientOpId: crypto.randomUUID(),
+          aggregateSequenceNumber: 0,
+          payload: {},
+        });
+      },
+      /safe positive integer/,
+      'Zero aggregateSequenceNumber must be rejected',
+    );
   });
 });

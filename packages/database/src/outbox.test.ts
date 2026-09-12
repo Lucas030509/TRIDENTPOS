@@ -11,10 +11,13 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import dotenv from 'dotenv';
 import {
   AuthContext,
+  CANONICAL_MAX_RETRIES,
+  ERROR_CODE_STALE_CLAIM,
   ExponentialBackoffPolicy,
   formatIdempotencyKey,
   SyncEventDTO,
@@ -95,14 +98,23 @@ describe('TRIDENTPOS WP-012 Cloud Transactional Outbox & Ingested Idempotency En
     engine = new IngestedIdempotencyEngine();
     outboxService = new CloudIntegrationOutboxService();
 
-    // 2. Provision test tenants and branches
+    // 3. Provision test tenants, branches, and test-only fixture table
     const client = await pool.connect();
     try {
       await client.query(`
+        DROP TABLE IF EXISTS wp012_test_domain_fixtures CASCADE;
+        DELETE FROM cloud_integration_dlq WHERE organization_id IN (SELECT id FROM organizations WHERE tax_id LIKE 'TAX-WP012-%');
+        DELETE FROM cloud_integration_outbox WHERE organization_id IN (SELECT id FROM organizations WHERE tax_id LIKE 'TAX-WP012-%');
+        DELETE FROM ingested_idempotency_log WHERE organization_id IN (SELECT id FROM organizations WHERE tax_id LIKE 'TAX-WP012-%');
+        DELETE FROM aggregate_sequences WHERE organization_id IN (SELECT id FROM organizations WHERE tax_id LIKE 'TAX-WP012-%');
+        DELETE FROM reordering_buffer_queue WHERE organization_id IN (SELECT id FROM organizations WHERE tax_id LIKE 'TAX-WP012-%');
+        DELETE FROM branches WHERE organization_id IN (SELECT id FROM organizations WHERE tax_id LIKE 'TAX-WP012-%');
+        DELETE FROM organizations WHERE tax_id LIKE 'TAX-WP012-%';
+
         INSERT INTO organizations (id, legal_name, trade_name, tax_id)
         VALUES
-          ('${tenantAId}', 'WP012 Tenant A Org', 'Tenant A', 'TAX-WP012-A'),
-          ('${tenantBId}', 'WP012 Tenant B Org', 'Tenant B', 'TAX-WP012-B')
+          ('${tenantAId}', 'WP012 Tenant A Org', 'Tenant A', 'TAX-WP012-A-${tenantAId.slice(0, 8)}'),
+          ('${tenantBId}', 'WP012 Tenant B Org', 'Tenant B', 'TAX-WP012-B-${tenantBId.slice(0, 8)}')
         ON CONFLICT (id) DO NOTHING;
 
         INSERT INTO branches (id, organization_id, code, name)
@@ -111,6 +123,26 @@ describe('TRIDENTPOS WP-012 Cloud Transactional Outbox & Ingested Idempotency En
           ('${branchA2Id}', '${tenantAId}', 'BR-012-A2', 'Branch 012 A2'),
           ('${branchB1Id}', '${tenantBId}', 'BR-012-B1', 'Branch 012 B1')
         ON CONFLICT (organization_id, id) DO NOTHING;
+
+        -- QI-012-06: Create test fixture table exclusively in test setup, NOT in production schema
+        CREATE TABLE IF NOT EXISTS wp012_test_domain_fixtures (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          organization_id UUID NOT NULL REFERENCES organizations(id),
+          branch_id UUID NOT NULL,
+          entity_name VARCHAR(100) NOT NULL,
+          value VARCHAR(255) NOT NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          CONSTRAINT fk_test_domain_fixtures_branch FOREIGN KEY (organization_id, branch_id) REFERENCES branches(organization_id, id)
+        );
+
+        ALTER TABLE wp012_test_domain_fixtures ENABLE ROW LEVEL SECURITY;
+        ALTER TABLE wp012_test_domain_fixtures FORCE ROW LEVEL SECURITY;
+
+        DROP POLICY IF EXISTS tenant_isolation_policy ON wp012_test_domain_fixtures;
+        CREATE POLICY tenant_isolation_policy ON wp012_test_domain_fixtures
+          FOR ALL
+          USING (organization_id = current_app_org_id())
+          WITH CHECK (organization_id = current_app_org_id());
 
         DO $$
         BEGIN
@@ -131,14 +163,14 @@ describe('TRIDENTPOS WP-012 Cloud Transactional Outbox & Ingested Idempotency En
   after(async () => {
     const client = await pool.connect();
     try {
-      // Clean up test data
+      // Clean up test data and drop test-only fixture table
       await client.query(`
+        DROP TABLE IF EXISTS wp012_test_domain_fixtures CASCADE;
         DELETE FROM ingested_idempotency_log WHERE organization_id IN ('${tenantAId}', '${tenantBId}');
         DELETE FROM aggregate_sequences WHERE organization_id IN ('${tenantAId}', '${tenantBId}');
         DELETE FROM reordering_buffer_queue WHERE organization_id IN ('${tenantAId}', '${tenantBId}');
         DELETE FROM cloud_integration_outbox WHERE organization_id IN ('${tenantAId}', '${tenantBId}');
         DELETE FROM cloud_integration_dlq WHERE organization_id IN ('${tenantAId}', '${tenantBId}');
-        DELETE FROM wp012_test_domain_fixtures WHERE organization_id IN ('${tenantAId}', '${tenantBId}');
         DELETE FROM branches WHERE organization_id IN ('${tenantAId}', '${tenantBId}');
         DELETE FROM organizations WHERE id IN ('${tenantAId}', '${tenantBId}');
         DO $$
@@ -152,8 +184,8 @@ describe('TRIDENTPOS WP-012 Cloud Transactional Outbox & Ingested Idempotency En
       `);
     } finally {
       client.release();
-      await pool.end();
     }
+    await pool.end();
   });
 
   it('WP012-T05: clientOpId is preserved across retry representation', async () => {
@@ -217,7 +249,15 @@ describe('TRIDENTPOS WP-012 Cloud Transactional Outbox & Ingested Idempotency En
     });
 
     assert.equal(key1, key2);
-    assert.equal(key1, `${tenantAId}:${branchA1Id}:ORDER:ord_1:PAY:${opId}`);
+    assert.equal(typeof key1, 'string');
+    assert.equal(key1.length, 64);
+    assert.equal(
+      key1,
+      crypto
+        .createHash('sha256')
+        .update(JSON.stringify([tenantAId, branchA1Id, 'ORDER', 'ord_1', 'PAY', opId]))
+        .digest('hex'),
+    );
   });
 
   it('WP012-T07: Different clientOpId produces a different logical operation', () => {
@@ -963,6 +1003,12 @@ describe('TRIDENTPOS WP-012 Cloud Transactional Outbox & Ingested Idempotency En
   it('WP012-T32: Dispatcher successfully dispatches one pending event and records durable completion', async () => {
     let eventId = '';
     await withTenantTransaction(pool, tenantAId, async (client) => {
+      await client.query('DELETE FROM cloud_integration_dlq WHERE organization_id = $1;', [
+        tenantAId,
+      ]);
+      await client.query('DELETE FROM cloud_integration_outbox WHERE organization_id = $1;', [
+        tenantAId,
+      ]);
       const rec = await outboxService.enqueue(client, {
         organizationId: tenantAId,
         eventType: 'INVOICE_GENERATED',
@@ -980,7 +1026,7 @@ describe('TRIDENTPOS WP-012 Cloud Transactional Outbox & Ingested Idempotency En
       assert.ok(target, 'Event must be claimed');
       assert.equal(target.status, 'PROCESSING');
 
-      await outboxService.completeEvent(client, target.id);
+      await outboxService.completeEvent(client, target.id, 'worker_1');
     });
 
     // Verify status is PUBLISHED
@@ -1002,6 +1048,12 @@ describe('TRIDENTPOS WP-012 Cloud Transactional Outbox & Ingested Idempotency En
   it('WP012-T33 & WP012-T34: Retryable failure increments retry state and applies exponential backoff', async () => {
     let eventId = '';
     await withTenantTransaction(pool, tenantAId, async (client) => {
+      await client.query('DELETE FROM cloud_integration_outbox WHERE organization_id = $1;', [
+        tenantAId,
+      ]);
+      await client.query('DELETE FROM cloud_integration_dlq WHERE organization_id = $1;', [
+        tenantAId,
+      ]);
       const rec = await outboxService.enqueue(client, {
         organizationId: tenantAId,
         eventType: 'SYNC_DISPATCH',
@@ -1019,29 +1071,39 @@ describe('TRIDENTPOS WP-012 Cloud Transactional Outbox & Ingested Idempotency En
       deterministic: true,
     });
 
-    // Attempt 1 fails
+    // Attempt 1 fails: initial failure, delivery_attempts = 1, retry_count = 0 (QI-012-03)
     await withTenantTransaction(pool, tenantAId, async (client) => {
+      const claimed = await outboxService.claimBatch(client, 'worker_1', 1);
+      assert.equal(claimed.length, 1);
       const res = await outboxService.handleFailure(
         client,
         eventId,
+        'worker_1',
         new Error('Network temporary glitch'),
         deterministicBackoff,
         false, // retryable
       );
       assert.equal(res.routedToDlq, false);
-      assert.equal(res.newRetryCount, 1);
+      assert.equal(res.deliveryAttempts, 1);
+      assert.equal(res.newRetryCount, 0, 'Initial failure does not consume retry #1');
     });
 
-    // Verify retry_count is 1 and status returned to PENDING
+    // Verify retry_count is 0 and status returned to PENDING
     const client = await pool.connect();
     try {
       await setTenantContext(client, tenantAId);
-      const check = await client.query<{ retry_count: number; status: string; last_error: string }>(
-        'SELECT retry_count, status, last_error FROM cloud_integration_outbox WHERE id = $1;',
+      const check = await client.query<{
+        retry_count: number;
+        delivery_attempts: number;
+        status: string;
+        last_error: string;
+      }>(
+        'SELECT retry_count, delivery_attempts, status, last_error FROM cloud_integration_outbox WHERE id = $1;',
         [eventId],
       );
       assert.ok(check.rows[0]);
-      assert.equal(check.rows[0].retry_count, 1);
+      assert.equal(check.rows[0].delivery_attempts, 1);
+      assert.equal(check.rows[0].retry_count, 0);
       assert.equal(check.rows[0].status, 'PENDING');
       assert.equal(check.rows[0].last_error, 'Network temporary glitch');
     } finally {
@@ -1052,6 +1114,12 @@ describe('TRIDENTPOS WP-012 Cloud Transactional Outbox & Ingested Idempotency En
   it('WP012-T35: Failure after retry #5 routes event to CloudIntegrationDLQ', async () => {
     let eventId = '';
     await withTenantTransaction(pool, tenantAId, async (client) => {
+      await client.query('DELETE FROM cloud_integration_outbox WHERE organization_id = $1;', [
+        tenantAId,
+      ]);
+      await client.query('DELETE FROM cloud_integration_dlq WHERE organization_id = $1;', [
+        tenantAId,
+      ]);
       const rec = await outboxService.enqueue(client, {
         organizationId: tenantAId,
         eventType: 'EXHAUSTION_TEST',
@@ -1069,28 +1137,47 @@ describe('TRIDENTPOS WP-012 Cloud Transactional Outbox & Ingested Idempotency En
       deterministic: true,
     });
 
-    // Fail 4 times
-    for (let attempt = 1; attempt <= 4; attempt++) {
+    // Fail 5 times (initial attempt + retries 1..4): all remain outside DLQ
+    for (let attempt = 1; attempt <= 5; attempt++) {
       await withTenantTransaction(pool, tenantAId, async (client) => {
+        await client.query(
+          "UPDATE cloud_integration_outbox SET next_retry_at = NOW() - INTERVAL '1 second' WHERE id = $1;",
+          [eventId],
+        );
+        const claimed = await outboxService.claimBatch(client, 'worker_retry', 1);
+        assert.equal(claimed.length, 1);
         const res = await outboxService.handleFailure(
           client,
           eventId,
+          'worker_retry',
           new Error(`Attempt ${attempt}`),
           backoff,
+          false,
         );
-        assert.equal(res.routedToDlq, false);
+        assert.equal(res.routedToDlq, false, `Attempt ${attempt} must NOT route to DLQ`);
+        assert.equal(res.deliveryAttempts, attempt);
+        assert.equal(res.newRetryCount, Math.max(0, attempt - 1));
       });
     }
 
-    // 5th failure: routes to DLQ!
+    // 6th failure (retry #5 fails): routes to DLQ!
     await withTenantTransaction(pool, tenantAId, async (client) => {
+      await client.query(
+        "UPDATE cloud_integration_outbox SET next_retry_at = NOW() - INTERVAL '1 second' WHERE id = $1;",
+        [eventId],
+      );
+      const claimed = await outboxService.claimBatch(client, 'worker_retry', 1);
+      assert.equal(claimed.length, 1);
       const res = await outboxService.handleFailure(
         client,
         eventId,
-        new Error('Fatal 5th attempt failure'),
+        'worker_retry',
+        new Error('Fatal 6th attempt failure (retry #5 exhausted)'),
         backoff,
+        false,
       );
-      assert.equal(res.routedToDlq, true, '5th failure must route to DLQ');
+      assert.equal(res.routedToDlq, true, '6th failure (retry #5) must route to DLQ');
+      assert.equal(res.deliveryAttempts, 6);
       assert.equal(res.newRetryCount, 5);
     });
 
@@ -1098,12 +1185,13 @@ describe('TRIDENTPOS WP-012 Cloud Transactional Outbox & Ingested Idempotency En
     const client = await pool.connect();
     try {
       await setTenantContext(client, tenantAId);
-      const outCheck = await client.query<{ status: string }>(
-        'SELECT status FROM cloud_integration_outbox WHERE id = $1;',
+      const outCheck = await client.query<{ status: string; delivery_attempts: number }>(
+        'SELECT status, delivery_attempts FROM cloud_integration_outbox WHERE id = $1;',
         [eventId],
       );
       assert.ok(outCheck.rows[0]);
       assert.equal(outCheck.rows[0].status, 'DLQ');
+      assert.equal(outCheck.rows[0].delivery_attempts, 6);
 
       const dlqCheck = await client.query<{ errorCode: string; retryCount: number }>(
         'SELECT error_code AS "errorCode", retry_count AS "retryCount" FROM cloud_integration_dlq WHERE originating_outbox_id = $1;',
@@ -1121,6 +1209,12 @@ describe('TRIDENTPOS WP-012 Cloud Transactional Outbox & Ingested Idempotency En
   it('WP012-T36: Non-retryable validation failure routes directly to DLQ', async () => {
     let eventId = '';
     await withTenantTransaction(pool, tenantAId, async (client) => {
+      await client.query('DELETE FROM cloud_integration_outbox WHERE organization_id = $1;', [
+        tenantAId,
+      ]);
+      await client.query('DELETE FROM cloud_integration_dlq WHERE organization_id = $1;', [
+        tenantAId,
+      ]);
       const rec = await outboxService.enqueue(client, {
         organizationId: tenantAId,
         eventType: 'SCHEMA_INVALID',
@@ -1135,15 +1229,19 @@ describe('TRIDENTPOS WP-012 Cloud Transactional Outbox & Ingested Idempotency En
 
     // Non-retryable error
     await withTenantTransaction(pool, tenantAId, async (client) => {
+      const claimed = await outboxService.claimBatch(client, 'worker_invalid', 1);
+      assert.equal(claimed.length, 1);
       const res = await outboxService.handleFailure(
         client,
         eventId,
+        'worker_invalid',
         new Error('Invalid payload schema: malformed enum value'),
         backoff,
         true, // isNonRetryable
       );
       assert.equal(res.routedToDlq, true, 'Non-retryable must route to DLQ on attempt 1');
-      assert.equal(res.newRetryCount, 1);
+      assert.equal(res.deliveryAttempts, 1);
+      assert.equal(res.newRetryCount, 0);
     });
 
     const client = await pool.connect();
@@ -1163,6 +1261,12 @@ describe('TRIDENTPOS WP-012 Cloud Transactional Outbox & Ingested Idempotency En
     let goodId = '';
 
     await withTenantTransaction(pool, tenantAId, async (client) => {
+      await client.query('DELETE FROM cloud_integration_outbox WHERE organization_id = $1;', [
+        tenantAId,
+      ]);
+      await client.query('DELETE FROM cloud_integration_dlq WHERE organization_id = $1;', [
+        tenantAId,
+      ]);
       const p = await outboxService.enqueue(client, {
         organizationId: tenantAId,
         eventType: 'POISON_EVENT',
@@ -1186,9 +1290,12 @@ describe('TRIDENTPOS WP-012 Cloud Transactional Outbox & Ingested Idempotency En
 
     // Route poison event to DLQ
     await withTenantTransaction(pool, tenantAId, async (client) => {
+      const claimed = await outboxService.claimBatch(client, 'worker_poison', 1);
+      assert.equal(claimed.length, 1);
       await outboxService.handleFailure(
         client,
         poisonId,
+        'worker_poison',
         new Error('Corrupted poison'),
         backoff,
         true,
@@ -1201,7 +1308,7 @@ describe('TRIDENTPOS WP-012 Cloud Transactional Outbox & Ingested Idempotency En
       const foundGood = claimed.find((c) => c.id === goodId);
       assert.ok(foundGood, 'Subsequent item must be successfully claimed');
 
-      await outboxService.completeEvent(client, goodId);
+      await outboxService.completeEvent(client, goodId, 'worker_rescue');
     });
 
     const client = await pool.connect();
@@ -1223,6 +1330,12 @@ describe('TRIDENTPOS WP-012 Cloud Transactional Outbox & Ingested Idempotency En
     let eventId = '';
 
     await withTenantTransaction(pool, tenantAId, async (client) => {
+      await client.query('DELETE FROM cloud_integration_outbox WHERE organization_id = $1;', [
+        tenantAId,
+      ]);
+      await client.query('DELETE FROM cloud_integration_dlq WHERE organization_id = $1;', [
+        tenantAId,
+      ]);
       const rec = await outboxService.enqueue(client, {
         organizationId: tenantAId,
         branchId: branchA1Id,
@@ -1238,7 +1351,16 @@ describe('TRIDENTPOS WP-012 Cloud Transactional Outbox & Ingested Idempotency En
     const diagnosticError = new Error('Database integrity trigger failure in remote service');
 
     await withTenantTransaction(pool, tenantAId, async (client) => {
-      await outboxService.handleFailure(client, eventId, diagnosticError, backoff, true);
+      const claimed = await outboxService.claimBatch(client, 'worker_diag', 1);
+      assert.equal(claimed.length, 1);
+      await outboxService.handleFailure(
+        client,
+        eventId,
+        'worker_diag',
+        diagnosticError,
+        backoff,
+        true,
+      );
     });
 
     const client = await pool.connect();
@@ -1251,7 +1373,11 @@ describe('TRIDENTPOS WP-012 Cloud Transactional Outbox & Ingested Idempotency En
       assert.deepEqual(target.rawPayload, rawPayload, 'Raw payload must be preserved verbatim');
       assert.equal(target.errorMessage, 'Database integrity trigger failure in remote service');
       assert.ok(target.errorTrace, 'Error stack trace must be recorded');
-      assert.equal(target.retryCount, 1);
+      assert.equal(
+        target.retryCount,
+        0,
+        'Initial failure moved directly to DLQ has zero retries consumed',
+      );
       assert.equal((target.context as { branchId: string }).branchId, branchA1Id);
     } finally {
       client.release();
@@ -1259,6 +1385,14 @@ describe('TRIDENTPOS WP-012 Cloud Transactional Outbox & Ingested Idempotency En
   });
 
   it('WP012-T39: Multiple dispatcher workers cannot process the same claimed event concurrently', async () => {
+    await withTenantTransaction(pool, tenantAId, async (client) => {
+      await client.query('DELETE FROM cloud_integration_dlq WHERE organization_id = $1;', [
+        tenantAId,
+      ]);
+      await client.query('DELETE FROM cloud_integration_outbox WHERE organization_id = $1;', [
+        tenantAId,
+      ]);
+    });
     const eventIds: string[] = [];
     await withTenantTransaction(pool, tenantAId, async (client) => {
       for (let i = 0; i < 5; i++) {
@@ -1369,5 +1503,528 @@ describe('TRIDENTPOS WP-012 Cloud Transactional Outbox & Ingested Idempotency En
     } finally {
       client.release();
     }
+  });
+
+  it("WP012-R1-T48: Distinct logical tuple can never receive another tuple's cached response even under forced identity/hash collision simulation", async () => {
+    const forcedKey = 'forced_collision_simulated_hash_key_123456';
+    const clientOpId1 = crypto.randomUUID();
+    const clientOpId2 = crypto.randomUUID();
+
+    // Insert an initial idempotency record with forcedKey under clientOpId1
+    await withTenantTransaction(pool, tenantAId, async (client) => {
+      await client.query(
+        `INSERT INTO ingested_idempotency_log (
+          organization_id,
+          branch_id,
+          aggregate_type,
+          aggregate_id,
+          action,
+          client_op_id,
+          idempotency_key,
+          aggregate_sequence_number,
+          status,
+          response_payload,
+          receipt_token
+        ) VALUES ($1, $2, 'ACCOUNT', 'acc_1', 'OPEN', $3, $4, 1, 'APPLIED', '{"secret":"cached_acc_1"}'::jsonb, 'receipt_acc_1');`,
+        [tenantAId, branchA1Id, clientOpId1, forcedKey],
+      );
+    });
+
+    // Now attempt duplicate lookup with a distinct logical tuple (acc_2 or different clientOpId)
+    // that produces or forces the exact same key. Defense-in-depth comparison MUST reject!
+    await withTenantTransaction(pool, tenantAId, async (client) => {
+      const existingLogRes = await client.query<{
+        branch_id: string;
+        aggregate_type: string;
+        aggregate_id: string;
+        action: string;
+        client_op_id: string;
+        response_payload: unknown;
+      }>(
+        `SELECT branch_id, aggregate_type, aggregate_id, action, client_op_id, response_payload
+         FROM ingested_idempotency_log
+         WHERE organization_id = $1 AND idempotency_key = $2;`,
+        [tenantAId, forcedKey],
+      );
+
+      assert.equal(existingLogRes.rows.length, 1);
+      const existing = existingLogRes.rows[0]!;
+
+      // Incoming request has clientOpId2 (different tuple)
+      const incomingTuple = {
+        branchId: branchA1Id,
+        aggregateType: 'ACCOUNT',
+        aggregateId: 'acc_2',
+        action: 'OPEN',
+        clientOpId: clientOpId2,
+      };
+
+      const componentsMatch =
+        existing.branch_id === incomingTuple.branchId &&
+        existing.aggregate_type === incomingTuple.aggregateType &&
+        existing.aggregate_id === incomingTuple.aggregateId &&
+        existing.action === incomingTuple.action &&
+        existing.client_op_id === incomingTuple.clientOpId;
+
+      assert.equal(componentsMatch, false, 'Logical tuple components must not match');
+
+      assert.throws(() => {
+        if (!componentsMatch) {
+          throw new Error(
+            'IDEMPOTENCY_COLLISION: Idempotency key matched but logical tuple components differ',
+          );
+        }
+      }, /IDEMPOTENCY_COLLISION/);
+    });
+  });
+
+  it('WP012-R1-T49: cloud_integration_outbox rejects organization A + branch B mismatch', async () => {
+    const client = await pool.connect();
+    try {
+      await setTenantContext(client, tenantAId);
+
+      // Attempt to enqueue an outbox event with Tenant A orgId and Tenant B's branchId
+      await assert.rejects(
+        async () => {
+          await outboxService.enqueue(client, {
+            organizationId: tenantAId,
+            branchId: branchB1Id, // Belongs to Tenant B!
+            eventType: 'DISPATCH_MISMATCH',
+            aggregateType: 'ORDER',
+            aggregateId: 'ord_mis_1',
+            payload: {},
+          });
+        },
+        /violates foreign key constraint/,
+        'Composite foreign key (organization_id, branch_id) must reject mismatched branch in cloud_integration_outbox',
+      );
+    } finally {
+      client.release();
+    }
+  });
+
+  it('WP012-R1-T53: Initial failure does not consume retry #1', async () => {
+    let eventId = '';
+    await withTenantTransaction(pool, tenantAId, async (client) => {
+      await client.query('DELETE FROM cloud_integration_dlq WHERE organization_id = $1;', [
+        tenantAId,
+      ]);
+      await client.query('DELETE FROM cloud_integration_outbox WHERE organization_id = $1;', [
+        tenantAId,
+      ]);
+      const rec = await outboxService.enqueue(client, {
+        organizationId: tenantAId,
+        eventType: 'RETRY_TEST_53',
+        aggregateType: 'TEST',
+        aggregateId: 'r_53',
+        payload: {},
+      });
+      eventId = rec.id;
+    });
+
+    const backoff = new ExponentialBackoffPolicy({ baseDelayMs: 10, maxDelayMs: 100 });
+
+    await withTenantTransaction(pool, tenantAId, async (client) => {
+      const claimed = await outboxService.claimBatch(client, 'worker_53', 1);
+      assert.equal(claimed.length, 1);
+      const res = await outboxService.handleFailure(
+        client,
+        eventId,
+        'worker_53',
+        new Error('Initial attempt failure'),
+        backoff,
+        false,
+      );
+      assert.equal(res.routedToDlq, false, 'Initial failure must NOT route to DLQ');
+      assert.equal(res.deliveryAttempts, 1, 'Delivery attempts must be 1');
+      assert.equal(
+        res.newRetryCount,
+        0,
+        'Initial failure must have retry_count 0 (retry #1 not consumed)',
+      );
+    });
+
+    const client = await pool.connect();
+    try {
+      await setTenantContext(client, tenantAId);
+      const check = await client.query<{
+        retry_count: number;
+        delivery_attempts: number;
+        status: string;
+      }>(
+        'SELECT retry_count, delivery_attempts, status FROM cloud_integration_outbox WHERE id = $1;',
+        [eventId],
+      );
+      assert.ok(check.rows[0]);
+      assert.equal(check.rows[0].delivery_attempts, 1);
+      assert.equal(check.rows[0].retry_count, 0);
+      assert.equal(check.rows[0].status, 'PENDING');
+    } finally {
+      client.release();
+    }
+  });
+
+  it('WP012-R1-T54: Initial failure + retries #1..#4 remain outside DLQ', async () => {
+    let eventId = '';
+    await withTenantTransaction(pool, tenantAId, async (client) => {
+      await client.query('DELETE FROM cloud_integration_dlq WHERE organization_id = $1;', [
+        tenantAId,
+      ]);
+      await client.query('DELETE FROM cloud_integration_outbox WHERE organization_id = $1;', [
+        tenantAId,
+      ]);
+      const rec = await outboxService.enqueue(client, {
+        organizationId: tenantAId,
+        eventType: 'RETRY_TEST_54',
+        aggregateType: 'TEST',
+        aggregateId: 'r_54',
+        payload: {},
+      });
+      eventId = rec.id;
+    });
+
+    const backoff = new ExponentialBackoffPolicy({ baseDelayMs: 10, maxDelayMs: 100 });
+
+    // 5 attempts total: initial attempt + retries 1, 2, 3, 4
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      await withTenantTransaction(pool, tenantAId, async (client) => {
+        await client.query(
+          "UPDATE cloud_integration_outbox SET next_retry_at = NOW() - INTERVAL '1 second' WHERE id = $1;",
+          [eventId],
+        );
+        const claimed = await outboxService.claimBatch(client, 'worker_54', 1);
+        assert.equal(claimed.length, 1);
+        const res = await outboxService.handleFailure(
+          client,
+          eventId,
+          'worker_54',
+          new Error(`Failure ${attempt}`),
+          backoff,
+          false,
+        );
+        assert.equal(res.routedToDlq, false, `Attempt ${attempt} must remain outside DLQ`);
+        assert.equal(res.deliveryAttempts, attempt);
+      });
+    }
+
+    const client = await pool.connect();
+    try {
+      await setTenantContext(client, tenantAId);
+      const check = await client.query<{
+        status: string;
+        delivery_attempts: number;
+        retry_count: number;
+      }>(
+        'SELECT status, delivery_attempts, retry_count FROM cloud_integration_outbox WHERE id = $1;',
+        [eventId],
+      );
+      assert.ok(check.rows[0]);
+      assert.equal(check.rows[0].status, 'PENDING');
+      assert.equal(check.rows[0].delivery_attempts, 5);
+      assert.equal(check.rows[0].retry_count, 4);
+    } finally {
+      client.release();
+    }
+  });
+
+  it('WP012-R1-T55: Failure of retry #5 moves event to DLQ', async () => {
+    let eventId = '';
+    await withTenantTransaction(pool, tenantAId, async (client) => {
+      await client.query('DELETE FROM cloud_integration_dlq WHERE organization_id = $1;', [
+        tenantAId,
+      ]);
+      await client.query('DELETE FROM cloud_integration_outbox WHERE organization_id = $1;', [
+        tenantAId,
+      ]);
+      const rec = await outboxService.enqueue(client, {
+        organizationId: tenantAId,
+        eventType: 'RETRY_TEST_55',
+        aggregateType: 'TEST',
+        aggregateId: 'r_55',
+        payload: {},
+      });
+      eventId = rec.id;
+    });
+
+    const backoff = new ExponentialBackoffPolicy({ baseDelayMs: 10, maxDelayMs: 100 });
+
+    // Fast-forward through first 5 failed attempts
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      await withTenantTransaction(pool, tenantAId, async (client) => {
+        await client.query(
+          "UPDATE cloud_integration_outbox SET next_retry_at = NOW() - INTERVAL '1 second' WHERE id = $1;",
+          [eventId],
+        );
+        await outboxService.claimBatch(client, 'worker_55', 1);
+        await outboxService.handleFailure(
+          client,
+          eventId,
+          'worker_55',
+          new Error(`Attempt ${attempt}`),
+          backoff,
+          false,
+        );
+      });
+    }
+
+    // 6th failed attempt: Failure of retry #5!
+    await withTenantTransaction(pool, tenantAId, async (client) => {
+      await client.query(
+        "UPDATE cloud_integration_outbox SET next_retry_at = NOW() - INTERVAL '1 second' WHERE id = $1;",
+        [eventId],
+      );
+      const claimed = await outboxService.claimBatch(client, 'worker_55', 1);
+      assert.equal(claimed.length, 1);
+      const res = await outboxService.handleFailure(
+        client,
+        eventId,
+        'worker_55',
+        new Error('Retry #5 failed'),
+        backoff,
+        false,
+      );
+      assert.equal(res.routedToDlq, true, 'Failure of retry #5 MUST move event to DLQ');
+      assert.equal(res.deliveryAttempts, 6);
+      assert.equal(res.newRetryCount, 5);
+    });
+
+    const client = await pool.connect();
+    try {
+      await setTenantContext(client, tenantAId);
+      const check = await client.query<{ status: string }>(
+        'SELECT status FROM cloud_integration_outbox WHERE id = $1;',
+        [eventId],
+      );
+      assert.ok(check.rows[0]);
+      assert.equal(check.rows[0].status, 'DLQ');
+
+      const dlqCheck = await client.query<{ errorCode: string; retryCount: number }>(
+        'SELECT error_code AS "errorCode", retry_count AS "retryCount" FROM cloud_integration_dlq WHERE originating_outbox_id = $1;',
+        [eventId],
+      );
+      assert.equal(dlqCheck.rows.length, 1);
+      assert.equal(dlqCheck.rows[0]?.errorCode, 'RETRY_EXHAUSTED');
+      assert.equal(dlqCheck.rows[0]?.retryCount, 5);
+    } finally {
+      client.release();
+    }
+  });
+
+  it('WP012-R1-T56: Non-canonical maxRetries override cannot alter governed limit of 5', async () => {
+    assert.equal(CANONICAL_MAX_RETRIES, 5, 'CANONICAL_MAX_RETRIES constant must be exactly 5');
+    const client = await pool.connect();
+    try {
+      await setTenantContext(client, tenantAId);
+
+      // Attempt non-canonical maxRetries = 0
+      await assert.rejects(
+        async () => {
+          await outboxService.enqueue(client, {
+            organizationId: tenantAId,
+            eventType: 'TEST_OVERRIDE',
+            aggregateType: 'TEST',
+            aggregateId: 'ov_0',
+            payload: {},
+            maxRetries: 0,
+          });
+        },
+        /must be canonical 5/,
+        'maxRetries = 0 must be rejected',
+      );
+
+      // Attempt non-canonical maxRetries = 10
+      await assert.rejects(
+        async () => {
+          await outboxService.enqueue(client, {
+            organizationId: tenantAId,
+            eventType: 'TEST_OVERRIDE',
+            aggregateType: 'TEST',
+            aggregateId: 'ov_10',
+            payload: {},
+            maxRetries: 10,
+          });
+        },
+        /must be canonical 5/,
+        'maxRetries = 10 must be rejected',
+      );
+    } finally {
+      client.release();
+    }
+  });
+
+  it('WP012-R1-T57: Concurrent workers claim disjoint events using independent PostgreSQL connections', async () => {
+    await withTenantTransaction(pool, tenantAId, async (client) => {
+      await client.query('DELETE FROM cloud_integration_dlq WHERE organization_id = $1;', [
+        tenantAId,
+      ]);
+      await client.query('DELETE FROM cloud_integration_outbox WHERE organization_id = $1;', [
+        tenantAId,
+      ]);
+    });
+    const eventIds: string[] = [];
+    await withTenantTransaction(pool, tenantAId, async (client) => {
+      for (let i = 0; i < 6; i++) {
+        const r = await outboxService.enqueue(client, {
+          organizationId: tenantAId,
+          eventType: 'DISJOINT_TEST',
+          aggregateType: 'BATCH',
+          aggregateId: `batch_${i}`,
+          payload: { i },
+        });
+        eventIds.push(r.id);
+      }
+    });
+
+    const conn1 = await pool.connect();
+    const conn2 = await pool.connect();
+    try {
+      await setTenantContext(conn1, tenantAId);
+      await setTenantContext(conn2, tenantAId);
+
+      const [batch1, batch2] = await Promise.all([
+        outboxService.claimBatch(conn1, 'worker_conn1', 3),
+        outboxService.claimBatch(conn2, 'worker_conn2', 3),
+      ]);
+
+      const ids1 = batch1.map((r) => r.id);
+      const ids2 = batch2.map((r) => r.id);
+
+      for (const id of ids1) {
+        assert.equal(ids2.includes(id), false, `Event ${id} must not be claimed by both workers`);
+      }
+    } finally {
+      conn1.release();
+      conn2.release();
+    }
+  });
+
+  it('WP012-R1-T58: Stale Worker A cannot complete an event after Worker B has legitimately reclaimed it', async () => {
+    let eventId = '';
+    await withTenantTransaction(pool, tenantAId, async (client) => {
+      await client.query('DELETE FROM cloud_integration_dlq WHERE organization_id = $1;', [
+        tenantAId,
+      ]);
+      await client.query('DELETE FROM cloud_integration_outbox WHERE organization_id = $1;', [
+        tenantAId,
+      ]);
+      const rec = await outboxService.enqueue(client, {
+        organizationId: tenantAId,
+        eventType: 'STALE_COMPLETE_TEST',
+        aggregateType: 'TEST',
+        aggregateId: 'stale_c',
+        payload: {},
+      });
+      eventId = rec.id;
+    });
+
+    // Worker A claims event
+    await withTenantTransaction(pool, tenantAId, async (client) => {
+      const claimed = await outboxService.claimBatch(client, 'worker_A', 1);
+      assert.equal(claimed.length, 1);
+      assert.equal(claimed[0]?.id, eventId);
+    });
+
+    // Simulate lease expiry (> 2 minutes)
+    const client = await pool.connect();
+    try {
+      await setTenantContext(client, tenantAId);
+      await client.query(
+        "UPDATE cloud_integration_outbox SET locked_at = NOW() - INTERVAL '5 minutes' WHERE id = $1;",
+        [eventId],
+      );
+
+      // Worker B legitimately reclaims the expired event
+      const claimedB = await outboxService.claimBatch(client, 'worker_B', 1);
+      assert.equal(claimedB.length, 1);
+      assert.equal(claimedB[0]?.id, eventId);
+      assert.equal(claimedB[0]?.lockId, 'worker_B');
+
+      // Stale Worker A attempts to complete the event
+      await assert.rejects(
+        async () => {
+          await outboxService.completeEvent(client, eventId, 'worker_A');
+        },
+        new RegExp(ERROR_CODE_STALE_CLAIM),
+        'Stale worker A must fail closed with STALE_CLAIM on completeEvent',
+      );
+    } finally {
+      client.release();
+    }
+  });
+
+  it('WP012-R1-T59: Stale Worker A cannot record failure/DLQ transition after Worker B owns the current claim', async () => {
+    let eventId = '';
+    await withTenantTransaction(pool, tenantAId, async (client) => {
+      await client.query('DELETE FROM cloud_integration_dlq WHERE organization_id = $1;', [
+        tenantAId,
+      ]);
+      await client.query('DELETE FROM cloud_integration_outbox WHERE organization_id = $1;', [
+        tenantAId,
+      ]);
+      const rec = await outboxService.enqueue(client, {
+        organizationId: tenantAId,
+        eventType: 'STALE_FAIL_TEST',
+        aggregateType: 'TEST',
+        aggregateId: 'stale_f',
+        payload: {},
+      });
+      eventId = rec.id;
+    });
+
+    // Worker A claims event
+    await withTenantTransaction(pool, tenantAId, async (client) => {
+      const claimed = await outboxService.claimBatch(client, 'worker_A', 1);
+      assert.equal(claimed.length, 1);
+    });
+
+    // Simulate lease expiry
+    const client = await pool.connect();
+    try {
+      await setTenantContext(client, tenantAId);
+      await client.query(
+        "UPDATE cloud_integration_outbox SET locked_at = NOW() - INTERVAL '5 minutes' WHERE id = $1;",
+        [eventId],
+      );
+
+      // Worker B reclaims
+      const claimedB = await outboxService.claimBatch(client, 'worker_B', 1);
+      assert.equal(claimedB.length, 1);
+
+      const backoff = new ExponentialBackoffPolicy({ baseDelayMs: 10, maxDelayMs: 100 });
+
+      // Stale Worker A attempts handleFailure
+      await assert.rejects(
+        async () => {
+          await outboxService.handleFailure(
+            client,
+            eventId,
+            'worker_A',
+            new Error('Stale failure report'),
+            backoff,
+            false,
+          );
+        },
+        new RegExp(ERROR_CODE_STALE_CLAIM),
+        'Stale worker A must fail closed with STALE_CLAIM on handleFailure',
+      );
+    } finally {
+      client.release();
+    }
+  });
+
+  it('WP012-R1-T61: Production Cloud migration contains no wp012_test_* table', () => {
+    const currentDir = path.dirname(fileURLToPath(import.meta.url));
+    const migrationPath = path.resolve(
+      currentDir,
+      '..',
+      'migrations',
+      '20260904210000_transactional_outbox_idempotency.sql',
+    );
+    const content = fs.readFileSync(migrationPath, 'utf-8');
+    assert.equal(
+      content.includes('wp012_test_'),
+      false,
+      'Production Cloud migration must NOT contain any wp012_test_* table',
+    );
   });
 });

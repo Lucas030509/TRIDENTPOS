@@ -379,6 +379,22 @@ export class EdgeDatabaseService {
   }
 
   /**
+   * Executes arbitrary SQL statements directly within the active database connection.
+   */
+  public exec(sql: string): void {
+    this.assertOpen();
+    this.#db.exec(sql);
+  }
+
+  /**
+   * Prepares a SQL statement within the active database connection.
+   */
+  public prepare(sql: string): Database.Statement {
+    this.assertOpen();
+    return this.#db.prepare(sql);
+  }
+
+  /**
    * Closes the database connection cleanly.
    */
   public close(): void {

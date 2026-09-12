@@ -59,6 +59,7 @@ export interface CloudIntegrationOutboxRecord {
   readonly payload: unknown;
   readonly status: 'PENDING' | 'PROCESSING' | 'PUBLISHED' | 'FAILED' | 'DLQ';
   readonly retryCount: number;
+  readonly deliveryAttempts: number;
   readonly maxRetries: number;
   readonly nextRetryAt: Date;
   readonly lastError: string | null;
@@ -71,6 +72,7 @@ export interface CloudIntegrationOutboxRecord {
 export interface CloudIntegrationDLQRecord {
   readonly id: string;
   readonly organizationId: string;
+  readonly branchId: string | null;
   readonly originatingOutboxId: string;
   readonly eventType: string;
   readonly aggregateType: string;
