@@ -14,6 +14,12 @@ import {
   isValidUuidV4,
 } from '@trident/core';
 import { EdgeDatabaseService } from './edge-database.js';
+import { getInternalOutboxAdapter, type InternalOutboxAdapter } from './internal-outbox-adapter.js';
+
+export interface EdgeOutboxPersistenceOptions {
+  readonly verifier?: CloudReceiptVerifier | null;
+  readonly alertThreshold?: number;
+}
 
 export interface EdgeOutboxRecord {
   readonly id: string;
@@ -48,16 +54,30 @@ export interface EnqueueOutboxInput {
 
 export class EdgeOutboxPersistence {
   readonly #edgeDb: EdgeDatabaseService;
+  readonly #adapter: InternalOutboxAdapter;
   readonly #verifier: CloudReceiptVerifier | null;
 
-  constructor(edgeDb: EdgeDatabaseService, verifier?: CloudReceiptVerifier | null) {
+  constructor(
+    edgeDb: EdgeDatabaseService,
+    verifierOrOptions?: CloudReceiptVerifier | EdgeOutboxPersistenceOptions | null,
+  ) {
     this.#edgeDb = edgeDb;
-    this.#verifier = verifier ?? null;
+    this.#adapter = getInternalOutboxAdapter(edgeDb);
+    if (
+      verifierOrOptions &&
+      typeof (verifierOrOptions as CloudReceiptVerifier).verifyReceipt === 'function'
+    ) {
+      this.#verifier = verifierOrOptions as CloudReceiptVerifier;
+    } else if (verifierOrOptions && typeof verifierOrOptions === 'object') {
+      this.#verifier = (verifierOrOptions as EdgeOutboxPersistenceOptions).verifier ?? null;
+    } else {
+      this.#verifier = null;
+    }
     this.#initializeSchema();
   }
 
   #initializeSchema(): void {
-    this.#edgeDb.exec(`
+    this.#adapter.exec(`
       CREATE TABLE IF NOT EXISTS outbox_queue (
         id TEXT PRIMARY KEY,
         organization_id TEXT NOT NULL,
@@ -98,7 +118,7 @@ export class EdgeOutboxPersistence {
     const id = input.id ?? crypto.randomUUID();
     const payloadStr = JSON.stringify(input.payload);
 
-    const stmt = this.#edgeDb.prepare(`
+    const stmt = this.#adapter.prepare(`
       INSERT INTO outbox_queue (
         id,
         organization_id,
@@ -172,13 +192,10 @@ export class EdgeOutboxPersistence {
    * 4. Receipt clientOpId matches outbox row clientOpId
    * 5. Receipt aggregateSequenceNumber matches outbox row aggregateSequenceNumber
    * If verifier missing, signature forged, or receipt invalid: MUST NOT mark SYNCED (fails closed).
+   * QI-012-02 (part B): Fixed verifier composition only. No per-call verifier override.
    */
-  public markSynced(
-    id: string,
-    ack: SyncEventAckDTO,
-    customVerifier?: CloudReceiptVerifier,
-  ): boolean {
-    const fetchStmt = this.#edgeDb.prepare(`
+  public markSynced(id: string, ack: SyncEventAckDTO): boolean {
+    const fetchStmt = this.#adapter.prepare(`
       SELECT
         id,
         organization_id AS organizationId,
@@ -222,8 +239,7 @@ export class EdgeOutboxPersistence {
       return false;
     }
 
-    const verifier = customVerifier ?? this.#verifier;
-    if (!verifier) {
+    if (!this.#verifier) {
       // QI-012-02: Missing CloudReceiptVerifier fails closed
       return false;
     }
@@ -235,7 +251,7 @@ export class EdgeOutboxPersistence {
       aggregateSequenceNumber: row.aggregateSequenceNumber,
     };
 
-    const verificationResult = verifier.verifyReceipt(receipt, context);
+    const verificationResult = this.#verifier.verifyReceipt(receipt, context);
     const isVerified = typeof verificationResult === 'boolean' ? verificationResult : false;
 
     if (!isVerified) {
@@ -244,7 +260,7 @@ export class EdgeOutboxPersistence {
     }
 
     return this.#edgeDb.runInTransaction(() => {
-      const updateStmt = this.#edgeDb.prepare(`
+      const updateStmt = this.#adapter.prepare(`
         UPDATE outbox_queue
         SET
           status = 'SYNCED',
@@ -263,7 +279,7 @@ export class EdgeOutboxPersistence {
    * Retrieves pending outbox events for synchronization.
    */
   public getPendingEvents(limit = 100): EdgeOutboxRecord[] {
-    const stmt = this.#edgeDb.prepare(`
+    const stmt = this.#adapter.prepare(`
       SELECT
         id,
         organization_id AS organizationId,
@@ -298,7 +314,7 @@ export class EdgeOutboxPersistence {
    * Returns current pending outbox backlog count.
    */
   public getBacklogCount(): number {
-    const stmt = this.#edgeDb.prepare(`
+    const stmt = this.#adapter.prepare(`
       SELECT COUNT(*) AS count
       FROM outbox_queue
       WHERE status = 'PENDING';
@@ -328,7 +344,7 @@ export class EdgeOutboxPersistence {
    * Helper to retrieve record by ID (for tests).
    */
   public getById(id: string): EdgeOutboxRecord | undefined {
-    const stmt = this.#edgeDb.prepare(`
+    const stmt = this.#adapter.prepare(`
       SELECT
         id,
         organization_id AS organizationId,

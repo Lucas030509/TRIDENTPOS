@@ -34,9 +34,9 @@ import {
   type AuditLogEventRecord,
   formatIdempotencyKey,
   canonicalizeIdempotencyPayload,
-  TestCloudReceiptIssuer,
-  TestCloudReceiptVerifier,
 } from './index.js';
+import * as core from './index.js';
+import { TestCloudReceiptIssuer, TestCloudReceiptVerifier } from './test-support.js';
 
 describe('@trident/core Foundation', () => {
   it('package info returns expected metadata', () => {
@@ -959,5 +959,10 @@ describe('TRIDENTPOS WP-012 Idempotency Identity & Trust Provider Boundary Suite
       }),
       false,
     );
+  });
+
+  it('WP012-R2-T66: Normal production public API does not export TestCloudReceiptIssuer or TestCloudReceiptVerifier', () => {
+    assert.equal((core as Record<string, unknown>)['TestCloudReceiptIssuer'], undefined);
+    assert.equal((core as Record<string, unknown>)['TestCloudReceiptVerifier'], undefined);
   });
 });

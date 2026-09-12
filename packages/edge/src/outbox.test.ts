@@ -16,12 +16,8 @@ import { fileURLToPath } from 'node:url';
 import { EdgeDatabaseService } from './db/edge-database.js';
 import { getTestNativeDatabase } from './db/test-access.js';
 import { EdgeOutboxPersistence, EnqueueOutboxInput } from './db/outbox-persistence.js';
-import {
-  SyncEventAckDTO,
-  TestCloudReceiptIssuer,
-  TestCloudReceiptVerifier,
-  createCloudReceipt,
-} from '@trident/core';
+import { SyncEventAckDTO, createCloudReceipt } from '@trident/core';
+import { TestCloudReceiptIssuer, TestCloudReceiptVerifier } from '@trident/core/test-support';
 
 describe('TRIDENTPOS WP-012 Edge Transactional Outbox & Durability Suite', () => {
   let tempDir: string;
@@ -42,7 +38,7 @@ describe('TRIDENTPOS WP-012 Edge Transactional Outbox & Durability Suite', () =>
     });
 
     // QI-012-06: Create test fixture table exclusively in test setup, NOT in production schema
-    edgeDb.exec(`
+    getTestNativeDatabase(edgeDb).exec(`
       CREATE TABLE IF NOT EXISTS local_fixture_orders (
         id TEXT PRIMARY KEY NOT NULL,
         organization_id TEXT NOT NULL,
@@ -58,7 +54,7 @@ describe('TRIDENTPOS WP-012 Edge Transactional Outbox & Durability Suite', () =>
 
   after(() => {
     if (edgeDb && edgeDb.isOpen()) {
-      edgeDb.exec('DROP TABLE IF EXISTS local_fixture_orders;');
+      getTestNativeDatabase(edgeDb).exec('DROP TABLE IF EXISTS local_fixture_orders;');
       edgeDb.close();
     }
     if (fs.existsSync(tempDir)) {
@@ -671,5 +667,213 @@ describe('TRIDENTPOS WP-012 Edge Transactional Outbox & Durability Suite', () =>
       /safe positive integer/,
       'Zero aggregateSequenceNumber must be rejected',
     );
+  });
+
+  it('WP012-R2-T67: markSynced arity is strictly 2 and does not permit per-call verifier override', () => {
+    assert.equal(
+      outbox.markSynced.length,
+      2,
+      'markSynced must declare exactly 2 parameters (id, ack)',
+    );
+    // Test that passing a fake permissive verifier as 3rd argument does not override constructor verifier
+    const fakeVerifier = {
+      verifyReceipt: () => true,
+    };
+    const clientOpId = crypto.randomUUID();
+    const record = outbox.enqueue({
+      organizationId: testOrgId,
+      branchId: testBranchId,
+      aggregateType: 'ORDER',
+      aggregateId: 'agg_r2_t67',
+      action: 'PAY',
+      clientOpId,
+      aggregateSequenceNumber: 1,
+      payload: {},
+    });
+
+    const invalidAck: SyncEventAckDTO = {
+      clientOpId,
+      aggregateType: 'ORDER',
+      aggregateId: 'agg_r2_t67',
+      aggregateSequenceNumber: 1,
+      status: 'APPLIED',
+      receipt: {
+        receiptId: 'forged_receipt',
+        serverSignature: 'forged_sig',
+        clientOpId,
+        aggregateSequenceNumber: 1,
+        appliedAt: new Date().toISOString(),
+      },
+    };
+
+    // Calling with 3 arguments should NOT use fakeVerifier
+    const marked = (outbox.markSynced as any)(record.id, invalidAck, fakeVerifier);
+    assert.equal(marked, false, 'markSynced must not allow 3rd parameter override of verifier');
+    const row = outbox.getById(record.id);
+    assert.equal(row?.status, 'PENDING');
+  });
+
+  it('WP012-R2-T68: Missing or omitted verifier fails closed', () => {
+    const tempDirNoVerifier = fs.mkdtempSync(path.join(os.tmpdir(), 'wp012-no-verifier-'));
+    const tempDb = new EdgeDatabaseService({
+      databasePath: path.join(tempDirNoVerifier, 'no-ver.db'),
+    });
+    const noVerifierOutbox = new EdgeOutboxPersistence(tempDb);
+
+    const clientOpId = crypto.randomUUID();
+    const record = noVerifierOutbox.enqueue({
+      organizationId: testOrgId,
+      branchId: testBranchId,
+      aggregateType: 'ORDER',
+      aggregateId: 'agg_r2_t68',
+      action: 'PAY',
+      clientOpId,
+      aggregateSequenceNumber: 1,
+      payload: {},
+    });
+
+    const genuineReceipt = testIssuer.issueReceipt({
+      organizationId: testOrgId,
+      branchId: testBranchId,
+      clientOpId,
+      aggregateSequenceNumber: 1,
+    });
+
+    const ack: SyncEventAckDTO = {
+      clientOpId,
+      aggregateType: 'ORDER',
+      aggregateId: 'agg_r2_t68',
+      aggregateSequenceNumber: 1,
+      status: 'APPLIED',
+      receipt: genuineReceipt,
+    };
+
+    const marked = noVerifierOutbox.markSynced(record.id, ack);
+    assert.equal(marked, false, 'Without injected verifier, markSynced must fail closed');
+    const row = noVerifierOutbox.getById(record.id);
+    assert.equal(row?.status, 'PENDING');
+
+    tempDb.close();
+    fs.rmSync(tempDirNoVerifier, { recursive: true, force: true });
+  });
+
+  it('WP012-R2-T69: Injected trusted test verifier validates genuine APPLIED receipt', () => {
+    const clientOpId = crypto.randomUUID();
+    const record = outbox.enqueue({
+      organizationId: testOrgId,
+      branchId: testBranchId,
+      aggregateType: 'ORDER',
+      aggregateId: 'agg_r2_t69',
+      action: 'PAY',
+      clientOpId,
+      aggregateSequenceNumber: 1,
+      payload: {},
+    });
+
+    const receipt = testIssuer.issueReceipt({
+      organizationId: testOrgId,
+      branchId: testBranchId,
+      clientOpId,
+      aggregateSequenceNumber: 1,
+    });
+
+    const ack: SyncEventAckDTO = {
+      clientOpId,
+      aggregateType: 'ORDER',
+      aggregateId: 'agg_r2_t69',
+      aggregateSequenceNumber: 1,
+      status: 'APPLIED',
+      receipt,
+    };
+
+    const marked = outbox.markSynced(record.id, ack);
+    assert.equal(marked, true, 'Valid receipt with trusted verifier must succeed');
+    const row = outbox.getById(record.id);
+    assert.equal(row?.status, 'SYNCED');
+  });
+
+  it('WP012-R2-T73: EdgeDatabaseService does not expose public exec() method', () => {
+    assert.equal(
+      typeof (edgeDb as any).exec,
+      'undefined',
+      'exec must not be defined on EdgeDatabaseService instance',
+    );
+    assert.equal(
+      typeof (EdgeDatabaseService.prototype as any).exec,
+      'undefined',
+      'exec must not be defined on EdgeDatabaseService prototype',
+    );
+  });
+
+  it('WP012-R2-T74: EdgeDatabaseService does not expose public prepare() method', () => {
+    assert.equal(
+      typeof (edgeDb as any).prepare,
+      'undefined',
+      'prepare must not be defined on EdgeDatabaseService instance',
+    );
+    assert.equal(
+      typeof (EdgeDatabaseService.prototype as any).prepare,
+      'undefined',
+      'prepare must not be defined on EdgeDatabaseService prototype',
+    );
+  });
+
+  it('WP012-R2-T75: Internal outbox adapter cannot be obtained through any public API of @trident/edge', async () => {
+    const edgeExports = await import('./index.js');
+    assert.equal(
+      'InternalOutboxAdapter' in edgeExports,
+      false,
+      'InternalOutboxAdapter must not be exported by @trident/edge index',
+    );
+    assert.equal(
+      'getInternalOutboxAdapter' in edgeExports,
+      false,
+      'getInternalOutboxAdapter must not be exported by @trident/edge index',
+    );
+    assert.equal(
+      'InternalOutboxAdapter' in (edgeDb as any),
+      false,
+      'Internal adapter must not be on EdgeDatabaseService instance',
+    );
+  });
+
+  it('WP012-R2-T76: Edge atomic domain + outbox transaction functions properly using runInTransaction', () => {
+    const nativeDb = getTestNativeDatabase(edgeDb);
+    const orderId = crypto.randomUUID();
+    const clientOpId = crypto.randomUUID();
+
+    const res = edgeDb.runInTransaction(() => {
+      nativeDb
+        .prepare(
+          `INSERT INTO local_fixture_orders (id, organization_id, branch_id, table_number, total_amount)
+           VALUES (?, ?, ?, ?, ?);`,
+        )
+        .run(orderId, testOrgId, testBranchId, 'T-R2-76', 888.0);
+
+      return outbox.enqueue({
+        organizationId: testOrgId,
+        branchId: testBranchId,
+        aggregateType: 'ORDER',
+        aggregateId: orderId,
+        action: 'CREATE_ORDER',
+        clientOpId,
+        aggregateSequenceNumber: 1,
+        payload: { orderId, totalAmount: 888.0 },
+      });
+    });
+
+    assert.ok(res, 'Outbox item must be returned from transaction');
+    assert.equal(res.clientOpId, clientOpId);
+
+    // Verify both domain row and outbox record exist
+    const orderRow = nativeDb
+      .prepare('SELECT id, total_amount FROM local_fixture_orders WHERE id = ?;')
+      .get(orderId) as { id: string; total_amount: number } | undefined;
+    assert.ok(orderRow, 'Domain order row must be committed');
+    assert.equal(orderRow?.total_amount, 888.0);
+
+    const outboxRow = outbox.getById(res.id);
+    assert.ok(outboxRow, 'Outbox record must exist');
+    assert.equal(outboxRow?.status, 'PENDING');
   });
 });

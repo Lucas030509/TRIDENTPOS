@@ -22,6 +22,7 @@ import {
   formatIdempotencyKey,
   SyncEventDTO,
 } from '@trident/core';
+import { TestCloudReceiptIssuer, TestCloudReceiptVerifier } from '@trident/core/test-support';
 import { resolveDatabaseUrl } from './connection.js';
 import { migrateUp } from './runner.js';
 import { setTenantContext, withTenantTransaction } from './tenant.js';
@@ -95,7 +96,8 @@ describe('TRIDENTPOS WP-012 Cloud Transactional Outbox & Ingested Idempotency En
     // 2. Ensure all migrations are applied up to WP-012
     await migrateUp(pool);
 
-    engine = new IngestedIdempotencyEngine();
+    const testIssuer = new TestCloudReceiptIssuer();
+    engine = new IngestedIdempotencyEngine(testIssuer);
     outboxService = new CloudIntegrationOutboxService();
 
     // 3. Provision test tenants, branches, and test-only fixture table
@@ -371,7 +373,7 @@ describe('TRIDENTPOS WP-012 Cloud Transactional Outbox & Ingested Idempotency En
     });
 
     // Simulate complete process/service re-instantiation
-    const brandNewEngine = new IngestedIdempotencyEngine();
+    const brandNewEngine = new IngestedIdempotencyEngine(new TestCloudReceiptIssuer());
 
     const res = await withTenantTransaction(pool, tenantAId, async (client) => {
       return brandNewEngine.processEvent(client, authA1, event, async () => {
@@ -882,7 +884,7 @@ describe('TRIDENTPOS WP-012 Cloud Transactional Outbox & Ingested Idempotency En
     });
 
     // Simulate process restart
-    const brandNewEngine = new IngestedIdempotencyEngine();
+    const brandNewEngine = new IngestedIdempotencyEngine(new TestCloudReceiptIssuer());
 
     const drainedOrder: number[] = [];
     await withTenantTransaction(pool, tenantAId, async (client) => {
@@ -1492,8 +1494,9 @@ describe('TRIDENTPOS WP-012 Cloud Transactional Outbox & Ingested Idempotency En
               aggregate_sequence_number,
               status,
               response_payload,
-              receipt_token
-            ) VALUES ($1, $2, 'TEST', '1', 'ACT', $3, 'key', 1, 'APPLIED', '{}'::jsonb, 'tok');`,
+              receipt_token,
+              receipt_payload
+            ) VALUES ($1, $2, 'TEST', '1', 'ACT', $3, 'key', 1, 'APPLIED', '{}'::jsonb, 'tok', '{"receiptId":"tok"}'::jsonb);`,
             [tenantAId, branchB1Id, crypto.randomUUID()],
           );
         },
@@ -1524,8 +1527,9 @@ describe('TRIDENTPOS WP-012 Cloud Transactional Outbox & Ingested Idempotency En
           aggregate_sequence_number,
           status,
           response_payload,
-          receipt_token
-        ) VALUES ($1, $2, 'ACCOUNT', 'acc_1', 'OPEN', $3, $4, 1, 'APPLIED', '{"secret":"cached_acc_1"}'::jsonb, 'receipt_acc_1');`,
+          receipt_token,
+          receipt_payload
+        ) VALUES ($1, $2, 'ACCOUNT', 'acc_1', 'OPEN', $3, $4, 1, 'APPLIED', '{"secret":"cached_acc_1"}'::jsonb, 'receipt_acc_1', '{"receiptId":"receipt_acc_1"}'::jsonb);`,
         [tenantAId, branchA1Id, clientOpId1, forcedKey],
       );
     });
@@ -2025,6 +2029,160 @@ describe('TRIDENTPOS WP-012 Cloud Transactional Outbox & Ingested Idempotency En
       content.includes('wp012_test_'),
       false,
       'Production Cloud migration must NOT contain any wp012_test_* table',
+    );
+  });
+
+  it('WP012-R2-T65: IngestedIdempotencyEngine fails closed immediately if CloudReceiptIssuer is omitted or invalid', () => {
+    assert.throws(
+      () => new (IngestedIdempotencyEngine as any)(),
+      (err: any) => err instanceof TypeError && (err as any).code === 'ERR_INVALID_ARG_TYPE',
+      'Must fail closed with TypeError and code ERR_INVALID_ARG_TYPE when issuer is undefined',
+    );
+    assert.throws(
+      () => new (IngestedIdempotencyEngine as any)(null),
+      (err: any) => err instanceof TypeError && (err as any).code === 'ERR_INVALID_ARG_TYPE',
+      'Must fail closed with TypeError and code ERR_INVALID_ARG_TYPE when issuer is null',
+    );
+    assert.throws(
+      () => new (IngestedIdempotencyEngine as any)({ issueReceipt: 'not-a-function' }),
+      (err: any) => err instanceof TypeError && (err as any).code === 'ERR_INVALID_ARG_TYPE',
+      'Must fail closed with TypeError when issueReceipt is not a function',
+    );
+  });
+
+  it('WP012-R2-T70: Replay of duplicate event returns byte/field-equivalent original CloudTransactionReceipt from persistence', async () => {
+    const aggregateId = crypto.randomUUID();
+    const clientOpId = crypto.randomUUID();
+    const event: SyncEventDTO = {
+      aggregateType: 'ORDER',
+      aggregateId,
+      action: 'CREATED',
+      clientOpId,
+      aggregateSequenceNumber: 1,
+      payload: { item: 'WP012-R2-T70 Original Receipt Integrity Check' },
+    };
+
+    const initialRes = await withTenantTransaction(pool, tenantAId, async (client) => {
+      return engine.processEvent(client, authA1, event, async () => ({ processed: true }));
+    });
+    assert.equal(initialRes.status, 'APPLIED');
+    assert.ok(initialRes.receipt, 'Initial APPLIED must produce receipt');
+    const origReceipt = initialRes.receipt!;
+
+    // Duplicate replay
+    const dupRes = await withTenantTransaction(pool, tenantAId, async (client) => {
+      return engine.processEvent(client, authA1, event, async () => {
+        throw new Error('Should not execute domain handler on duplicate');
+      });
+    });
+    assert.equal(dupRes.status, 'DUPLICATE_ACCEPTED');
+    assert.ok(dupRes.receipt, 'Duplicate replay must return receipt');
+
+    // Assert every single field is identical to original persisted receipt
+    assert.equal(dupRes.receipt!.receiptId, origReceipt.receiptId);
+    assert.equal(dupRes.receipt!.aggregateSequenceNumber, origReceipt.aggregateSequenceNumber);
+    assert.equal(dupRes.receipt!.clientOpId, origReceipt.clientOpId);
+    assert.equal(dupRes.receipt!.appliedAt, origReceipt.appliedAt);
+    assert.equal(dupRes.receipt!.serverSignature, origReceipt.serverSignature);
+    assert.deepEqual(dupRes.receipt, origReceipt);
+
+    // Verify directly against database persistence
+    const client = await pool.connect();
+    try {
+      await setTenantContext(client, tenantAId);
+      const row = await client.query<{ receipt_payload: any }>(
+        'SELECT receipt_payload FROM ingested_idempotency_log WHERE client_op_id = $1;',
+        [clientOpId],
+      );
+      assert.equal(row.rows.length, 1);
+      assert.deepEqual(row.rows[0]?.receipt_payload, dupRes.receipt);
+    } finally {
+      client.release();
+    }
+  });
+
+  it('WP012-R2-T71: Duplicate replay does not call injected CloudReceiptIssuer a second time', async () => {
+    let callCount = 0;
+    const baseIssuer = new TestCloudReceiptIssuer();
+    const spyIssuer = {
+      issueReceipt: (params: any) => {
+        callCount++;
+        return baseIssuer.issueReceipt(params);
+      },
+    };
+    const spyEngine = new IngestedIdempotencyEngine(spyIssuer);
+
+    const aggregateId = crypto.randomUUID();
+    const clientOpId = crypto.randomUUID();
+    const event: SyncEventDTO = {
+      aggregateType: 'ORDER',
+      aggregateId,
+      action: 'ITEM_ADDED',
+      clientOpId,
+      aggregateSequenceNumber: 1,
+      payload: { item: 'WP012-R2-T71 Spy Test' },
+    };
+
+    // First call
+    const firstRes = await withTenantTransaction(pool, tenantAId, async (client) => {
+      return spyEngine.processEvent(client, authA1, event, async () => ({ step: 1 }));
+    });
+    assert.equal(firstRes.status, 'APPLIED');
+    assert.equal(callCount, 1, 'Issuer must be called exactly once on initial application');
+
+    // Duplicate call
+    const dupRes = await withTenantTransaction(pool, tenantAId, async (client) => {
+      return spyEngine.processEvent(client, authA1, event, async () => {
+        throw new Error('Should not execute domain handler on duplicate');
+      });
+    });
+    assert.equal(dupRes.status, 'DUPLICATE_ACCEPTED');
+    assert.equal(callCount, 1, 'Issuer must NOT be called a second time during duplicate replay');
+    assert.deepEqual(dupRes.receipt, firstRes.receipt);
+  });
+
+  it('WP012-R2-T72: Duplicate receipt retrieved after engine restart matches original persisted receipt and passes verification', async () => {
+    const aggregateId = crypto.randomUUID();
+    const clientOpId = crypto.randomUUID();
+    const event: SyncEventDTO = {
+      aggregateType: 'ORDER',
+      aggregateId,
+      action: 'PAYMENT_APPLIED',
+      clientOpId,
+      aggregateSequenceNumber: 1,
+      payload: { amount: 150.0 },
+    };
+
+    const firstEngine = new IngestedIdempotencyEngine(new TestCloudReceiptIssuer());
+    const initialRes = await withTenantTransaction(pool, tenantAId, async (client) => {
+      return firstEngine.processEvent(client, authA1, event, async () => ({ paid: true }));
+    });
+    assert.equal(initialRes.status, 'APPLIED');
+    assert.ok(initialRes.receipt);
+
+    // Engine instance destroyed / recreated (simulating process restart)
+    const restartedEngine = new IngestedIdempotencyEngine(new TestCloudReceiptIssuer());
+    const dupRes = await withTenantTransaction(pool, tenantAId, async (client) => {
+      return restartedEngine.processEvent(client, authA1, event, async () => {
+        throw new Error('Should not execute domain handler on restarted duplicate');
+      });
+    });
+
+    assert.equal(dupRes.status, 'DUPLICATE_ACCEPTED');
+    assert.ok(dupRes.receipt);
+    assert.deepEqual(dupRes.receipt, initialRes.receipt);
+
+    // Verify receipt with trusted verifier
+    const verifier = new TestCloudReceiptVerifier();
+    assert.equal(
+      verifier.verifyReceipt(dupRes.receipt!, {
+        organizationId: authA1.organizationId,
+        branchId: authA1.branchId,
+        clientOpId,
+        aggregateSequenceNumber: 1,
+      }),
+      true,
+      'Duplicate receipt returned after engine restart must be verifiable',
     );
   });
 });

@@ -18,6 +18,7 @@ CREATE TABLE ingested_idempotency_log (
     aggregate_sequence_number BIGINT NOT NULL CHECK (aggregate_sequence_number >= 1),
     status VARCHAR(50) NOT NULL,
     response_payload JSONB NOT NULL,
+    receipt_payload JSONB NOT NULL,
     receipt_token VARCHAR(255) NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT fk_idempotency_log_branch FOREIGN KEY (organization_id, branch_id) REFERENCES branches(organization_id, id),

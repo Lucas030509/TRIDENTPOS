@@ -15,7 +15,6 @@ import {
   ERROR_CODE_UNAUTHORIZED_TENANT,
   ReceiptIssuanceContext,
   SyncEventDTO,
-  TestCloudReceiptIssuer,
   formatIdempotencyKey,
   isValidUuidV4,
 } from '@trident/core';
@@ -24,8 +23,13 @@ import type { DomainMutationHandler, ProcessEventResult, ReorderingBufferRecord 
 export class IngestedIdempotencyEngine {
   readonly #issuer: CloudReceiptIssuer;
 
-  constructor(issuer?: CloudReceiptIssuer | null) {
-    this.#issuer = issuer ?? new TestCloudReceiptIssuer();
+  constructor(issuer: CloudReceiptIssuer) {
+    if (!issuer || typeof issuer.issueReceipt !== 'function') {
+      const err = new TypeError('IngestedIdempotencyEngine requires a valid CloudReceiptIssuer');
+      (err as any).code = 'ERR_INVALID_ARG_TYPE';
+      throw err;
+    }
+    this.#issuer = issuer;
   }
 
   /**
@@ -94,6 +98,7 @@ export class IngestedIdempotencyEngine {
       client_op_id: string;
       status: string;
       response_payload: unknown;
+      receipt_payload: unknown;
       receipt_token: string;
       aggregate_sequence_number: string;
       created_at: Date;
@@ -107,6 +112,7 @@ export class IngestedIdempotencyEngine {
         client_op_id,
         status,
         response_payload,
+        receipt_payload,
         receipt_token,
         aggregate_sequence_number,
         created_at
@@ -132,15 +138,10 @@ export class IngestedIdempotencyEngine {
         );
       }
 
+      // QI-012-02 (part C): Return exact persisted original receipt verbatim without invoking issuer
       return {
         status: 'DUPLICATE_ACCEPTED',
-        receipt: {
-          receiptId: existing.receipt_token,
-          appliedAt: existing.created_at.toISOString(),
-          serverSignature: existing.receipt_token,
-          clientOpId: event.clientOpId,
-          aggregateSequenceNumber: parseInt(existing.aggregate_sequence_number, 10),
-        },
+        receipt: existing.receipt_payload as any,
         responsePayload: existing.response_payload,
         wasDuplicate: true,
       };
@@ -273,8 +274,9 @@ export class IngestedIdempotencyEngine {
         aggregate_sequence_number,
         status,
         response_payload,
+        receipt_payload,
         receipt_token
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'APPLIED', $9, $10);
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'APPLIED', $9, $10, $11);
       `,
       [
         orgId,
@@ -286,7 +288,8 @@ export class IngestedIdempotencyEngine {
         idempotencyKey,
         incomingSequence,
         JSON.stringify(mutationResult),
-        receipt.serverSignature,
+        JSON.stringify(receipt),
+        receipt.receiptId,
       ],
     );
 
@@ -375,8 +378,9 @@ export class IngestedIdempotencyEngine {
           aggregate_sequence_number,
           status,
           response_payload,
+          receipt_payload,
           receipt_token
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'APPLIED', $9, $10);
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'APPLIED', $9, $10, $11);
         `,
         [
           orgId,
@@ -388,7 +392,8 @@ export class IngestedIdempotencyEngine {
           bufferedItem.idempotency_key,
           nextSeq,
           JSON.stringify(drainedResult),
-          drainedReceipt.serverSignature,
+          JSON.stringify(drainedReceipt),
+          drainedReceipt.receiptId,
         ],
       );
 
