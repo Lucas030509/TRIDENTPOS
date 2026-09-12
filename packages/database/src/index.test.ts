@@ -60,7 +60,25 @@ describe('TRIDENTPOS WP-003 PostgreSQL Migration Engine Integration Suite', () =
     const client = await pool.connect();
     try {
       await client.query(`
-        DROP TABLE IF EXISTS user_branch_credentials, user_roles, roles, users, test_composite_ref, branches, organizations, _migrations CASCADE;
+        DROP TABLE IF EXISTS
+          wp012_test_domain_fixtures,
+          cloud_integration_dlq,
+          cloud_integration_outbox,
+          reordering_buffer_queue,
+          aggregate_sequences,
+          ingested_idempotency_log,
+          folio_leases,
+          security_telemetry_events,
+          audit_log_events,
+          stations,
+          user_branch_credentials,
+          user_roles,
+          roles,
+          users,
+          test_composite_ref,
+          branches,
+          organizations,
+          _migrations CASCADE;
         DROP EXTENSION IF EXISTS pgcrypto CASCADE;
         DROP EXTENSION IF EXISTS "uuid-ossp" CASCADE;
         DROP FUNCTION IF EXISTS current_app_org_id() CASCADE;

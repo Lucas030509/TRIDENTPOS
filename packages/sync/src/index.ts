@@ -24,3 +24,4 @@ export function getSyncPackageInfo(): SyncPackageInfo {
 
 export * from './types.js';
 export * from './router.js';
+export * from './sync-ingestion-router.js';
