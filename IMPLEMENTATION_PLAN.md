@@ -481,16 +481,16 @@ Edge host runtime scaffolding, embedded persistence, local LAN communication, an
 * **Frozen Requirements:** `IAM_SECURITY_MODEL.md` Sec. 3, 4; `SECURITY_ARCHITECTURE.md` Sec. 3; `ADR-005`
 * **ADRs:** `ADR-005`
 * **Data Objects:** SQLite `CachedUsers`, `StationSessions`
-* **APIs / Contracts:** Local auth API (`POST /api/v1/auth/pin`)
+* **APIs / Contracts:** Local auth API (`POST /api/v1/auth/pin`, `POST /api/v1/auth/station-unlock`; ACR-2026-012)
 * **Builder Agent:** `16_Native_Edge_Developer`
 * **Specialist Reviewer:** `08_Security_Architect`
 * **Code Reviewer:** `11_Code_Reviewer`
 * **Prerequisites:** `WP-008`, `WP-009`
 * **Dependencies:** Argon2id native library, SQLite 3.
-* **Inputs:** `IAM_SECURITY_MODEL.md` Sec. 3
-* **Outputs:** SQLite tables for cached user PIN hashes; Argon2id verification routine; local lockout manager (lockout after consecutive failed attempts); session token generator bound to station ID.
-* **Acceptance Criteria:** PIN resolved locally; lockout triggered upon repeated failures; clock rollback detected (rejects tokens if local clock moves backward before issuedAt); expired cache invalidation.
-* **Tests:** Brute force PIN attack test (verifying lockout); clock tampering test; Argon2id performance benchmark on resource-constrained process.
+* **Inputs:** `IAM_SECURITY_MODEL.md` Sec. 3, `ACR-2026-012`
+* **Outputs:** SQLite tables for cached user PIN hashes; Argon2id verification routine; local lockout manager (lockout after consecutive failed attempts); early station lockout release authorized via canonical permission `estacion.desbloquear` (ACR-2026-012); session token generator bound to station ID.
+* **Acceptance Criteria:** PIN resolved locally; lockout triggered upon repeated failures; early station lockout release authorized strictly via canonical permission `estacion.desbloquear` (or canonical role codes `ROLE-001`/`ROLE-002`; ACR-2026-012) with atomic audit rollback; clock rollback detected (rejects tokens if local clock moves backward before issuedAt); expired cache invalidation.
+* **Tests:** Brute force PIN attack test (verifying lockout); early supervisor unlock authorized by `estacion.desbloquear` and rejection of ungrounded role aliases (`WP010-T30`); clock tampering test; Argon2id performance benchmark on resource-constrained process.
 * **Security Debt:** `SEC-VAL-02` (Offline IAM brute force and lockout testing), `SEC-VAL-08` (Argon2id benchmark on $\le 2\text{ GB}$ RAM hardware).
 * **Evidence Required:** Argon2id benchmark execution times and lockout verification logs.
 * **Rollback:** Flush cached session table.

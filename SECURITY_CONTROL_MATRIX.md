@@ -39,6 +39,7 @@
 | **Ajuste Manual / Contingencia Folios**| Rol administrativo con permiso `folios.contingencia` | Edge Host Local API | SÍ | SÍ (Credencial + Motivo) | `ContingenciaFolioRegistrada` |
 | **Modificación de Precios / Catálogo**| Rol corporativo con permiso `catalogo.administrar` | Cloud API Gateway | NO | SÍ (MFA Cloud) | `CatalogoPreciosModificado` |
 | **Enrolamiento de Nueva Terminal** | Rol administrativo con permiso `dispositivos.enrolar` | Edge Host Local API | SÍ | SÍ (Pairing QR con Fingerprint Binding, PinStore previo, Transacción Atómica WAL) | `TerminalEnrolada` (en `edge_security_audit`) |
+| **Desbloqueo Anticipado de Estación (STATION_LOCKED)** | Rol con permiso `estacion.desbloquear` (default: `ROLE-001` Administrador, `ROLE-002` Gerente/Supervisor; ACR-2026-012) | Edge Host Local API | SÍ | SÍ (Credencial supervisora local: UserID + PIN Argon2id) | `SupervisorStationUnlocked` (en `edge_security_audit`) |
 
 ---
 
