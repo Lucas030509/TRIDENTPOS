@@ -184,4 +184,163 @@ describe('TRIDENTPOS WP-011 Edge Local Folio Leases & Monotonic Consumption Suit
       },
     );
   });
+
+  it('WP011-R1-T45: ep_2 installed, then replay ep_1 => rejected and ep_2 remains unchanged', () => {
+    folioPersistence.setActiveLease({
+      folioType: 'FACTURA',
+      epochId: 'ep_2',
+      fencingToken: 'fencing-token-factura-ep2',
+      rangeStart: 5001,
+      rangeEnd: 5500,
+      currentFolio: 5000,
+    });
+
+    const currentBefore = folioPersistence.getLocalLease('FACTURA');
+    assert.ok(currentBefore);
+    assert.equal(currentBefore.epochId, 'ep_2');
+
+    // Attempt to replay ep_1
+    assert.throws(() => {
+      folioPersistence.setActiveLease({
+        folioType: 'FACTURA',
+        epochId: 'ep_1',
+        fencingToken: 'stale-fencing-token-factura-ep1',
+        rangeStart: 4001,
+        rangeEnd: 4500,
+        currentFolio: 4000,
+      });
+    }, /stale lease epoch/i);
+
+    const currentAfter = folioPersistence.getLocalLease('FACTURA');
+    assert.ok(currentAfter);
+    assert.equal(currentAfter.epochId, 'ep_2');
+    assert.equal(currentAfter.rangeStart, 5001);
+    assert.equal(currentAfter.rangeEnd, 5500);
+    assert.equal(currentAfter.fencingToken, 'fencing-token-factura-ep2');
+  });
+
+  it('WP011-R1-T46: ep_10 cannot be overwritten by ep_2', () => {
+    folioPersistence.setActiveLease({
+      folioType: 'FACTURA',
+      epochId: 'ep_10',
+      fencingToken: 'fencing-token-factura-ep10',
+      rangeStart: 6001,
+      rangeEnd: 6500,
+      currentFolio: 6000,
+    });
+
+    // Attempt to install ep_2 (which is lexically > ep_10 but numerically < ep_10)
+    assert.throws(() => {
+      folioPersistence.setActiveLease({
+        folioType: 'FACTURA',
+        epochId: 'ep_2',
+        fencingToken: 'stale-token',
+        rangeStart: 5001,
+        rangeEnd: 5500,
+      });
+    }, /stale lease epoch/i);
+
+    const current = folioPersistence.getLocalLease('FACTURA');
+    assert.ok(current);
+    assert.equal(current.epochId, 'ep_10');
+  });
+
+  it('WP011-R1-T47: same epoch + different fencing token rejected', () => {
+    assert.throws(() => {
+      folioPersistence.setActiveLease({
+        folioType: 'FACTURA',
+        epochId: 'ep_10',
+        fencingToken: 'tampered-or-different-token',
+        rangeStart: 6001,
+        rangeEnd: 6500,
+        currentFolio: 6000,
+      });
+    }, /Conflicting fencing token/i);
+
+    const current = folioPersistence.getLocalLease('FACTURA');
+    assert.ok(current);
+    assert.equal(current.fencingToken, 'fencing-token-factura-ep10');
+  });
+
+  it('WP011-R1-T48: same epoch + conflicting range rejected', () => {
+    assert.throws(() => {
+      folioPersistence.setActiveLease({
+        folioType: 'FACTURA',
+        epochId: 'ep_10',
+        fencingToken: 'fencing-token-factura-ep10',
+        rangeStart: 7001,
+        rangeEnd: 7500,
+        currentFolio: 7000,
+      });
+    }, /Conflicting range/i);
+
+    const current = folioPersistence.getLocalLease('FACTURA');
+    assert.ok(current);
+    assert.equal(current.rangeStart, 6001);
+  });
+
+  it('WP011-R1-T49: newer epoch accepted transactionally', () => {
+    folioPersistence.setActiveLease({
+      folioType: 'FACTURA',
+      epochId: 'ep_11',
+      fencingToken: 'fencing-token-factura-ep11',
+      rangeStart: 6501,
+      rangeEnd: 7000,
+      currentFolio: 6500,
+    });
+
+    const current = folioPersistence.getLocalLease('FACTURA');
+    assert.ok(current);
+    assert.equal(current.epochId, 'ep_11');
+    assert.equal(current.rangeStart, 6501);
+    assert.equal(current.rangeEnd, 7000);
+    assert.equal(current.status, 'ACTIVE');
+  });
+
+  it('WP011-R1-T50: invalid currentFolio outside range rejected with zero mutation', () => {
+    // currentFolio < rangeStart - 1
+    assert.throws(() => {
+      folioPersistence.setActiveLease({
+        folioType: 'FACTURA',
+        epochId: 'ep_12',
+        fencingToken: 'fencing-token-ep12',
+        rangeStart: 7001,
+        rangeEnd: 7500,
+        currentFolio: 5000,
+      });
+    }, /outside valid lease bounds/i);
+
+    // currentFolio > rangeEnd
+    assert.throws(() => {
+      folioPersistence.setActiveLease({
+        folioType: 'FACTURA',
+        epochId: 'ep_12',
+        fencingToken: 'fencing-token-ep12',
+        rangeStart: 7001,
+        rangeEnd: 7500,
+        currentFolio: 7501,
+      });
+    }, /outside valid lease bounds/i);
+
+    const current = folioPersistence.getLocalLease('FACTURA');
+    assert.ok(current);
+    assert.equal(current.epochId, 'ep_11');
+  });
+
+  it('WP011-R1-T51: currentFolio == range_end persists EXHAUSTED', () => {
+    folioPersistence.setActiveLease({
+      folioType: 'FACTURA',
+      epochId: 'ep_12',
+      fencingToken: 'fencing-token-ep12',
+      rangeStart: 7001,
+      rangeEnd: 7500,
+      currentFolio: 7500,
+    });
+
+    const current = folioPersistence.getLocalLease('FACTURA');
+    assert.ok(current);
+    assert.equal(current.epochId, 'ep_12');
+    assert.equal(current.currentFolio, 7500);
+    assert.equal(current.status, 'EXHAUSTED');
+  });
 });

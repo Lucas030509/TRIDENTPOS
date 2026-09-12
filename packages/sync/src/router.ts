@@ -13,6 +13,7 @@ import http from 'node:http';
 import {
   ERROR_CODE_INVALID_BLOCK_SIZE,
   ERROR_CODE_INVALID_FOLIO_TYPE,
+  ERROR_CODE_INVALID_REQUEST,
   ERROR_CODE_LEASE_REVOKED,
   ERROR_CODE_UNAUTHORIZED_TENANT,
   MAX_BLOCK_SIZE,
@@ -63,30 +64,41 @@ export class SyncLeaseRouter {
 
   /**
    * Connects router directly to a Node.js http.Server request/response cycle.
+   * Pattern B: Verified AuthContext can ONLY be supplied by an upstream trusted boundary.
+   * Client-supplied request headers (e.g. x-organization-id, x-branch-id) are PROHIBITED
+   * from establishing authenticated authority.
    */
-  public async handleNodeHttp(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    let body = '';
-    req.on('data', (chunk: Buffer) => {
-      body += chunk.toString('utf8');
-    });
+  public async handleNodeHttp(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    verifiedAuth?: AuthContext,
+  ): Promise<void> {
+    return new Promise((resolve, reject) => {
+      let body = '';
+      req.on('data', (chunk: Buffer) => {
+        body += chunk.toString('utf8');
+      });
 
-    req.on('end', async () => {
-      // Derive auth context from trusted authenticated session/headers
-      const orgId = req.headers['x-organization-id'] as string | undefined;
-      const branchId = req.headers['x-branch-id'] as string | undefined;
+      req.on('end', async () => {
+        try {
+          const response = await this.handleRequest(
+            req.method ?? 'GET',
+            req.url ?? '/',
+            body,
+            verifiedAuth,
+          );
 
-      const authContext: AuthContext | undefined =
-        orgId && branchId ? { organizationId: orgId, branchId } : undefined;
+          res.writeHead(response.status, response.headers);
+          res.end(response.body);
+          resolve();
+        } catch (err) {
+          reject(err);
+        }
+      });
 
-      const response = await this.handleRequest(
-        req.method ?? 'GET',
-        req.url ?? '/',
-        body,
-        authContext,
-      );
-
-      res.writeHead(response.status, response.headers);
-      res.end(response.body);
+      req.on('error', (err) => {
+        reject(err);
+      });
     });
   }
 
@@ -102,9 +114,9 @@ export class SyncLeaseRouter {
       };
     }
 
-    let payload: Partial<FolioLeaseRequestDTO>;
+    let rawPayload: Record<string, unknown>;
     try {
-      payload = JSON.parse(bodyJson || '{}');
+      rawPayload = JSON.parse(bodyJson || '{}');
     } catch {
       return {
         status: 400,
@@ -112,6 +124,25 @@ export class SyncLeaseRouter {
         body: JSON.stringify({ error: 'INVALID_JSON_PAYLOAD', message: 'Malformed JSON payload' }),
       };
     }
+
+    // QI-011-01: Public callers MUST NOT request disaster recovery, range abandonment, or replacement
+    if (
+      'isDisasterRecoveryBootstrap' in rawPayload ||
+      'isDisasterRecoveryReplacement' in rawPayload ||
+      'isDisasterRecovery' in rawPayload
+    ) {
+      return {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          error: ERROR_CODE_INVALID_REQUEST,
+          message:
+            'Client cannot request disaster recovery, range abandonment, or replacement authority directly.',
+        }),
+      };
+    }
+
+    const payload = rawPayload as Partial<FolioLeaseRequestDTO>;
 
     // 1. Validate Folio Type
     if (!payload.folioType || !isValidFolioType(payload.folioType)) {
@@ -150,7 +181,6 @@ export class SyncLeaseRouter {
         branchId: auth.branchId,
         folioType: payload.folioType,
         requestedBlockSize: payload.requestedBlockSize,
-        isDisasterRecoveryReplacement: payload.isDisasterRecoveryBootstrap,
       });
 
       return {
@@ -173,7 +203,13 @@ export class SyncLeaseRouter {
         }),
       };
     } catch (err: unknown) {
-      const error = err as { code?: string; httpStatus?: number; message?: string };
+      const error = err as {
+        code?: string;
+        httpStatus?: number;
+        message?: string;
+        activeLeaseId?: string;
+        activeEpoch?: string;
+      };
       const status = error.httpStatus ?? 500;
       return {
         status,
@@ -181,6 +217,8 @@ export class SyncLeaseRouter {
         body: JSON.stringify({
           error: error.code ?? 'ALLOCATION_FAILED',
           message: error.message ?? 'Lease allocation failed',
+          ...(error.activeLeaseId ? { activeLeaseId: error.activeLeaseId } : {}),
+          ...(error.activeEpoch ? { activeEpoch: error.activeEpoch } : {}),
         }),
       };
     }

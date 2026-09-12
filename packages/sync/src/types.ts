@@ -8,7 +8,6 @@ import { CloudFolioLeaseStatus, FolioType } from '@trident/core';
 export interface FolioLeaseRequestDTO {
   readonly folioType: FolioType;
   readonly requestedBlockSize?: number;
-  readonly isDisasterRecoveryBootstrap?: boolean;
 }
 
 export interface FolioLeaseResponseDTO {

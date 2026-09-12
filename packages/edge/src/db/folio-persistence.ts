@@ -6,6 +6,7 @@
  */
 
 import type Database from 'better-sqlite3';
+import { compareEpochs, isValidEpochId } from '@trident/core';
 import { EdgeDatabaseService } from './edge-database.js';
 import { getTestNativeDatabase } from './test-access.js';
 
@@ -116,8 +117,8 @@ export class FolioPersistence {
         `Invalid folio lease range: [${input.rangeStart}..${input.rangeEnd}]. Must be >= 1 and rangeEnd >= rangeStart.`,
       );
     }
-    if (!input.epochId || typeof input.epochId !== 'string') {
-      throw new FolioError('Invalid epochId');
+    if (!input.epochId || typeof input.epochId !== 'string' || !isValidEpochId(input.epochId)) {
+      throw new FolioError(`Invalid epochId '${input.epochId}'`);
     }
     if (!input.fencingToken || typeof input.fencingToken !== 'string') {
       throw new FolioError('Invalid fencingToken');
@@ -126,19 +127,64 @@ export class FolioPersistence {
     const initialFolio =
       input.currentFolio !== undefined ? input.currentFolio : input.rangeStart - 1;
 
+    // Validate incoming currentFolio bounds: rangeStart - 1 <= currentFolio <= rangeEnd
+    if (initialFolio < input.rangeStart - 1 || initialFolio > input.rangeEnd) {
+      throw new FolioError(
+        `currentFolio ${initialFolio} is outside valid lease bounds [${input.rangeStart - 1}..${input.rangeEnd}]`,
+      );
+    }
+
+    const determinedStatus: LocalLeaseStatus =
+      initialFolio === input.rangeEnd ? 'EXHAUSTED' : 'ACTIVE';
+
     this.#edgeDb.runInTransaction(
       () => {
+        // QI-011-06: Read existing local lease to prevent stale epoch replay or conflicting mutations
+        const current = this.getLocalLease(input.folioType);
+
+        if (current) {
+          const cmp = compareEpochs(input.epochId, current.epochId);
+
+          if (cmp < 0) {
+            // Stale / replayed epoch -> FAIL CLOSED, zero mutation
+            throw new FolioError(
+              `Cannot install stale lease epoch '${input.epochId}'. Current local epoch is '${current.epochId}'.`,
+            );
+          }
+
+          if (cmp === 0) {
+            // Same epoch: must be consistent with existing lease authority
+            if (input.fencingToken !== current.fencingToken) {
+              throw new FolioError(
+                `Conflicting fencing token for same epoch '${input.epochId}'. Mutation rejected.`,
+              );
+            }
+            if (input.rangeStart !== current.rangeStart || input.rangeEnd !== current.rangeEnd) {
+              throw new FolioError(
+                `Conflicting range [${input.rangeStart}..${input.rangeEnd}] for same epoch '${input.epochId}'. Mutation rejected.`,
+              );
+            }
+            if (initialFolio < current.currentFolio) {
+              throw new FolioError(
+                `currentFolio ${initialFolio} regresses existing currentFolio ${current.currentFolio}. Monotonic progression violation.`,
+              );
+            }
+          }
+
+          // If cmp > 0: newer epoch replacement is permitted
+        }
+
         const stmt = this.#nativeDb.prepare(`
           INSERT INTO local_folio_leases (
             folio_type, epoch_id, fencing_token, range_start, range_end, current_folio, status
-          ) VALUES (?, ?, ?, ?, ?, ?, 'ACTIVE')
+          ) VALUES (?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(folio_type) DO UPDATE SET
             epoch_id = excluded.epoch_id,
             fencing_token = excluded.fencing_token,
             range_start = excluded.range_start,
             range_end = excluded.range_end,
             current_folio = excluded.current_folio,
-            status = 'ACTIVE';
+            status = excluded.status;
         `);
         stmt.run(
           input.folioType,
@@ -147,6 +193,7 @@ export class FolioPersistence {
           input.rangeStart,
           input.rangeEnd,
           initialFolio,
+          determinedStatus,
         );
       },
       { durabilityMode: 'FULL' },

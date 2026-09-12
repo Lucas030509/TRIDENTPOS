@@ -1,15 +1,7 @@
 import pg from 'pg';
 import dotenv from 'dotenv';
-import path from 'node:path';
-import fs from 'node:fs';
 
 dotenv.config();
-if (!process.env['DATABASE_URL']) {
-  const rootEnv = path.resolve(process.cwd(), '../../.env');
-  if (fs.existsSync(rootEnv)) {
-    dotenv.config({ path: rootEnv });
-  }
-}
 
 /**
  * Sanitizes a connection string by replacing password credentials with '***'

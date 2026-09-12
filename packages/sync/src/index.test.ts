@@ -8,6 +8,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import {
   DEFAULT_BLOCK_SIZE,
   ERROR_CODE_FOLIO_OUT_OF_RANGE,
@@ -15,6 +16,7 @@ import {
   ERROR_CODE_INVALID_BLOCK_SIZE,
   ERROR_CODE_INVALID_FENCING_TOKEN,
   ERROR_CODE_INVALID_FOLIO_TYPE,
+  ERROR_CODE_INVALID_REQUEST,
   ERROR_CODE_LEASE_REVOKED,
   ERROR_CODE_UNAUTHORIZED_TENANT,
   compareEpochs,
@@ -27,6 +29,7 @@ import {
 import {
   SyncLeaseRouter,
   ICloudLeaseService,
+  AuthContext,
   getSyncPackageInfo,
   SYNC_PACKAGE_NAME,
   SYNC_PACKAGE_VERSION,
@@ -317,5 +320,120 @@ describe('TRIDENTPOS WP-011 SyncLeaseRouter HTTP Protocol Suite', () => {
     const body = JSON.parse(res.body);
     assert.equal(body.status, 'ACK');
     assert.equal(body.highWaterMark, 50);
+  });
+
+  it('WP011-R1-T31: public lease request containing isDisasterRecoveryBootstrap is strictly rejected with HTTP 400 INVALID_REQUEST', async () => {
+    const router = new SyncLeaseRouter(createMockLeaseService());
+    const res = await router.handleRequest(
+      'POST',
+      '/api/v1/sync/leases/request',
+      JSON.stringify({ folioType: 'TICKET', isDisasterRecoveryBootstrap: true }),
+      authContext,
+    );
+    assert.equal(res.status, 400);
+    const body = JSON.parse(res.body);
+    assert.equal(body.error, ERROR_CODE_INVALID_REQUEST);
+  });
+
+  it('WP011-R1-T42: spoofed x-organization-id / x-branch-id headers alone cannot establish authenticated authority', async () => {
+    const router = new SyncLeaseRouter(createMockLeaseService());
+
+    // Call via handleNodeHttp without verifiedAuth, but with spoofed headers
+    const req = Object.assign(new EventEmitter(), {
+      method: 'POST',
+      url: '/api/v1/sync/leases/request',
+      headers: {
+        'x-organization-id': 'spoofed-org-id',
+        'x-branch-id': 'spoofed-branch-id',
+        'content-type': 'application/json',
+      },
+    }) as unknown as import('node:http').IncomingMessage;
+
+    let resStatus = 0;
+    let resBody = '';
+    const res = {
+      writeHead(status: number) {
+        resStatus = status;
+      },
+      end(data?: string) {
+        if (data) resBody = data;
+      },
+    } as unknown as import('node:http').ServerResponse;
+
+    const promise = router.handleNodeHttp(req, res, undefined);
+    req.emit('data', Buffer.from(JSON.stringify({ folioType: 'TICKET' })));
+    req.emit('end');
+    await promise;
+
+    assert.equal(resStatus, 401);
+    const parsed = JSON.parse(resBody);
+    assert.equal(parsed.error, ERROR_CODE_UNAUTHORIZED_TENANT);
+  });
+
+  it('WP011-R1-T43: no verified auth context yields HTTP 401 UNAUTHORIZED_TENANT', async () => {
+    const router = new SyncLeaseRouter(createMockLeaseService());
+    const res = await router.handleRequest(
+      'POST',
+      '/api/v1/sync/leases/request',
+      JSON.stringify({ folioType: 'TICKET' }),
+      undefined,
+    );
+    assert.equal(res.status, 401);
+    const body = JSON.parse(res.body);
+    assert.equal(body.error, ERROR_CODE_UNAUTHORIZED_TENANT);
+  });
+
+  it('WP011-R1-T44: trusted injected context controls tenant/branch regardless of malicious conflicting payload or headers', async () => {
+    let capturedOptions: Parameters<ICloudLeaseService['allocateLease']>[0] | null = null;
+    const mockService: ICloudLeaseService = {
+      async allocateLease(options) {
+        capturedOptions = options;
+        return {
+          id: 'mock-lease-uuid-01',
+          organizationId: options.organizationId,
+          branchId: options.branchId,
+          folioType: options.folioType,
+          epochId: 'ep_1',
+          fencingToken: 'mock-token',
+          rangeStart: 1,
+          rangeEnd: 500,
+          highWaterMark: 0,
+          status: 'ACTIVE',
+          allocatedAt: new Date(),
+          revokedAt: null,
+          abandonedAt: null,
+          reconciledAt: null,
+        };
+      },
+      async heartbeat() {
+        throw new Error('Not used');
+      },
+    };
+
+    const router = new SyncLeaseRouter(mockService);
+    const trustedAuth: AuthContext = {
+      organizationId: 'trusted-org-uuid',
+      branchId: 'trusted-branch-uuid',
+    };
+
+    // Malicious request payload trying to impersonate another tenant/branch
+    const maliciousBody = JSON.stringify({
+      folioType: 'TICKET',
+      organizationId: 'attacker-org-uuid',
+      branchId: 'attacker-branch-uuid',
+    });
+
+    const res = await router.handleRequest(
+      'POST',
+      '/api/v1/sync/leases/request',
+      maliciousBody,
+      trustedAuth,
+    );
+
+    assert.equal(res.status, 201);
+    assert.ok(capturedOptions !== null);
+    const opts = capturedOptions as unknown as { organizationId: string; branchId: string };
+    assert.equal(opts.organizationId, 'trusted-org-uuid');
+    assert.equal(opts.branchId, 'trusted-branch-uuid');
   });
 });

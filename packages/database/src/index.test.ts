@@ -4,7 +4,17 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import type pg from 'pg';
+import dotenv from 'dotenv';
 import { SignJWT, generateKeyPair } from 'jose';
+
+dotenv.config();
+if (!process.env['DATABASE_URL']) {
+  const rootEnv = path.resolve(process.cwd(), '../../.env');
+  if (fs.existsSync(rootEnv)) {
+    dotenv.config({ path: rootEnv });
+  }
+}
+
 import { getPool, closePool, checkConnection } from './connection.js';
 import { migrateUp, migrateDown, getMigrationStatus, DEFAULT_MIGRATIONS_DIR } from './runner.js';
 import { computeChecksum } from './checksum.js';
@@ -19,16 +29,19 @@ import {
 import { createAuditLogger } from './audit.js';
 import {
   CloudLeaseManager,
+  ActiveLeaseExistsError,
   LeaseRevokedError,
   InvalidBlockSizeError,
   FolioOutOfRangeError,
   HighWaterRegressionError,
   InvalidFencingTokenError,
+  type FolioLeaseRecord,
 } from './leases.js';
 import {
   ARGON2ID_FROZEN_BASELINE,
   GENESIS_PREVIOUS_RECORD_HASH,
   REDACTED_MARKER,
+  ERROR_CODE_ACTIVE_LEASE_EXISTS,
   ERROR_CODE_LEASE_REVOKED,
   parseEpochNumber,
   compareEpochs,
@@ -3414,6 +3427,17 @@ describe('TRIDENTPOS WP-011 Cloud Folio Lease Allocation & Fencing Protocol Suit
     const lease1 = await leaseManager.getAuthoritativeLease(tenantAId, branchA1Id, 'TICKET');
     assert.ok(lease1);
 
+    // Prior lease is exhausted before requesting next sequential block
+    await leaseManager.heartbeat({
+      organizationId: tenantAId,
+      branchId: branchA1Id,
+      leaseId: lease1.id,
+      folioType: 'TICKET',
+      epochId: lease1.epochId,
+      fencingToken: lease1.fencingToken,
+      currentFolio: lease1.rangeEnd,
+    });
+
     const lease2 = await leaseManager.allocateLease({
       organizationId: tenantAId,
       branchId: branchA1Id,
@@ -3430,7 +3454,7 @@ describe('TRIDENTPOS WP-011 Cloud Folio Lease Allocation & Fencing Protocol Suit
     const concurrentCount = 10;
     const blockSize = 50;
 
-    const allocations = await Promise.all(
+    const results = await Promise.allSettled(
       Array.from({ length: concurrentCount }, () =>
         leaseManager.allocateLease({
           organizationId: tenantAId,
@@ -3441,29 +3465,42 @@ describe('TRIDENTPOS WP-011 Cloud Folio Lease Allocation & Fencing Protocol Suit
       ),
     );
 
-    assert.equal(allocations.length, concurrentCount);
+    const successful = results
+      .filter((r): r is PromiseFulfilledResult<FolioLeaseRecord> => r.status === 'fulfilled')
+      .map((r) => r.value);
+    const rejected = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
 
-    allocations.sort((a, b) => a.rangeStart - b.rangeStart);
-
-    for (let i = 0; i < allocations.length; i++) {
-      const cur = allocations[i]!;
-      assert.equal(cur.rangeEnd - cur.rangeStart + 1, blockSize);
-
-      if (i > 0) {
-        const prev = allocations[i - 1]!;
-        assert.equal(
-          cur.rangeStart,
-          prev.rangeEnd + 1,
-          `Zero gap and zero overlap between allocation ${i - 1} and ${i}`,
-        );
-        assert.ok(cur.rangeStart > prev.rangeEnd, 'Ranges must not overlap');
-      }
+    // Exactly one winner, nine 409 conflicts
+    assert.equal(successful.length, 1);
+    assert.equal(rejected.length, concurrentCount - 1);
+    for (const rej of rejected) {
+      assert.ok(rej.reason instanceof ActiveLeaseExistsError);
     }
+
+    // In DB, exactly one lease exists with range 1..50
+    const dbLeases = await pool.query<{ range_start: string; range_end: string }>(
+      'SELECT range_start, range_end FROM folio_leases WHERE branch_id = $1 AND folio_type = $2;',
+      [branchA2Id, 'CORTE_X'],
+    );
+    assert.equal(dbLeases.rows.length, 1);
+    assert.equal(Number(dbLeases.rows[0]?.range_start), 1);
+    assert.equal(Number(dbLeases.rows[0]?.range_end), 50);
   });
 
   it('WP011-T04: new allocation begins strictly after authoritative prior range_end', async () => {
     const latest = await leaseManager.getAuthoritativeLease(tenantAId, branchA1Id, 'TICKET');
     assert.ok(latest);
+
+    // Exhaust latest before allocating next sequential block
+    await leaseManager.heartbeat({
+      organizationId: tenantAId,
+      branchId: branchA1Id,
+      leaseId: latest.id,
+      folioType: 'TICKET',
+      epochId: latest.epochId,
+      fencingToken: latest.fencingToken,
+      currentFolio: latest.rangeEnd,
+    });
 
     const nextLease = await leaseManager.allocateLease({
       organizationId: tenantAId,
@@ -3520,6 +3557,12 @@ describe('TRIDENTPOS WP-011 Cloud Folio Lease Allocation & Fencing Protocol Suit
       folioType: 'FACTURA',
       requestedBlockSize: 50,
     });
+
+    // Explicit administrative / governed revocation
+    await pool.query(
+      "UPDATE folio_leases SET status = 'REVOKED', revoked_at = NOW() WHERE id = $1;",
+      [lease1.id],
+    );
 
     const lease2 = await leaseManager.allocateLease({
       organizationId: tenantAId,
@@ -3584,6 +3627,12 @@ describe('TRIDENTPOS WP-011 Cloud Folio Lease Allocation & Fencing Protocol Suit
     );
     assert.equal(l1.rows[0]?.epoch_id, 'ep_1');
     assert.equal(l1.rows[1]?.epoch_id, 'ep_2');
+
+    // Mark ep_2 EXHAUSTED so ep_3 can be allocated sequentially
+    await pool.query(
+      "UPDATE folio_leases SET status = 'EXHAUSTED', high_water_mark = range_end WHERE branch_id = $1 AND folio_type = 'TICKET' AND epoch_id = 'ep_2';",
+      [branchB1Id],
+    );
 
     const l3 = await leaseManager.allocateLease({
       organizationId: tenantBId,
@@ -3850,7 +3899,13 @@ describe('TRIDENTPOS WP-011 Cloud Folio Lease Allocation & Fencing Protocol Suit
         clients.push(await pool.connect());
       }
 
-      const results = await Promise.all(
+      // Exhaust prior FACTURA lease so new allocation round can take place
+      await pool.query(
+        "UPDATE folio_leases SET status = 'EXHAUSTED', high_water_mark = range_end WHERE branch_id = $1 AND folio_type = 'FACTURA' AND status IN ('ACTIVE', 'ALLOCATED');",
+        [branchA1Id],
+      );
+
+      const results = await Promise.allSettled(
         clients.map((c) =>
           leaseManager.allocateLease(
             {
@@ -3864,18 +3919,24 @@ describe('TRIDENTPOS WP-011 Cloud Folio Lease Allocation & Fencing Protocol Suit
         ),
       );
 
-      assert.equal(results.length, 5);
-      results.sort((a, b) => a.rangeStart - b.rangeStart);
+      const successful = results
+        .filter((r): r is PromiseFulfilledResult<FolioLeaseRecord> => r.status === 'fulfilled')
+        .map((r) => r.value);
+      const rejected = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
 
-      for (let i = 0; i < results.length; i++) {
-        const cur = results[i]!;
-        assert.equal(cur.rangeEnd - cur.rangeStart + 1, 20);
-        if (i > 0) {
-          const prev = results[i - 1]!;
-          assert.equal(cur.rangeStart, prev.rangeEnd + 1);
-          assert.ok(cur.rangeStart > prev.rangeEnd);
-        }
+      // Exactly 1 winner, 4 fail with ActiveLeaseExistsError
+      assert.equal(successful.length, 1);
+      assert.equal(rejected.length, 4);
+      for (const rej of rejected) {
+        assert.ok(rej.reason instanceof ActiveLeaseExistsError);
       }
+
+      // DB check: exactly 1 ACTIVE lease exists
+      const activeRows = await pool.query<{ count: string }>(
+        "SELECT count(*) FROM folio_leases WHERE branch_id = $1 AND folio_type = 'FACTURA' AND status = 'ACTIVE';",
+        [branchA1Id],
+      );
+      assert.equal(parseInt(activeRows.rows[0]?.count || '0', 10), 1);
     } finally {
       for (const c of clients) {
         c.release();
@@ -3995,5 +4056,326 @@ describe('TRIDENTPOS WP-011 Cloud Folio Lease Allocation & Fencing Protocol Suit
     const status = await getMigrationStatus(pool, { migrationsDir: wp011SuiteDir });
     assert.equal(status.length, 5);
     assert.ok(status.every((s) => s.applied && s.checksumMatches));
+  });
+
+  it('WP011-R1-T32: ordinary request while ACTIVE returns 409 ACTIVE_LEASE_EXISTS', async () => {
+    const active = await leaseManager.getAuthoritativeLease(tenantBId, branchB1Id, 'TICKET');
+    assert.ok(active);
+    assert.equal(active.status, 'ACTIVE');
+
+    await assert.rejects(
+      leaseManager.allocateLease({
+        organizationId: tenantBId,
+        branchId: branchB1Id,
+        folioType: 'TICKET',
+      }),
+      (err: unknown) => {
+        return (
+          err instanceof ActiveLeaseExistsError &&
+          err.code === ERROR_CODE_ACTIVE_LEASE_EXISTS &&
+          err.httpStatus === 409 &&
+          err.activeLeaseId === active.id &&
+          err.activeEpoch === active.epochId
+        );
+      },
+    );
+  });
+
+  it('WP011-R1-T33: ordinary request while ACTIVE causes zero DB mutation', async () => {
+    const activeBefore = await leaseManager.getAuthoritativeLease(tenantBId, branchB1Id, 'TICKET');
+    assert.ok(activeBefore);
+
+    const rowsBefore = await pool.query<{ count: string }>(
+      'SELECT count(*) FROM folio_leases WHERE branch_id = $1 AND folio_type = $2;',
+      [branchB1Id, 'TICKET'],
+    );
+
+    try {
+      await leaseManager.allocateLease({
+        organizationId: tenantBId,
+        branchId: branchB1Id,
+        folioType: 'TICKET',
+      });
+    } catch {
+      // Expected
+    }
+
+    const activeAfter = await leaseManager.getAuthoritativeLease(tenantBId, branchB1Id, 'TICKET');
+    assert.ok(activeAfter);
+    assert.equal(activeAfter.id, activeBefore.id);
+    assert.equal(activeAfter.epochId, activeBefore.epochId);
+    assert.equal(activeAfter.rangeStart, activeBefore.rangeStart);
+    assert.equal(activeAfter.rangeEnd, activeBefore.rangeEnd);
+    assert.equal(activeAfter.highWaterMark, activeBefore.highWaterMark);
+    assert.equal(activeAfter.status, activeBefore.status);
+
+    const rowsAfter = await pool.query<{ count: string }>(
+      'SELECT count(*) FROM folio_leases WHERE branch_id = $1 AND folio_type = $2;',
+      [branchB1Id, 'TICKET'],
+    );
+    assert.equal(rowsAfter.rows[0]?.count, rowsBefore.rows[0]?.count);
+  });
+
+  it('WP011-R1-T34: ordinary request while ALLOCATED returns conflict with zero mutation', async () => {
+    // Set an existing lease to ALLOCATED
+    await pool.query(
+      "UPDATE folio_leases SET status = 'ALLOCATED' WHERE branch_id = $1 AND folio_type = 'CORTE_X' AND status = 'ACTIVE';",
+      [branchA2Id],
+    );
+
+    await assert.rejects(
+      leaseManager.allocateLease({
+        organizationId: tenantAId,
+        branchId: branchA2Id,
+        folioType: 'CORTE_X',
+      }),
+      (err: unknown) => {
+        return (
+          err instanceof ActiveLeaseExistsError &&
+          err.code === ERROR_CODE_ACTIVE_LEASE_EXISTS &&
+          err.httpStatus === 409
+        );
+      },
+    );
+
+    // Restore to ACTIVE
+    await pool.query(
+      "UPDATE folio_leases SET status = 'ACTIVE' WHERE branch_id = $1 AND folio_type = 'CORTE_X' AND status = 'ALLOCATED';",
+      [branchA2Id],
+    );
+  });
+
+  it('WP011-R1-T35: new request after EXHAUSTED succeeds with MAX(range_end)+1', async () => {
+    // Exhaust the CORTE_X lease on branchA2Id
+    const current = await leaseManager.getAuthoritativeLease(tenantAId, branchA2Id, 'CORTE_X');
+    assert.ok(current);
+
+    await leaseManager.heartbeat({
+      organizationId: tenantAId,
+      branchId: branchA2Id,
+      leaseId: current.id,
+      folioType: 'CORTE_X',
+      epochId: current.epochId,
+      fencingToken: current.fencingToken,
+      currentFolio: current.rangeEnd,
+    });
+
+    const exhaustedRecord = await leaseManager.getAuthoritativeLease(
+      tenantAId,
+      branchA2Id,
+      'CORTE_X',
+    );
+    assert.ok(exhaustedRecord);
+    assert.equal(exhaustedRecord.status, 'EXHAUSTED');
+
+    const nextLease = await leaseManager.allocateLease({
+      organizationId: tenantAId,
+      branchId: branchA2Id,
+      folioType: 'CORTE_X',
+      requestedBlockSize: 100,
+    });
+
+    assert.equal(nextLease.rangeStart, current.rangeEnd + 1);
+    assert.equal(nextLease.rangeEnd, current.rangeEnd + 100);
+    assert.equal(nextLease.epochId, 'ep_2');
+    assert.equal(nextLease.status, 'ACTIVE');
+  });
+
+  it('WP011-R1-T36: concurrent greenfield requests result in exactly one successful authoritative allocation; all competing requests fail closed without overlap or revoking the winner', async () => {
+    // Greenfield test: brand new branch or folioType without prior leases
+    const results = await Promise.allSettled(
+      Array.from({ length: 5 }, () =>
+        leaseManager.allocateLease({
+          organizationId: tenantBId,
+          branchId: branchB1Id,
+          folioType: 'CORTE_Z',
+          requestedBlockSize: 50,
+        }),
+      ),
+    );
+
+    const winners = results
+      .filter((r): r is PromiseFulfilledResult<FolioLeaseRecord> => r.status === 'fulfilled')
+      .map((r) => r.value);
+    const losers = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
+
+    assert.equal(winners.length, 1, 'Exactly one winner for greenfield concurrency');
+    assert.equal(losers.length, 4, 'Exactly 4 competing requests fail closed');
+    for (const l of losers) {
+      assert.ok(l.reason instanceof ActiveLeaseExistsError);
+    }
+
+    // Persisted state proof: only 1 lease exists in DB, it is ACTIVE, range is [1, 50]
+    const dbRows = await pool.query<{
+      id: string;
+      status: string;
+      range_start: string;
+      range_end: string;
+    }>(
+      'SELECT id, status, range_start, range_end FROM folio_leases WHERE branch_id = $1 AND folio_type = $2;',
+      [branchB1Id, 'CORTE_Z'],
+    );
+    assert.equal(dbRows.rows.length, 1);
+    assert.equal(dbRows.rows[0]?.id, winners[0]?.id);
+    assert.equal(dbRows.rows[0]?.status, 'ACTIVE');
+    assert.equal(Number(dbRows.rows[0]?.range_start), 1);
+    assert.equal(Number(dbRows.rows[0]?.range_end), 50);
+  });
+
+  it('WP011-R1-T37: concurrent requests after an EXHAUSTED lease result in exactly one new authoritative allocation', async () => {
+    const prior = await leaseManager.getAuthoritativeLease(tenantBId, branchB1Id, 'CORTE_Z');
+    assert.ok(prior);
+
+    // Exhaust current lease
+    await leaseManager.heartbeat({
+      organizationId: tenantBId,
+      branchId: branchB1Id,
+      leaseId: prior.id,
+      folioType: 'CORTE_Z',
+      epochId: prior.epochId,
+      fencingToken: prior.fencingToken,
+      currentFolio: prior.rangeEnd,
+    });
+
+    const results = await Promise.allSettled(
+      Array.from({ length: 5 }, () =>
+        leaseManager.allocateLease({
+          organizationId: tenantBId,
+          branchId: branchB1Id,
+          folioType: 'CORTE_Z',
+          requestedBlockSize: 50,
+        }),
+      ),
+    );
+
+    const winners = results
+      .filter((r): r is PromiseFulfilledResult<FolioLeaseRecord> => r.status === 'fulfilled')
+      .map((r) => r.value);
+    const losers = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
+
+    assert.equal(winners.length, 1);
+    assert.equal(losers.length, 4);
+
+    // Persisted state proof: exactly 1 ACTIVE lease exists
+    const activeRows = await pool.query<{ count: string }>(
+      "SELECT count(*) FROM folio_leases WHERE branch_id = $1 AND folio_type = 'CORTE_Z' AND status = 'ACTIVE';",
+      [branchB1Id],
+    );
+    assert.equal(parseInt(activeRows.rows[0]?.count || '0', 10), 1);
+  });
+
+  it('WP011-R1-T38: wrong leaseId + correct current epoch/token => rejection, zero HWM mutation', async () => {
+    const active = await leaseManager.getAuthoritativeLease(tenantBId, branchB1Id, 'CORTE_Z');
+    assert.ok(active);
+    const hwmBefore = active.highWaterMark;
+
+    await assert.rejects(
+      leaseManager.heartbeat({
+        organizationId: tenantBId,
+        branchId: branchB1Id,
+        leaseId: '00000000-0000-0000-0000-000000000000', // wrong leaseId
+        folioType: 'CORTE_Z',
+        epochId: active.epochId,
+        fencingToken: active.fencingToken,
+        currentFolio: active.rangeStart + 10,
+      }),
+      (err: unknown) => {
+        return err instanceof LeaseRevokedError && err.code === ERROR_CODE_LEASE_REVOKED;
+      },
+    );
+
+    const activeAfter = await leaseManager.getAuthoritativeLease(tenantBId, branchB1Id, 'CORTE_Z');
+    assert.ok(activeAfter);
+    assert.equal(activeAfter.highWaterMark, hwmBefore);
+  });
+
+  it('WP011-R1-T39: old leaseId after replacement => HTTP 403 LEASE_REVOKED, zero mutation', async () => {
+    const oldActive = await leaseManager.getAuthoritativeLease(tenantBId, branchB1Id, 'CORTE_Z');
+    assert.ok(oldActive);
+
+    // Replace via DR
+    const replacement = await leaseManager.allocateLease({
+      organizationId: tenantBId,
+      branchId: branchB1Id,
+      folioType: 'CORTE_Z',
+      isDisasterRecoveryReplacement: true,
+    });
+    assert.equal(replacement.epochId, 'ep_3');
+
+    // Present old leaseId with old epoch/token
+    await assert.rejects(
+      leaseManager.heartbeat({
+        organizationId: tenantBId,
+        branchId: branchB1Id,
+        leaseId: oldActive.id,
+        folioType: 'CORTE_Z',
+        epochId: oldActive.epochId,
+        fencingToken: oldActive.fencingToken,
+        currentFolio: oldActive.rangeStart + 5,
+      }),
+      (err: unknown) => {
+        return (
+          err instanceof LeaseRevokedError &&
+          err.code === ERROR_CODE_LEASE_REVOKED &&
+          err.httpStatus === 403 &&
+          err.activeEpoch === 'ep_3'
+        );
+      },
+    );
+
+    const checkReplacement = await leaseManager.getAuthoritativeLease(
+      tenantBId,
+      branchB1Id,
+      'CORTE_Z',
+    );
+    assert.ok(checkReplacement);
+    assert.equal(
+      checkReplacement.highWaterMark,
+      replacement.highWaterMark,
+      'Zero mutation on authoritative lease',
+    );
+  });
+
+  it('WP011-R1-T40: cross-tenant leaseId cannot be used as an oracle', async () => {
+    // Tenant B's active lease ID presented in Tenant A's heartbeat scope
+    const leaseB = await leaseManager.getAuthoritativeLease(tenantBId, branchB1Id, 'CORTE_Z');
+    assert.ok(leaseB);
+
+    await assert.rejects(
+      leaseManager.heartbeat({
+        organizationId: tenantAId,
+        branchId: branchA1Id,
+        leaseId: leaseB.id,
+        folioType: 'FACTURA',
+        epochId: 'ep_1',
+        fencingToken: 'dummy-token-for-anti-oracle',
+        currentFolio: 1,
+      }),
+      (err: unknown) => {
+        // Rejection must fail closed without revealing cross-tenant existence
+        return err instanceof LeaseRevokedError && err.code === ERROR_CODE_LEASE_REVOKED;
+      },
+    );
+  });
+
+  it('WP011-R1-T41: Tenant A cannot INSERT folio_lease referencing Tenant B branch ID', async () => {
+    await asTestRole(async (client) => {
+      await client.query('BEGIN;');
+      await setTenantContext(client, tenantAId);
+
+      // Attempt inserting lease for Tenant A referencing Tenant B branch ID
+      await assert.rejects(
+        client.query(`
+          INSERT INTO folio_leases (
+            organization_id, branch_id, folio_type, epoch_id, fencing_token,
+            range_start, range_end, high_water_mark, status, allocated_at
+          ) VALUES (
+            '${tenantAId}', '${branchB1Id}', 'FACTURA', 'ep_99', 'token-cross-branch-test-1234567890',
+            5001, 5500, 5000, 'ACTIVE', NOW()
+          );
+        `),
+        /violates foreign key constraint "fk_folio_leases_branch"/i,
+      );
+    });
   });
 });

@@ -20,6 +20,7 @@ import {
   ERROR_CODE_INVALID_FOLIO_TYPE,
   ERROR_CODE_LEASE_NOT_FOUND,
   ERROR_CODE_LEASE_REVOKED,
+  ERROR_CODE_ACTIVE_LEASE_EXISTS,
   FolioType,
   GREENFIELD_INITIAL_RANGE_START,
   MAX_BLOCK_SIZE,
@@ -141,6 +142,18 @@ export class LeaseNotFoundError extends FolioLeaseError {
   }
 }
 
+export class ActiveLeaseExistsError extends FolioLeaseError {
+  readonly activeLeaseId: string;
+  readonly activeEpoch: string;
+
+  constructor(message: string, activeLeaseId: string, activeEpoch: string) {
+    super(message, ERROR_CODE_ACTIVE_LEASE_EXISTS, 409);
+    this.name = 'ActiveLeaseExistsError';
+    this.activeLeaseId = activeLeaseId;
+    this.activeEpoch = activeEpoch;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Cryptographic Timing-Safe Comparison
 // ---------------------------------------------------------------------------
@@ -242,6 +255,34 @@ export class CloudLeaseManager {
         [options.organizationId, options.branchId, options.folioType],
       );
 
+      // QI-011-02: An ACTIVE or ALLOCATED lease remains authoritative until numeric exhaustion,
+      // trusted replacement generation, or explicit governed administrative revocation.
+      // An ordinary allocateLease MUST NOT revoke or abandon an existing ACTIVE/ALLOCATED lease.
+      const activeLeaseRow = historicalRes.rows.find(
+        (row) => row.status === 'ACTIVE' || row.status === 'ALLOCATED',
+      );
+
+      if (activeLeaseRow) {
+        if (!options.isDisasterRecoveryReplacement) {
+          // Normal request while an ACTIVE/ALLOCATED lease exists MUST fail closed.
+          // HTTP 409, error code ACTIVE_LEASE_EXISTS, with ZERO mutation.
+          throw new ActiveLeaseExistsError(
+            `An active folio lease ('${activeLeaseRow.id}', epoch: '${activeLeaseRow.epoch_id}') already exists for organization '${options.organizationId}', branch '${options.branchId}', folio type '${options.folioType}'. New leases cannot be allocated until the current lease is EXHAUSTED or replaced via governed disaster recovery.`,
+            activeLeaseRow.id,
+            activeLeaseRow.epoch_id,
+          );
+        }
+
+        // Governed DR replacement path (internal trusted operation only):
+        // Supersede active lease as ABANDONED_CONTINGENCY_RANGE per ADR-008
+        await client.query(
+          `UPDATE folio_leases
+           SET status = 'ABANDONED_CONTINGENCY_RANGE', abandoned_at = NOW()
+           WHERE id = $1;`,
+          [activeLeaseRow.id],
+        );
+      }
+
       let rangeStart: number;
       let nextEpoch: string;
 
@@ -268,27 +309,6 @@ export class CloudLeaseManager {
         // Monotonic range advancement strictly beyond all prior ranges
         rangeStart = maxRangeEnd + 1;
         nextEpoch = formatEpochId(maxEpochNumber + 1);
-
-        // Handle active leases of prior generation
-        for (const row of historicalRes.rows) {
-          if (row.status === 'ACTIVE' || row.status === 'ALLOCATED') {
-            if (options.isDisasterRecoveryReplacement) {
-              await client.query(
-                `UPDATE folio_leases
-                 SET status = 'ABANDONED_CONTINGENCY_RANGE', abandoned_at = NOW()
-                 WHERE id = $1;`,
-                [row.id],
-              );
-            } else {
-              await client.query(
-                `UPDATE folio_leases
-                 SET status = 'REVOKED', revoked_at = NOW()
-                 WHERE id = $1;`,
-                [row.id],
-              );
-            }
-          }
-        }
       }
 
       const rangeEnd = rangeStart + blockSize - 1;
@@ -435,6 +455,16 @@ export class CloudLeaseManager {
           `Incoming epoch '${options.epochId}' exceeds authoritative active epoch '${activeLease.epoch_id}'.`,
           'INVALID_EPOCH',
           400,
+        );
+      }
+
+      // QI-011-03: Validate leaseId corresponds to the authoritative lease
+      if (options.leaseId !== activeLease.id) {
+        // Mismatched or superseded lease ID within valid authority scope
+        // FAIL CLOSED: Zero mutation, exact HTTP 403, error code LEASE_REVOKED
+        throw new LeaseRevokedError(
+          `Lease ID '${options.leaseId}' does not match authoritative active lease '${activeLease.id}'. Lease superseded or revoked.`,
+          activeLease.epoch_id,
         );
       }
 

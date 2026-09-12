@@ -7,7 +7,7 @@
 CREATE TABLE folio_leases (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     organization_id UUID NOT NULL REFERENCES organizations(id),
-    branch_id UUID NOT NULL REFERENCES branches(id),
+    branch_id UUID NOT NULL,
     folio_type VARCHAR(50) NOT NULL,
     epoch_id VARCHAR(50) NOT NULL,
     fencing_token VARCHAR(100) NOT NULL,
@@ -19,6 +19,7 @@ CREATE TABLE folio_leases (
     revoked_at TIMESTAMPTZ NULL,
     abandoned_at TIMESTAMPTZ NULL,
     reconciled_at TIMESTAMPTZ NULL,
+    CONSTRAINT fk_folio_leases_branch FOREIGN KEY (organization_id, branch_id) REFERENCES branches(organization_id, id),
     CONSTRAINT uq_folio_leases_epoch UNIQUE (organization_id, branch_id, folio_type, epoch_id),
     CONSTRAINT chk_folio_leases_type CHECK (folio_type IN ('TICKET', 'CORTE_X', 'CORTE_Z', 'FACTURA')),
     CONSTRAINT chk_folio_leases_status CHECK (status IN ('ALLOCATED', 'ACTIVE', 'EXHAUSTED', 'REVOKED', 'ABANDONED_CONTINGENCY_RANGE', 'RECONCILED')),
