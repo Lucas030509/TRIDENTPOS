@@ -21,3 +21,6 @@ export function getSyncPackageInfo(): SyncPackageInfo {
     coreDependency: CORE_PACKAGE_NAME,
   };
 }
+
+export * from './types.js';
+export * from './router.js';
