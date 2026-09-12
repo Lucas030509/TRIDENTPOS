@@ -49,3 +49,6 @@ export * from './renderer.js';
 
 // Re-export Local Database & Durability Manager (WP-008)
 export * from './db/index.js';
+
+// Re-export Edge Enrollment & Trust Bootstrap (WP-009)
+export * from './enrollment/index.js';
