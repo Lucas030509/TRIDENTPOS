@@ -1,9 +1,9 @@
 # ARCHITECTURE CHANGE REQUEST: WP-010 CANONICAL RBAC CAPABILITY FOR EARLY STATION LOCKOUT UNLOCK
 
 > [!NOTE]
-> **ACR-2026-012 PENDING PRODUCT OWNER APPROVAL — PRE-PO STATUS**
+> **ACR-2026-012 PRODUCT OWNER APPROVED — PENDING MERGE TO MAIN**
 > 
-> This document constitutes a formal Architecture Change Request under EAAF v1.2.0. Its contents have been authored by `01_Solution_Architect` and reviewed with verdict `PASS` by `08_Security_Architect`. It is submitted for formal Product Owner approval prior to baseline merge.
+> This document constitutes a formal Architecture Change Request under EAAF v1.2.0. Its contents were authored by `01_Solution_Architect`, independently reviewed with verdict `PASS` by `08_Security_Architect`, and formally **APPROVED by the Product Owner on 2026-09-12**. It is authorized for promotion into canonical `main`.
 
 **ID:** `ACR-2026-012`  
 **Framework:** `EAAF v1.2.0 @ 7e036f43240b3dc28ccb996e350263598275b2cd`  
@@ -11,7 +11,7 @@
 **Requester / Primary Author:** `01_Solution_Architect — WP-010 GOVERNANCE RESOLUTION AUTHOR`  
 **Security Consultation / Reviewer:** `08_Security_Architect — INDEPENDENT SECURITY REVIEW`  
 **Date:** `2026-09-12`  
-**Status:** `READY FOR PRODUCT OWNER APPROVAL`  
+**Status:** `PRODUCT OWNER APPROVED — PENDING MERGE TO MAIN`  
 **Base Commit:** `9d7c7dabeb1b696974f111cd0e1206d048179625` (`M9`)  
 **Operating Mode:** `SOLO_MAINTAINER`  
 **Classification:** `ARCHITECTURE CLARIFICATION & CANONICAL RBAC CAPABILITY OVERLAY`  
@@ -195,5 +195,8 @@ All nine (9) protected PO questions remain strictly **`PENDING PO DECISION`**:
 
 - **Primary Author:** `01_Solution_Architect`
 - **Security Review:** `08_Security_Architect` — Verdict: `PASS` (Documented in `evidence/WP-010_SUPERVISOR_UNLOCK_RBAC_SECURITY_REVIEW.md`)
-- **Product Owner Status:** `READY FOR PRODUCT OWNER APPROVAL`
-- **Governing Invariant:** Implementation remains frozen on candidate `S10-R3` (PR #32 open and unmerged) until Product Owner approves this ACR and merges it into canonical main.
+- **Solution Architect Subject:** `34cee0dd493377fd4f6bd1a88de9f31f82a49aeb`
+- **Security Review Subject:** `2448d0c468c4f17ddc8cbadaf0b24d689583621a` — `PASS / 0 BLOCKERS`
+- **Product Owner Status:** `APPROVED — 2026-09-12`
+- **Promotion Status:** `AUTHORIZED FOR MERGE TO CANONICAL MAIN`
+- **Governing Invariant:** Implementation remains frozen on candidate `S10-R3` (PR #32 open and unmerged) until this approved ACR is canonical on `main`. After merge, Coordinator must evaluate the exact implementation delta required by `estacion.desbloquear`; no implementation merge is authorized by this approval alone.
