@@ -67,9 +67,9 @@ mindmap
 
 ### 2.1 Dominio: Plataforma, Seguridad y Gobierno (Platform Core)
 - **CAP-PLT-01 [Gobierno Multi-Tenant & Multi-Branch]:** Administración de grupos empresariales y estructura jerárquica de sucursales con parametrización fiscal independiente.
-- **CAP-PLT-02 [Gestión de Identidad y Acceso Dual]:** RBAC administrativo completo y autenticación rápida por PIN de 4 dígitos para estaciones de piso.
+- **CAP-PLT-02 [Gestión de Identidad y Acceso Dual]:** RBAC administrativo completo y autenticación rápida por PIN de 4 dígitos para estaciones de piso, con capacidad de desbloqueo anticipado de estaciones bloqueadas por fuerza bruta (permiso canónico `estacion.desbloquear`; ACR-2026-012).
 - **CAP-PLT-03 [Gobierno de Catálogo Maestro & Overrides]:** Catálogo centralizado de productos, categorías, menús, modificadores y precios base con sobreescritura local por sucursal (precios, visibilidad, impuestos).
-- **CAP-PLT-04 [Auditoría Estructurada de Eventos]:** Registro cronológico de acciones sensibles (descuentos, cancelaciones, reaperturas de cuentas, apertura de cajón).
+- **CAP-PLT-04 [Auditoría Estructurada de Eventos]:** Registro cronológico de acciones sensibles (descuentos, cancelaciones, reaperturas de cuentas, apertura de cajón, desbloqueo anticipado de estación).
 - **CAP-PLT-05 [Primitivas Transversales de Dispositivos]:** Registro, contexto de sucursal y autorización de identidades de estaciones físicas en la plataforma.
 
 ### 2.2 Dominio: Operaciones Gastronómicas (TRIDENTPOS)

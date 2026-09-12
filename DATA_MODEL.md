@@ -94,7 +94,7 @@ CREATE TABLE roles (
     organization_id UUID NOT NULL REFERENCES organizations(id),
     code VARCHAR(50) NOT NULL,
     name VARCHAR(100) NOT NULL,
-    permissions JSONB NOT NULL DEFAULT '[]', -- Array canónico de strings de permissions
+    permissions JSONB NOT NULL DEFAULT '[]', -- Array canónico de strings de permissions (e.g. "comanda.iniciar", "estacion.desbloquear"; ACR-2026-012)
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     CONSTRAINT uq_roles_org_code UNIQUE (organization_id, code),
     CONSTRAINT uq_roles_org_id UNIQUE (organization_id, id)
@@ -726,7 +726,7 @@ CREATE TABLE cached_users (
     organization_id TEXT NOT NULL,
     full_name TEXT NOT NULL,
     pin_hash TEXT NOT NULL, -- Argon2id salted hash
-    roles_json TEXT NOT NULL, -- JSON array de roles y permisos
+    roles_json TEXT NOT NULL, -- JSON array de roles y permisos (e.g. ["ROLE-002", "estacion.desbloquear"]; ACR-2026-012)
     credential_version INTEGER NOT NULL,
     issued_at TEXT NOT NULL,
     expires_at TEXT NOT NULL,
