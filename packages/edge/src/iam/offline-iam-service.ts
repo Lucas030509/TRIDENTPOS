@@ -599,21 +599,27 @@ export class OfflineIamService {
       );
     }
 
-    // Authoritative supervisory role validation per RESTAURANT_SOFTWARE_RECONSTRUCTION_SPEC_v1.0_BASELINE.md
-    // Section 7 ("ROLES Y USUARIOS"):
-    //   - ROLE-001 — Administrador: all system operations; default authorized for security events.
-    //   - ROLE-002 — Gerente / Supervisor / "Usuario autorizado": authorized for security overrides (discounts, cancellations, reopenings, lockouts).
-    // Section 8 ("MATRIZ DE PERMISOS"): Perfiles del sistema: 01 ADMINISTRADOR, 03 GERENTE.
-    // Governed bilingual normalized supervisory role set:
-    const SUPERVISORY_AUTHORIZED_ROLES = new Set([
-      'ADMIN',
+    // Authoritative supervisory role authorization per canonical repository SSOT:
+    // RESTAURANT_SOFTWARE_RECONSTRUCTION_SPEC.md (v1.1 NORMALIZED, Canonical M9):
+    //   - Section 7 ("ROLES Y USUARIOS"):
+    //     - ROLE-001 — Administrador: full system configuration; sole mandatory role.
+    //     - ROLE-002 — Gerente / Supervisor: authorized for security event overrides (discounts, cancellations, reopenings, lockouts per Cap. 8.2.2 and Cap. 4).
+    //   - Section 8 ("MATRIZ DE PERMISOS"): Perfiles del sistema: Administrador, Gerente.
+    // IAM_SECURITY_MODEL.md Section 3: "un usuario con privilegios de supervisión local."
+    // DATA_MODEL.md line 729: cached_users.roles_json ("JSON array de roles y permisos").
+    //
+    // Governed Canonical Supervisory Authorities:
+    // Exact canonical role codes and functional roles established in Section 7 & 8.
+    // Prohibits invented bilingual role aliases (e.g. ADMIN and MANAGER are strictly NOT authorized).
+    const CANONICAL_SUPERVISORY_AUTHORITIES = new Set([
+      'ROLE-001',
+      'ROLE-002',
       'ADMINISTRADOR',
       'GERENTE',
-      'MANAGER',
       'SUPERVISOR',
     ]);
     const isSupervisor = roles.some((r) =>
-      SUPERVISORY_AUTHORIZED_ROLES.has(r.trim().toUpperCase()),
+      CANONICAL_SUPERVISORY_AUTHORITIES.has(r.trim().toUpperCase()),
     );
     if (!isSupervisor) {
       const failureEval = this.#lockoutManager.recordFailure(request.stationId, now);

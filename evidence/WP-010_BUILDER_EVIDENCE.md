@@ -1,47 +1,51 @@
 # WP-010 BUILDER EVIDENCE REPORT
 
 **Work Package:** WP-010 Edge Offline IAM & Floor PIN Authentication Engine  
-**Candidate Subject:** `S10-R2` (Builder Remediation R2)  
-**Parent Candidate:** `S10-R1 = efff0c80e758e5ea66c34a1bda1c2bb9e910acfb` (Superseded / Remediation R2 Applied)  
+**Candidate Subject:** `S10-R3` (Builder Remediation R3)  
+**Parent Candidate:** `S10-R2 = b498aa72f002a20ca4c52e947c99d6298d501106` (Superseded / Remediation R3 Applied)  
 **Date:** 2026-09-11  
 **Author / Builder Agent:** `16_Native_Edge_Developer`  
 **Governing Framework:** `EAAF v1.2.0` (Pinned Framework SHA: `7e036f43240b3dc28ccb996e350263598275b2cd`)  
 **Canonical Baseline:** `M9 = 9d7c7dabeb1b696974f111cd0e1206d048179625`  
-**Required Ancestry:** `M9` → `880ab56148cc04981f3e44bcecb52b859e5d4d60` → `S10` → `S10-R1` → `S10-R2`  
+**Required Ancestry:** `M9` → `880ab56148cc04981f3e44bcecb52b859e5d4d60` → `S10` → `S10-R1` → `S10-R2` → `S10-R3`  
 **Implementation Branch:** `feature/wp-010-edge-offline-iam`  
 **Implementation PR:** #32 (Open, Unmerged)  
 
 ---
 
-## 1. Executive Summary & Remediation R2 Overview
+## 1. Executive Summary & Remediation R3 Overview
 
-Following Coordinator Quick Integrity evaluation of candidate `S10-R1`, candidate `S10-R2` surgically resolves all three remediation findings (`QI-010-R1-01`, `QI-010-R1-02`, `QI-010-R1-03`) with zero test skipping, zero mock bypasses, zero synthetic delay providers, and zero regression on governed parameters.
+Following Coordinator Quick Integrity evaluation of candidate `S10-R2`, candidate `S10-R3` resolves the remaining governance and authorization blocker (`QI-010-R2-01`) with surgical precision, strictly eliminating invented role aliases, grounding supervisory authorities in verified canonical SSOT artifacts, rewriting `WP010-T30`, and raising the required formal EAAF governance clarification.
 
-### S10-R2 Remediation Summary:
+### S10-R3 Remediation Summary:
 
-1. **`QI-010-R1-01` — Public Cached Identity Boundary Encapsulation:**
-   - Completely removed public methods `cacheUser(...)`, `invalidateUser(...)`, and `getCachedUser(...)` from `OfflineIamService` (`packages/edge/src/iam/offline-iam-service.ts`).
-   - Removed `CachedUserInput` and `CachedUserRecord` type exports from the public `@trident/edge` package surface (`packages/edge/src/iam/index.ts`).
-   - Isolated cached identity population and inspection strictly within the internal test double module (`packages/edge/src/iam/test-support.ts`) requiring unexported symbol `kInternalTestToken`.
-   - Added automated regression test `WP010-T28` proving a runtime consumer cannot mutate cached identity authority, alter PIN hashes, inject unauthorized users, or retrieve stored PIN hashes.
+1. **`QI-010-R2-01` — Supervisory Authorization Authority SSOT Grounding:**
+   - Evaluated the approved and frozen canonical repository architecture:
+     - `RESTAURANT_SOFTWARE_RECONSTRUCTION_SPEC.md` (v1.1 NORMALIZED, Canonical M9):
+       - **Section 7 ("ROLES Y USUARIOS"):**
+         - `ROLE-001 — Administrador`: all system operations; default authorized for security events.
+         - `ROLE-002 — Gerente / Supervisor`: authorized for security overrides (discounts, cancellations, reopenings, lockouts per Cap. 8.2.2 and Cap. 4).
+       - **Section 8 ("MATRIZ DE PERMISOS"):**
+         - Profiles: `Administrador`, `Gerente`.
+     - `IAM_SECURITY_MODEL.md` Section 3: mandates authorization by "un usuario con privilegios de supervisión local."
+     - `DATA_MODEL.md` line 729: defines `cached_users.roles_json` as a JSON array of roles and permissions.
+   - Identified that no exact canonical permission literal (e.g. `estacion.desbloquear` or `local.station.unlock`) is defined in frozen architecture specifically for station lockout override.
+   - Applied the governed **Transitional Role Option**:
+     - Strict canonical supervisory authorities authorized: `ROLE-001`, `ROLE-002`, `ADMINISTRADOR`, `GERENTE`, `SUPERVISOR`.
+     - **Strict Prohibition of Invented Aliases:** Removed ungrounded English aliases (`ADMIN` and `MANAGER`). They are strictly NOT recognized as supervisory authorities and fail closed with `INSUFFICIENT_PERMISSIONS`.
+     - Removed all comments and evidence claims asserting that historical baselines define `ADMIN`/`MANAGER` as canonical bilingual sets.
+   - Formally raised **EAAF Governance Clarification Required** (detailed in Section 1.1 below).
+   - Rewrote automated test `WP010-T30` to validate the governed canonical authorization contract: authorized canonical roles succeed, missing capabilities / invented aliases (`ADMIN`, `MANAGER`, `admin`, `manager`) strictly fail closed, operational roles (`ROLE-003`, `ROLE-004`, `Cajero`, `Mesero`, etc.) fail closed, and cross-tenant supervisor attempts fail closed.
 
-2. **`QI-010-R1-02` — Atomic Supervisor Unlock & Audit Commitment:**
-   - Implemented `IamPersistence.unlockStationWithAudit(stationId, currentEffectiveTime, auditInput)` in `packages/edge/src/db/iam-persistence.ts`.
-   - Both the lockout counter reset (`resetLockoutState`) and the tamper-evident audit record insertion (`#appendAuditEventInternal`) are executed within a single SQLite transaction (`runInTransaction`).
-   - Any audit insertion failure or crash automatically rolls back the lockout reset, ensuring the station remains securely locked and zero partial authentication mutation occurs.
-   - Refactored `OfflineIamService.supervisorUnlockStation` to invoke `unlockStationWithAudit`.
-   - Added automated regression test `WP010-T29` using fault injection (`setSimulateAuditInsertFailure`) to prove transaction rollback: when audit writing fails, station lockout remains active in SQLite, consecutive failures remain 5, and zero audit records are committed. Upon clearing the fault, unlock succeeds and exactly one audit record is persisted.
+### 1.1 EAAF Governance Clarification Required
 
-3. **`QI-010-R1-03` — Supervisory Role Authority SSOT Justification:**
-   - Grounded supervisory role validation strictly in the frozen Single Source of Truth (`RESTAURANT_SOFTWARE_RECONSTRUCTION_SPEC_v1.0_BASELINE.md`):
-     - **Section 7 ("ROLES Y USUARIOS"):**
-       - `ROLE-001 — Administrador`: all actions permitted; default administrator credentials authorized for system security events.
-       - `ROLE-002 — Gerente / Supervisor / "Usuario autorizado"`: authorized to execute and approve security overrides (authorizations, discounts, cancellations, reopenings, lockouts per Cap. 8.2.2 and Cap. 4).
-     - **Section 8 ("MATRIZ DE PERMISOS"):**
-       - System profiles: `01 ADMINISTRADOR`, `03 GERENTE`.
-   - Supported canonical bilingual normalized set: `ADMIN`, `ADMINISTRADOR`, `GERENTE`, `MANAGER`, `SUPERVISOR`.
-   - Rejects non-supervisory roles fail-closed (`WAITER`, `MESERO`, `CASHIER`, `CAJA`, `COCINA`, `KITCHEN`, `STAFF`, `GUEST`) with typed error `INSUFFICIENT_PERMISSIONS`.
-   - Added automated regression test `WP010-T30` exhaustively verifying all valid SSOT supervisory roles succeed and unauthorized roles fail closed.
+Pursuant to EAAF v1.2.0 governance and Coordinator directive QI-010-R2-01:
+
+> **Clarification Item:** RBAC Capability for Local Station Lockout Unlock  
+> **Status:** `EAAF GOVERNANCE CLARIFICATION REQUIRED`  
+> **Target Question:** "What canonical RBAC capability authorizes early local `STATION_LOCKED` supervisor unlock?"  
+> **Scope:** Defines only the technical RBAC permission/capability literal required by approved IAM policy (`IAM_SECURITY_MODEL.md` Sec. 3). Does NOT modify unrelated architecture or touch any of the nine protected PO decisions.  
+> **Builder Disposition:** Implementation uses the Transitional Role Option strictly bounded to canonical roles (`ROLE-001`, `ROLE-002`, `Administrador`, `Gerente`, `Supervisor`). Full closure of `SEC-VAL-02` remains `OPEN / PARTIAL — SUPERVISOR AUTHORIZATION AUTHORITY REMEDIATION REQUIRED` until this canonical capability is formally declared and ratified.
 
 ---
 
@@ -65,36 +69,36 @@ Following Coordinator Quick Integrity evaluation of candidate `S10-R1`, candidat
 All 116 unit tests in `@trident/edge` (`dist/offline-iam.test.js`, `dist/enrollment.test.js`, `dist/database.test.js`, `dist/index.test.js`) passed with zero skips, zero mocks, and zero placeholder substitutes:
 
 ```text
-✔ WP010-T01: Correct PIN succeeds locally and returns valid station session (191.055458ms)
-✔ WP010-T02: Incorrect PIN fails authentication (141.253916ms)
-✔ WP010-T03: Plaintext PIN is never persisted in SQLite or disk (148.734792ms)
-✔ WP010-T04: Plaintext PIN is never logged in audit events, errors, or telemetry (148.487292ms)
-✔ WP010-T05: Cross-user authentication rejected (wrong user ID with PIN) (69.477125ms)
-✔ WP010-T06: Cross-station session misuse rejected (134.224958ms)
-✔ WP010-T07: Expired cached credential rejected fail-closed (65.988875ms)
-✔ WP010-T08: Corrupted cached credential rejected fail-closed (72.015708ms)
-✔ WP010-T09: Brute-force repeated failures trigger governed lockout (75.066375ms)
-✔ WP010-T10: Correct PIN while locked remains rejected (75.56125ms)
-✔ WP010-T11: Lockout persistence survives process restart (67.557208ms)
-✔ WP010-T12: Governed lockout release behavior (natural expiry and supervisor override unlock) (269.199083ms)
-✔ WP010-T13: Clock rollback detection fail-closed (72.856041ms)
-✔ WP010-T14: Token/session issuedAt cannot be bypassed by wall-clock rollback (77.096333ms)
-✔ WP010-T15: Session bound to correct station ID (140.130375ms)
-✔ WP010-T16: Invalid or revoked station identity rejected fail-closed (68.334875ms)
-✔ WP010-T17: Session expiry enforced (12 hours TTL) (130.077584ms)
-✔ WP010-T18: Concurrent failed attempts cannot bypass lockout counters (65.819958ms)
-✔ WP010-T19: SQLite transaction failure produces no partial auth-state mutation (254.181167ms)
-✔ WP010-T20: Sensitive values redacted from errors, audit payloads, and telemetry (79.575917ms)
-✔ WP010-T21: HTTP API POST /api/v1/auth/pin handles success, failure, lockout, supervisor unlock (228.426875ms)
-✔ WP010-T22: [Obligation] Genuine brute-force PIN attack test via EdgeAuthRouter POST /api/v1/auth/pin (12388.173083ms)
-✔ WP010-T23: [Obligation] Clock tampering test (tampered clock triggers fail-closed) (62.808958ms)
-✔ WP010-T24: [Obligation] Argon2id performance benchmark on resource-constrained process (119.025834ms)
-✔ WP010-T25: [QI-010-01] Public IAM boundary prevents collaborator injection, internal escape, and fault invocation (63.451167ms)
-✔ WP010-T26: [QI-010-02] Supervisor unlock authorization fails closed and prevents brute-force oracle (5247.078709ms)
-✔ WP010-T27: [QI-010-03] Corrupted or invalid role data strictly fails closed without defaulting to STAFF (434.857708ms)
-✔ WP010-T28: [QI-010-R1-01] Public cached identity authority boundary verification (61.133375ms)
-✔ WP010-T29: [QI-010-R1-02] Supervisor unlock atomicity and rollback on audit failure (248.922917ms)
-✔ WP010-T30: [QI-010-R1-03] Supervisory role authority covers full SSOT Section 7 and 8 matrix (608.747625ms)
+✔ WP010-T01: Correct PIN succeeds locally and returns valid station session (149.269667ms)
+✔ WP010-T02: Incorrect PIN fails authentication (137.066916ms)
+✔ WP010-T03: Plaintext PIN is never persisted in SQLite or disk (131.161666ms)
+✔ WP010-T04: Plaintext PIN is never logged in audit events, errors, or telemetry (135.660333ms)
+✔ WP010-T05: Cross-user authentication rejected (wrong user ID with PIN) (65.529083ms)
+✔ WP010-T06: Cross-station session misuse rejected (126.681792ms)
+✔ WP010-T07: Expired cached credential rejected fail-closed (66.116958ms)
+✔ WP010-T08: Corrupted cached credential rejected fail-closed (70.155458ms)
+✔ WP010-T09: Brute-force repeated failures trigger governed lockout (71.172333ms)
+✔ WP010-T10: Correct PIN while locked remains rejected (71.187917ms)
+✔ WP010-T11: Lockout persistence survives process restart (69.452208ms)
+✔ WP010-T12: Governed lockout release behavior (natural expiry and supervisor override unlock) (245.959375ms)
+✔ WP010-T13: Clock rollback detection fail-closed (66.503333ms)
+✔ WP010-T14: Token/session issuedAt cannot be bypassed by wall-clock rollback (63.558125ms)
+✔ WP010-T15: Session bound to correct station ID (127.278125ms)
+✔ WP010-T16: Invalid or revoked station identity rejected fail-closed (65.957417ms)
+✔ WP010-T17: Session expiry enforced (12 hours TTL) (138.733333ms)
+✔ WP010-T18: Concurrent failed attempts cannot bypass lockout counters (63.520875ms)
+✔ WP010-T19: SQLite transaction failure produces no partial auth-state mutation (179.109042ms)
+✔ WP010-T20: Sensitive values redacted from errors, audit payloads, and telemetry (69.202375ms)
+✔ WP010-T21: HTTP API POST /api/v1/auth/pin handles success, failure, lockout, supervisor unlock (188.353958ms)
+✔ WP010-T22: [Obligation] Genuine brute-force PIN attack test via EdgeAuthRouter POST /api/v1/auth/pin (12386.092083ms)
+✔ WP010-T23: [Obligation] Clock tampering test (tampered clock triggers fail-closed) (70.695958ms)
+✔ WP010-T24: [Obligation] Argon2id performance benchmark on resource-constrained process (117.181791ms)
+✔ WP010-T25: [QI-010-01] Public IAM boundary prevents collaborator injection, internal escape, and fault invocation (65.361834ms)
+✔ WP010-T26: [QI-010-02] Supervisor unlock authorization fails closed and prevents brute-force oracle (5245.571083ms)
+✔ WP010-T27: [QI-010-03] Corrupted or invalid role data strictly fails closed without defaulting to STAFF (490.542625ms)
+✔ WP010-T28: [QI-010-R1-01] Public cached identity authority boundary verification (67.895834ms)
+✔ WP010-T29: [QI-010-R1-02] Supervisor unlock atomicity and rollback on audit failure (262.129375ms)
+✔ WP010-T30: [QI-010-R2-01] Governed canonical supervisory authority contract validation (733.693083ms)
 ℹ tests 116
 ℹ suites 0
 ℹ pass 116
@@ -102,7 +106,7 @@ All 116 unit tests in `@trident/edge` (`dist/offline-iam.test.js`, `dist/enrollm
 ℹ cancelled 0
 ℹ skipped 0
 ℹ todo 0
-ℹ duration_ms 22003.258584
+ℹ duration_ms 21934.5635
 ```
 
 ### Actual Electron Runtime Validation:
@@ -160,9 +164,9 @@ Actual Electron Runtime Tests: 10 total | 10 passed | 0 failed | 0 skipped
 
 ## 5. Security Validation Debt Disposition
 
-| Debt ID | Summary | Target WP | Status in S10-R2 | Truthful Rationale |
+| Debt ID | Summary | Target WP | Status in S10-R3 | Truthful Rationale |
 |---|---|---|---|---|
-| **`SEC-VAL-02`** | Offline IAM brute-force and lockout validation | WP-010 | **`CLOSED`** | Fully validated through genuine execution on live authentication route `POST /api/v1/auth/pin` (`WP010-T22`), supervisor unlock route (`WP010-T26`), public boundary sealing (`WP010-T28`), transaction atomicity & rollback on audit write failure (`WP010-T29`), and full SSOT Section 7/8 role coverage (`WP010-T30`). Zero direct `recordFailure` shortcuts, progressive delays objectively measured ($\ge 2\text{s}$ at attempt 3, $\ge 5\text{s}$ at attempts $\ge 4$), station lockout and SQLite persistence verified, critical audit events verified. |
+| **`SEC-VAL-02`** | Offline IAM brute-force and lockout validation | WP-010 | **`OPEN / PARTIAL — SUPERVISOR AUTHORIZATION AUTHORITY REMEDIATION REQUIRED`** | Brute-force progressive delays, 5-attempt/300s lockout, SQLite persistence, and transactional supervisor unlock & audit rollback are fully validated via live route `POST /api/v1/auth/pin` (`WP010-T22`), supervisor unlock route (`WP010-T26`), boundary sealing (`WP010-T28`), transaction rollback on audit failure (`WP010-T29`), and canonical authority contract (`WP010-T30`). However, per Coordinator directive QI-010-R2-01, final closure of supervisory authorization capability is held as OPEN / PARTIAL pending formal EAAF governance clarification on the canonical RBAC permission literal. |
 | **`SEC-VAL-08`** | Argon2id benchmark on $\le 2\text{ GB}$ RAM target hardware | WP-010 | **`OPEN / PARTIAL — TARGET HARDWARE BENCHMARK REQUIRED`** | Software-constrained benchmark executed and documented ($m=64\text{MB}, t=3, p=4$, latency ~65ms). Preserved as OPEN/PARTIAL per instructions; physical $\le 2\text{ GB}$ RAM POS terminal evidence required during hardware qualification. |
 | **`SEC-VAL-03`** | Target hardware / LAN mDNS & TLS validation | WP-028 | **`OPEN / PARTIAL — TARGET HARDWARE / LAN EVIDENCE REQUIRED`** | Inherited from WP-009; deferred to deployment package WP-028 per governance. |
 
@@ -187,7 +191,7 @@ All nine (9) protected Product Owner decisions remain strictly **`PENDING PO DEC
 
 | Check | Description | Result | Evidence |
 |---|---|---|---|
-| **A** | Canonical baseline lineage | **PASS** | Lineage strictly adheres to `M9` → `880ab561` → `S10` → `S10-R1` → `S10-R2`. |
+| **A** | Canonical baseline lineage | **PASS** | Lineage strictly adheres to `M9` → `880ab561` → `S10` → `S10-R1` → `S10-R2` → `S10-R3`. |
 | **B** | WP-010 scope only | **PASS** | Only `@trident/edge` files and evidence modified; zero premature sync, outbox, or cloud billing code. |
 | **C** | PIN secrecy | **PASS** | `WP010-T03` and `WP010-T04` prove plaintext PIN is never persisted or logged. |
 | **D** | Argon2id conformance | **PASS** | Hash prefix verified as `$argon2id$v=19$m=65536,p=4,t=3$`; bcrypt prohibited. |
@@ -202,7 +206,7 @@ All nine (9) protected Product Owner decisions remain strictly **`PENDING PO DEC
 | **M** | CI exact-SHA binding | **PASS** | `turbo run typecheck lint` and `npm test` execute cleanly across all packages. |
 | **N** | Security scan exact-SHA binding | **PASS** | All cryptographic parameters strictly adhere to IAM_SECURITY_MODEL.md. |
 | **O** | Protected PO decisions unchanged | **PASS** | All 9 decisions preserved as `PENDING PO DECISION`. |
-| **P** | Security-debt disposition truthful | **PASS** | `SEC-VAL-02` closed with genuine evidence; `SEC-VAL-08` preserved as OPEN/PARTIAL. |
+| **P** | Security-debt disposition truthful | **PASS** | `SEC-VAL-02` disposition truthfully updated to `OPEN / PARTIAL — SUPERVISOR AUTHORIZATION AUTHORITY REMEDIATION REQUIRED`; `SEC-VAL-08` preserved as OPEN/PARTIAL. |
 
 ---
 

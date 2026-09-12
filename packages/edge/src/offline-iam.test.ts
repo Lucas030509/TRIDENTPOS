@@ -577,7 +577,7 @@ test('WP010-T12: Governed lockout release behavior (natural expiry and superviso
       organizationId: ctx.organizationId,
       fullName: 'Supervisor Bob',
       pinHash: (superHashRes as { ok: true; value: string }).value,
-      roles: ['SUPERVISOR', 'MANAGER'],
+      roles: ['Gerente', 'Supervisor'],
       credentialVersion: 1,
       issuedAt: baseNow - 100,
       expiresAt: baseNow + 86400,
@@ -1695,7 +1695,7 @@ test('WP010-T29: [QI-010-R1-02] Supervisor unlock atomicity and rollback on audi
   }
 });
 
-test('WP010-T30: [QI-010-R1-03] Supervisory role authority covers full SSOT Section 7 and 8 matrix', async () => {
+test('WP010-T30: [QI-010-R2-01] Governed canonical supervisory authority contract validation', async () => {
   const ctx = await createTestContext('wp010_t30');
   try {
     const baseNow = ctx.trustedTimeManager.getTrustedEffectiveTime();
@@ -1706,19 +1706,22 @@ test('WP010-T30: [QI-010-R1-03] Supervisory role authority covers full SSOT Sect
     assert.equal(pinHashRes.ok, true);
     const pinHash = (pinHashRes as { ok: true; value: string }).value;
 
-    // Authorized supervisory roles per Section 7 (ROLE-001, ROLE-002) and Section 8
-    const authorizedRoles = [
-      ['ADMIN'],
+    // 1. Exact canonical supervisory roles per Section 7 (ROLE-001, ROLE-002) and Section 8 (Administrador, Gerente)
+    // and Section 7 ("ROLE-002 — Gerente / Supervisor") of RESTAURANT_SOFTWARE_RECONSTRUCTION_SPEC.md (v1.1 NORMALIZED).
+    const authorizedCanonicalRoleSets = [
+      ['ROLE-001'],
+      ['ROLE-002'],
+      ['Administrador'],
       ['ADMINISTRADOR'],
+      ['Gerente'],
       ['GERENTE'],
-      ['MANAGER'],
+      ['Supervisor'],
       ['SUPERVISOR'],
-      ['gerente'],
-      ['administrador'],
+      ['ROLE-002', 'Gerente'],
     ];
 
     let userIdCounter = 1;
-    for (const roles of authorizedRoles) {
+    for (const roles of authorizedCanonicalRoleSets) {
       // Lock station
       for (let i = 0; i < 5; i++) {
         lockoutMgr.recordFailure(ctx.stationId, baseNow);
@@ -1742,14 +1745,21 @@ test('WP010-T30: [QI-010-R1-03] Supervisory role authority covers full SSOT Sect
         stationId: ctx.stationId,
         supervisorUserId: uid,
         supervisorPin: superPin,
-        reason: `Authorized role unlock test: ${roles.join(',')}`,
+        reason: `Authorized canonical role unlock test: ${roles.join(',')}`,
       });
       assert.equal(res.success, true);
       assert.equal(lockoutMgr.checkLockout(ctx.stationId, baseNow).isLocked, false);
     }
 
-    // Unauthorized non-supervisory roles fail closed with INSUFFICIENT_PERMISSIONS
+    // 2. Unrelated role codes named ADMIN and MANAGER, plus non-supervisory roles and invented aliases.
+    // MUST fail closed with INSUFFICIENT_PERMISSIONS because they lack canonical SSOT authority mapping.
     const unauthorizedRoleSets = [
+      ['ADMIN'], // Invented alias: must NOT automatically authorize
+      ['admin'],
+      ['MANAGER'], // Invented alias: must NOT automatically authorize
+      ['manager'],
+      ['ROLE-003'], // Cajero (operational)
+      ['ROLE-004'], // Mesero (operational)
       ['CASHIER'],
       ['CAJA'],
       ['WAITER'],
@@ -1786,7 +1796,7 @@ test('WP010-T30: [QI-010-R1-03] Supervisory role authority covers full SSOT Sect
             stationId: ctx.stationId,
             supervisorUserId: uid,
             supervisorPin: superPin,
-            reason: 'Unauthorized unlock attempt',
+            reason: `Unauthorized unlock attempt with roles: ${roles.join(',')}`,
           });
         },
         (err: Error) => {
@@ -1799,6 +1809,43 @@ test('WP010-T30: [QI-010-R1-03] Supervisory role authority covers full SSOT Sect
       // Station must STILL be locked
       assert.equal(lockoutMgr.checkLockout(ctx.stationId, baseNow).isLocked, true);
     }
+
+    // 3. Cross-tenant isolation verification: Supervisor from foreign organization must fail closed
+    for (let i = 0; i < 5; i++) {
+      lockoutMgr.recordFailure(ctx.stationId, baseNow);
+    }
+    assert.equal(lockoutMgr.checkLockout(ctx.stationId, baseNow).isLocked, true);
+
+    const foreignSuperId = '00000000-0000-4000-8000-ffffffffffff';
+    const foreignOrgId = '00000000-0000-4000-b000-ffffffffffff';
+    ctx.persistence.upsertCachedUser({
+      userId: foreignSuperId,
+      organizationId: foreignOrgId, // Cross-tenant
+      fullName: 'Foreign Supervisor',
+      pinHash,
+      roles: ['Administrador', 'ROLE-001'],
+      credentialVersion: 1,
+      issuedAt: baseNow - 100,
+      expiresAt: baseNow + 86400,
+      isRevoked: 0,
+    });
+
+    await assert.rejects(
+      async () => {
+        await ctx.iamService.supervisorUnlockStation({
+          stationId: ctx.stationId,
+          supervisorUserId: foreignSuperId,
+          supervisorPin: superPin,
+          reason: 'Cross-tenant supervisor unlock attempt',
+        });
+      },
+      (err: Error) => {
+        assert.ok(err instanceof OfflineIamError);
+        assert.equal(err.code, 'AUTHENTICATION_FAILED');
+        return true;
+      },
+    );
+    assert.equal(lockoutMgr.checkLockout(ctx.stationId, baseNow).isLocked, true);
   } finally {
     ctx.cleanup();
   }
