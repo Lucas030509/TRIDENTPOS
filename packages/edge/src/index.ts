@@ -52,3 +52,6 @@ export * from './db/index.js';
 
 // Re-export Edge Enrollment & Trust Bootstrap (WP-009)
 export * from './enrollment/index.js';
+
+// Re-export Edge Offline IAM & Floor PIN Authentication Engine (WP-010)
+export * from './iam/index.js';
