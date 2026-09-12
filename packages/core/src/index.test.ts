@@ -32,7 +32,11 @@ import {
   createCloudCheckpoint,
   verifyCloudCheckpoint,
   type AuditLogEventRecord,
+  formatIdempotencyKey,
+  canonicalizeIdempotencyPayload,
 } from './index.js';
+import * as core from './index.js';
+import { TestCloudReceiptIssuer, TestCloudReceiptVerifier } from './test-support.js';
 
 describe('@trident/core Foundation', () => {
   it('package info returns expected metadata', () => {
@@ -884,5 +888,81 @@ describe('TRIDENTPOS WP-006 Audit Trail Verification & Cloud Checkpoint Suite', 
 
     // Tampered chain must fail checkpoint verification
     assert.equal(verifyCloudCheckpoint(checkpoint, chain), false);
+  });
+});
+
+describe('TRIDENTPOS WP-012 Idempotency Identity & Trust Provider Boundary Suite', () => {
+  it('WP012-R1-T47: Two delimiter-ambiguous logical tuples MUST produce distinct idempotency identities', () => {
+    // Delimiter collision scenario with colon:
+    // Tuple 1: aggregateType = "A:B", aggregateId = "C"
+    // Tuple 2: aggregateType = "A", aggregateId = "B:C"
+    const tuple1 = {
+      orgId: 'org_1',
+      branchId: 'branch_1',
+      aggregateType: 'A:B',
+      aggregateId: 'C',
+      action: 'UPDATE',
+      clientOpId: '00000000-0000-4000-8000-000000000001',
+    };
+
+    const tuple2 = {
+      orgId: 'org_1',
+      branchId: 'branch_1',
+      aggregateType: 'A',
+      aggregateId: 'B:C',
+      action: 'UPDATE',
+      clientOpId: '00000000-0000-4000-8000-000000000001',
+    };
+
+    const canonical1 = canonicalizeIdempotencyPayload(tuple1);
+    const canonical2 = canonicalizeIdempotencyPayload(tuple2);
+    assert.notEqual(canonical1, canonical2, 'Canonical payloads must not collide');
+
+    const key1 = formatIdempotencyKey(tuple1);
+    const key2 = formatIdempotencyKey(tuple2);
+    assert.notEqual(key1, key2, 'SHA-256 idempotency keys must be completely distinct');
+    assert.equal(key1.length, 64);
+    assert.equal(key2.length, 64);
+  });
+
+  it('TestCloudReceiptIssuer and TestCloudReceiptVerifier verify authentic receipts and reject forged receipts', () => {
+    const issuer = new TestCloudReceiptIssuer('secret-123');
+    const verifier = new TestCloudReceiptVerifier('secret-123');
+    const attackerVerifier = new TestCloudReceiptVerifier('wrong-secret');
+
+    const context = {
+      organizationId: 'org_1',
+      branchId: 'br_1',
+      clientOpId: '00000000-0000-4000-8000-000000000001',
+      aggregateSequenceNumber: 1,
+    };
+
+    const receipt = issuer.issueReceipt(context);
+    assert.ok(receipt.receiptId);
+    assert.ok(receipt.serverSignature);
+
+    // Authentic receipt verifies
+    assert.equal(verifier.verifyReceipt(receipt, context), true);
+
+    // Wrong secret rejects
+    assert.equal(attackerVerifier.verifyReceipt(receipt, context), false);
+
+    // Forged arbitrary signature rejects
+    const forgedReceipt = { ...receipt, serverSignature: 'a'.repeat(64) };
+    assert.equal(verifier.verifyReceipt(forgedReceipt, context), false);
+
+    // Mismatched context rejects
+    assert.equal(
+      verifier.verifyReceipt(receipt, {
+        ...context,
+        clientOpId: '00000000-0000-4000-8000-000000000002',
+      }),
+      false,
+    );
+  });
+
+  it('WP012-R2-T66: Normal production public API does not export TestCloudReceiptIssuer or TestCloudReceiptVerifier', () => {
+    assert.equal((core as Record<string, unknown>)['TestCloudReceiptIssuer'], undefined);
+    assert.equal((core as Record<string, unknown>)['TestCloudReceiptVerifier'], undefined);
   });
 });

@@ -19,7 +19,7 @@
     "build": "tsc -b",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src/",
-    "test": "node --test dist/index.test.js",
+    "test": "node --test dist/index.test.js dist/ingestion.test.js",
     "clean": "rm -rf dist"
   }
 }

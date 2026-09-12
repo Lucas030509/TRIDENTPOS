@@ -7,3 +7,4 @@ export * from './tenant.js';
 export * from './iam.js';
 export * from './audit.js';
 export * from './leases.js';
+export * from './outbox/index.js';

@@ -89,3 +89,10 @@ export interface ICloudLeaseService {
     activeEpoch: string;
   }>;
 }
+
+export interface ISyncBatchProcessor {
+  processBatch(
+    auth: AuthContext,
+    batch: import('@trident/core').SyncBatchDTO,
+  ): Promise<import('@trident/core').SyncBatchAckDTO>;
+}

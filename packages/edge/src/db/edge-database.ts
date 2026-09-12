@@ -24,6 +24,7 @@ import {
 import { WriteSerializer } from './write-serializer.js';
 import { WalCheckpointManager } from './wal-manager.js';
 import { registerTestNativeDatabase } from './test-access.js';
+import { registerInternalOutboxAdapter } from './internal-outbox-adapter.js';
 
 export class EdgeDatabaseService {
   readonly #db: Database.Database;
@@ -71,6 +72,18 @@ export class EdgeDatabaseService {
 
     // Register in module-private test registry (not reachable from instance/prototype reflection)
     registerTestNativeDatabase(this, this.#db);
+
+    // Register in module-internal outbox adapter (strictly internal to @trident/edge)
+    registerInternalOutboxAdapter(this, {
+      exec: (sql: string) => {
+        this.assertOpen();
+        this.#db.exec(sql);
+      },
+      prepare: (sql: string) => {
+        this.assertOpen();
+        return this.#db.prepare(sql);
+      },
+    });
 
     // 3. Configure baseline PRAGMAs
     try {

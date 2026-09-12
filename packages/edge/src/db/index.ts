@@ -7,3 +7,4 @@ export * from './types.js';
 export * from './write-serializer.js';
 export * from './wal-manager.js';
 export * from './edge-database.js';
+export * from './outbox-persistence.js';
