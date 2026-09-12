@@ -25,3 +25,6 @@ export function getSyncPackageInfo(): SyncPackageInfo {
 export * from './types.js';
 export * from './router.js';
 export * from './sync-ingestion-router.js';
+export * from './stream-gateway.js';
+export * from './edge-client.js';
+export * from './catalog-delta-service.js';

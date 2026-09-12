@@ -96,3 +96,11 @@ export interface ISyncBatchProcessor {
     batch: import('@trident/core').SyncBatchDTO,
   ): Promise<import('@trident/core').SyncBatchAckDTO>;
 }
+
+export interface IDownstreamDeltaProvider {
+  getCatalogDeltas(
+    auth: AuthContext,
+    request: import('@trident/core').CatalogDeltaRequest,
+  ): Promise<import('@trident/core').CatalogDeltaResponse>;
+}
+

@@ -328,3 +328,174 @@ export const ERROR_CODE_INVALID_SYNC_PAYLOAD = 'INVALID_SYNC_PAYLOAD';
 export const ERROR_CODE_NON_RETRYABLE_ERROR = 'NON_RETRYABLE_ERROR';
 export const ERROR_CODE_OUTBOX_DISPATCH_FAILED = 'OUTBOX_DISPATCH_FAILED';
 export const ERROR_CODE_STALE_CLAIM = 'STALE_CLAIM';
+export const ERROR_CODE_SYNC_KILL_SWITCH_ENGAGED = 'SYNC_KILL_SWITCH_ENGAGED';
+export const ERROR_CODE_DELTA_CHECKSUM_MISMATCH = 'DELTA_CHECKSUM_MISMATCH';
+export const ERROR_CODE_SYNC_STREAM_DISCONNECTED = 'SYNC_STREAM_DISCONNECTED';
+export const ERROR_CODE_MALFORMED_STREAM_MESSAGE = 'MALFORMED_STREAM_MESSAGE';
+
+// ---------------------------------------------------------------------------
+// WP-013: Bidirectional WebSocket Sync Stream Framing (ADR-005 / Sec. 4)
+// ---------------------------------------------------------------------------
+
+export type SyncStreamMessageType =
+  | 'UPSTREAM_BATCH'
+  | 'UPSTREAM_ACK'
+  | 'DOWNSTREAM_DELTA_REQUEST'
+  | 'DOWNSTREAM_DELTA_RESPONSE'
+  | 'HEARTBEAT_PING'
+  | 'HEARTBEAT_PONG'
+  | 'SYNC_STATUS'
+  | 'KILL_SWITCH_COMMAND'
+  | 'SYNC_ERROR';
+
+export interface SyncStreamMessage<T = unknown> {
+  readonly messageId: string;
+  readonly type: SyncStreamMessageType;
+  readonly organizationId: string;
+  readonly branchId: string;
+  readonly timestamp: string;
+  readonly payload: T;
+}
+
+export function createSyncStreamMessage<T>(
+  type: SyncStreamMessageType,
+  organizationId: string,
+  branchId: string,
+  payload: T,
+  messageId?: string,
+): SyncStreamMessage<T> {
+  return {
+    messageId: messageId ?? crypto.randomUUID(),
+    type,
+    organizationId,
+    branchId,
+    timestamp: new Date().toISOString(),
+    payload,
+  };
+}
+
+export function isValidSyncStreamMessage(msg: unknown): msg is SyncStreamMessage {
+  if (!msg || typeof msg !== 'object') return false;
+  const m = msg as Record<string, unknown>;
+  return (
+    typeof m.messageId === 'string' &&
+    isValidUuidV4(m.messageId) &&
+    typeof m.type === 'string' &&
+    typeof m.organizationId === 'string' &&
+    isValidUuidV4(m.organizationId) &&
+    typeof m.branchId === 'string' &&
+    isValidUuidV4(m.branchId) &&
+    typeof m.timestamp === 'string' &&
+    'payload' in m
+  );
+}
+
+// ---------------------------------------------------------------------------
+// WP-013: Delta-Pull Protocol for Catalog Updates (SYNC_AND_OFFLINE Sec. 4)
+// ---------------------------------------------------------------------------
+
+export interface CatalogDeltaEntity {
+  readonly entityType: string;
+  readonly entityId: string;
+  readonly action: 'UPSERT' | 'DELETE';
+  readonly data: Record<string, unknown>;
+  readonly version: number;
+}
+
+export interface CatalogDeltaRequest {
+  readonly sinceSnapshotVersion: number;
+  readonly categories?: readonly string[];
+}
+
+export interface CatalogDeltaResponse {
+  readonly snapshotVersion: number;
+  readonly deltaVersion: number;
+  readonly checksum: string; // SHA-256 over canonical entities
+  readonly entities: readonly CatalogDeltaEntity[];
+  readonly hasMore: boolean;
+}
+
+export function computeCatalogDeltaChecksum(entities: readonly CatalogDeltaEntity[]): string {
+  const sorted = [...entities].sort((a, b) => {
+    const keyA = `${a.entityType}:${a.entityId}:${a.version}`;
+    const keyB = `${b.entityType}:${b.entityId}:${b.version}`;
+    return keyA.localeCompare(keyB);
+  });
+  const canonical = JSON.stringify(
+    sorted.map((e) => [e.entityType, e.entityId, e.action, e.version, e.data]),
+  );
+  return crypto.createHash('sha256').update(canonical, 'utf8').digest('hex');
+}
+
+// ---------------------------------------------------------------------------
+// WP-013: Sync Checkpoints & Telemetry Data Objects
+// ---------------------------------------------------------------------------
+
+export interface SyncCheckpointRecord {
+  readonly id: string;
+  readonly organizationId: string;
+  readonly branchId: string;
+  readonly streamType: string; // 'OUTBOX_INGESTION' | 'CATALOG_DELTA'
+  readonly checkpointType: string;
+  readonly lastSyncedSequence: number;
+  readonly lastSnapshotVersion: number;
+  readonly lastSyncTimestamp: string;
+  readonly metadata?: Record<string, unknown>;
+  readonly createdAt?: string;
+  readonly updatedAt?: string;
+}
+
+export type SyncTelemetryEventType =
+  | 'WAN_DISCONNECTED'
+  | 'WAN_RECONNECTED'
+  | 'OUTBOX_DRAINED'
+  | 'DELTA_PULLED'
+  | 'SYNC_ERROR'
+  | 'HEARTBEAT_FAILED'
+  | 'KILL_SWITCH_ENGAGED'
+  | 'KILL_SWITCH_DISENGAGED';
+
+export interface SyncTelemetryEvent {
+  readonly id?: string;
+  readonly organizationId: string;
+  readonly branchId: string;
+  readonly eventType: SyncTelemetryEventType;
+  readonly durationMs?: number | null;
+  readonly recordsCount: number;
+  readonly details?: Record<string, unknown>;
+  readonly occurredAt?: string;
+}
+
+// ---------------------------------------------------------------------------
+// WP-013: Feature Flag / Kill Switch & Connection Lifecycle
+// ---------------------------------------------------------------------------
+
+export interface SyncEngineKillSwitch {
+  readonly enabled: boolean; // true = sync active; false = kill switch engaged (sync halted)
+  readonly reason?: string | null;
+  readonly updatedAt: string;
+  readonly updatedBy?: string | null;
+}
+
+export type SyncConnectionState =
+  | 'DISCONNECTED'
+  | 'CONNECTING'
+  | 'CONNECTED'
+  | 'RECONNECTING'
+  | 'DISABLED';
+
+export interface SyncReconnectConfig {
+  readonly baseDelayMs: number;
+  readonly maxDelayMs: number;
+  readonly heartbeatIntervalMs: number;
+  readonly heartbeatTimeoutMs: number;
+  readonly maxReconnectAttempts?: number;
+}
+
+export const DEFAULT_SYNC_RECONNECT_CONFIG: SyncReconnectConfig = {
+  baseDelayMs: 1000,
+  maxDelayMs: 30000,
+  heartbeatIntervalMs: 5000, // 5 seconds per ADR-005
+  heartbeatTimeoutMs: 10000,
+};
+

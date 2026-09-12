@@ -61,6 +61,8 @@ describe('TRIDENTPOS WP-003 PostgreSQL Migration Engine Integration Suite', () =
     try {
       await client.query(`
         DROP TABLE IF EXISTS
+          sync_telemetry,
+          sync_checkpoints,
           wp012_test_domain_fixtures,
           cloud_integration_dlq,
           cloud_integration_outbox,

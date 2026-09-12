@@ -13,13 +13,17 @@
     }
   },
   "dependencies": {
-    "@trident/core": "*"
+    "@trident/core": "*",
+    "ws": "^8.21.3"
   },
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src/",
-    "test": "node --test dist/index.test.js dist/ingestion.test.js",
+    "test": "node --test dist/index.test.js dist/ingestion.test.js dist/stream.test.js",
     "clean": "rm -rf dist"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.1"
   }
 }
