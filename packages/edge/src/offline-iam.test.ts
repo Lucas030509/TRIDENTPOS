@@ -577,7 +577,7 @@ test('WP010-T12: Governed lockout release behavior (natural expiry and superviso
       organizationId: ctx.organizationId,
       fullName: 'Supervisor Bob',
       pinHash: (superHashRes as { ok: true; value: string }).value,
-      roles: ['Gerente', 'Supervisor'],
+      roles: ['estacion.desbloquear'],
       credentialVersion: 1,
       issuedAt: baseNow - 100,
       expiresAt: baseNow + 86400,
@@ -1216,7 +1216,7 @@ test('WP010-T26: [QI-010-02] Supervisor unlock authorization fails closed and pr
       organizationId: ctx.organizationId,
       fullName: 'Supervisor Alice',
       pinHash: validSupervisorPinHash,
-      roles: ['SUPERVISOR'],
+      roles: ['estacion.desbloquear'],
       credentialVersion: 1,
       issuedAt: baseNow - 100,
       expiresAt: baseNow + 86400,
@@ -1302,7 +1302,7 @@ test('WP010-T26: [QI-010-02] Supervisor unlock authorization fails closed and pr
       organizationId: ctx.organizationId,
       fullName: 'Revoked Supervisor',
       pinHash: validSupervisorPinHash,
-      roles: ['SUPERVISOR'],
+      roles: ['estacion.desbloquear'],
       credentialVersion: 1,
       issuedAt: baseNow - 100,
       expiresAt: baseNow + 86400,
@@ -1332,7 +1332,7 @@ test('WP010-T26: [QI-010-02] Supervisor unlock authorization fails closed and pr
       organizationId: '00000000-0000-4000-8000-999999999997',
       fullName: 'Cross Org Supervisor',
       pinHash: validSupervisorPinHash,
-      roles: ['SUPERVISOR'],
+      roles: ['estacion.desbloquear'],
       credentialVersion: 1,
       issuedAt: baseNow - 100,
       expiresAt: baseNow + 86400,
@@ -1362,7 +1362,7 @@ test('WP010-T26: [QI-010-02] Supervisor unlock authorization fails closed and pr
       organizationId: ctx.organizationId,
       fullName: 'Expired Supervisor',
       pinHash: validSupervisorPinHash,
-      roles: ['SUPERVISOR'],
+      roles: ['estacion.desbloquear'],
       credentialVersion: 1,
       issuedAt: baseNow - 86400,
       expiresAt: baseNow - 10,
@@ -1392,7 +1392,7 @@ test('WP010-T26: [QI-010-02] Supervisor unlock authorization fails closed and pr
       organizationId: ctx.organizationId,
       fullName: 'Corrupt Supervisor',
       pinHash: 'plain_md5_hash_not_argon',
-      roles: ['SUPERVISOR'],
+      roles: ['estacion.desbloquear'],
       credentialVersion: 1,
       issuedAt: baseNow - 100,
       expiresAt: baseNow + 86400,
@@ -1615,7 +1615,7 @@ test('WP010-T29: [QI-010-R1-02] Supervisor unlock atomicity and rollback on audi
       organizationId: ctx.organizationId,
       fullName: 'Supervisor Unit',
       pinHash: (superHashRes as { ok: true; value: string }).value,
-      roles: ['SUPERVISOR'],
+      roles: ['estacion.desbloquear'],
       credentialVersion: 1,
       issuedAt: baseNow - 100,
       expiresAt: baseNow + 86400,
@@ -1652,10 +1652,10 @@ test('WP010-T29: [QI-010-R1-02] Supervisor unlock atomicity and rollback on audi
     assert.ok(lockoutRow.locked_until > baseNow, 'Lock timestamp must remain active');
     assert.equal(lockoutMgr.checkLockout(ctx.stationId, baseNow).isLocked, true);
 
-    // - Zero audit records for StationUnlockedBySupervisor or SUPERVISOR_UNLOCK
+    // - Zero audit records for SupervisorStationUnlocked or SUPERVISOR_UNLOCK
     const auditRows = nativeDb
       .prepare(
-        "SELECT COUNT(*) as count FROM edge_security_audit WHERE event_type = 'StationUnlockedBySupervisor' OR action = 'SUPERVISOR_UNLOCK'",
+        "SELECT COUNT(*) as count FROM edge_security_audit WHERE event_type = 'SupervisorStationUnlocked' OR action = 'SUPERVISOR_UNLOCK'",
       )
       .get() as { count: number };
     assert.equal(auditRows.count, 0, 'Zero supervisor unlock audit records after rollback');
@@ -1686,7 +1686,7 @@ test('WP010-T29: [QI-010-R1-02] Supervisor unlock atomicity and rollback on audi
     // - Exactly one audit record committed
     const finalAuditRows = nativeDb
       .prepare(
-        "SELECT COUNT(*) as count FROM edge_security_audit WHERE event_type = 'StationUnlockedBySupervisor'",
+        "SELECT COUNT(*) as count FROM edge_security_audit WHERE event_type = 'SupervisorStationUnlocked'",
       )
       .get() as { count: number };
     assert.equal(finalAuditRows.count, 1, 'Exactly one supervisor unlock audit record');
@@ -1695,46 +1695,38 @@ test('WP010-T29: [QI-010-R1-02] Supervisor unlock atomicity and rollback on audi
   }
 });
 
-test('WP010-T30: [QI-010-R2-01] Governed canonical supervisory authority contract validation', async () => {
+test('WP010-T30: [ACR-2026-012 / QI-010-R2-01] Definitive canonical RBAC permission estacion.desbloquear and transitional fallback authorization', async () => {
   const ctx = await createTestContext('wp010_t30');
   try {
     const baseNow = ctx.trustedTimeManager.getTrustedEffectiveTime();
     const lockoutMgr = getTestInternals(ctx.iamService).lockoutManager;
+    const nativeDb = getTestNativeDatabase(ctx.edgeDb);
 
     const superPin = '4321';
     const pinHashRes = await hashBranchPin(superPin);
     assert.equal(pinHashRes.ok, true);
     const pinHash = (pinHashRes as { ok: true; value: string }).value;
 
-    // 1. Exact canonical supervisory roles per Section 7 (ROLE-001, ROLE-002) and Section 8 (Administrador, Gerente)
-    // and Section 7 ("ROLE-002 — Gerente / Supervisor") of RESTAURANT_SOFTWARE_RECONSTRUCTION_SPEC.md (v1.1 NORMALIZED).
-    const authorizedCanonicalRoleSets = [
-      ['ROLE-001'],
-      ['ROLE-002'],
-      ['Administrador'],
-      ['ADMINISTRADOR'],
-      ['Gerente'],
-      ['GERENTE'],
-      ['Supervisor'],
-      ['SUPERVISOR'],
-      ['ROLE-002', 'Gerente'],
-    ];
+    let userIndex = 1;
+    const getNextUserId = () => `00000000-0000-4000-8000-${String(userIndex++).padStart(12, '0')}`;
 
-    let userIdCounter = 1;
-    for (const roles of authorizedCanonicalRoleSets) {
-      // Lock station
+    const lockStation = () => {
       for (let i = 0; i < 5; i++) {
         lockoutMgr.recordFailure(ctx.stationId, baseNow);
       }
       assert.equal(lockoutMgr.checkLockout(ctx.stationId, baseNow).isLocked, true);
+    };
 
-      const uid = `00000000-0000-4000-8000-${String(userIdCounter++).padStart(12, '0')}`;
+    // 1. User with custom role having estacion.desbloquear unlocks locked station successfully.
+    {
+      lockStation();
+      const uid = getNextUserId();
       ctx.persistence.upsertCachedUser({
         userId: uid,
         organizationId: ctx.organizationId,
-        fullName: `Super User ${roles.join(',')}`,
+        fullName: 'Custom Role Permitted User',
         pinHash,
-        roles,
+        roles: ['CUSTOM_ROLE_AUDITOR', 'estacion.desbloquear'],
         credentialVersion: 1,
         issuedAt: baseNow - 100,
         expiresAt: baseNow + 86400,
@@ -1745,45 +1737,110 @@ test('WP010-T30: [QI-010-R2-01] Governed canonical supervisory authority contrac
         stationId: ctx.stationId,
         supervisorUserId: uid,
         supervisorPin: superPin,
-        reason: `Authorized canonical role unlock test: ${roles.join(',')}`,
+        reason: 'Condition 1: custom role with estacion.desbloquear',
+      });
+      assert.equal(res.success, true);
+      assert.equal(lockoutMgr.checkLockout(ctx.stationId, baseNow).isLocked, false);
+
+      // Verify audit
+      const audits = nativeDb
+        .prepare(
+          "SELECT * FROM edge_security_audit WHERE event_type = 'SupervisorStationUnlocked' AND station_id = ?",
+        )
+        .all(ctx.stationId) as Array<{ action: string; metadata_json: string }>;
+      const audit = audits.find((row) => row.metadata_json.includes(uid));
+      assert.ok(audit, 'SupervisorStationUnlocked audit must exist');
+      assert.equal(audit.action, 'SUPERVISOR_UNLOCK');
+      const meta = JSON.parse(audit.metadata_json);
+      assert.equal(meta.actorId, uid);
+      assert.equal(meta.success, 1);
+      assert.ok(meta.reason.includes('Condition 1: custom role with estacion.desbloquear'));
+    }
+
+    // 2. User with ROLE-001 (without explicit permission string) unlocks locked station successfully (transitional fallback).
+    {
+      lockStation();
+      const uid = getNextUserId();
+      ctx.persistence.upsertCachedUser({
+        userId: uid,
+        organizationId: ctx.organizationId,
+        fullName: 'Transitional Role-001 User',
+        pinHash,
+        roles: ['ROLE-001'],
+        credentialVersion: 1,
+        issuedAt: baseNow - 100,
+        expiresAt: baseNow + 86400,
+        isRevoked: 0,
+      });
+
+      const res = await ctx.iamService.supervisorUnlockStation({
+        stationId: ctx.stationId,
+        supervisorUserId: uid,
+        supervisorPin: superPin,
+        reason: 'Condition 2: ROLE-001 transitional fallback',
       });
       assert.equal(res.success, true);
       assert.equal(lockoutMgr.checkLockout(ctx.stationId, baseNow).isLocked, false);
     }
 
-    // 2. Unrelated role codes named ADMIN and MANAGER, plus non-supervisory roles and invented aliases.
-    // MUST fail closed with INSUFFICIENT_PERMISSIONS because they lack canonical SSOT authority mapping.
-    const unauthorizedRoleSets = [
-      ['ADMIN'], // Invented alias: must NOT automatically authorize
-      ['admin'],
-      ['MANAGER'], // Invented alias: must NOT automatically authorize
-      ['manager'],
-      ['ROLE-003'], // Cajero (operational)
-      ['ROLE-004'], // Mesero (operational)
-      ['CASHIER'],
-      ['CAJA'],
-      ['WAITER'],
-      ['MESERO'],
-      ['COCINA'],
-      ['KITCHEN'],
-      ['STAFF'],
-      ['GUEST'],
-    ];
-
-    for (const roles of unauthorizedRoleSets) {
-      // Lock station
-      for (let i = 0; i < 5; i++) {
-        lockoutMgr.recordFailure(ctx.stationId, baseNow);
-      }
-      assert.equal(lockoutMgr.checkLockout(ctx.stationId, baseNow).isLocked, true);
-
-      const uid = `00000000-0000-4000-8000-${String(userIdCounter++).padStart(12, '0')}`;
+    // 3. User with ROLE-002 (without explicit permission string) unlocks locked station successfully (transitional fallback).
+    {
+      lockStation();
+      const uid = getNextUserId();
       ctx.persistence.upsertCachedUser({
         userId: uid,
         organizationId: ctx.organizationId,
-        fullName: `Unauthorized User ${roles.join(',')}`,
+        fullName: 'Transitional Role-002 User',
         pinHash,
-        roles,
+        roles: ['ROLE-002'],
+        credentialVersion: 1,
+        issuedAt: baseNow - 100,
+        expiresAt: baseNow + 86400,
+        isRevoked: 0,
+      });
+
+      const res = await ctx.iamService.supervisorUnlockStation({
+        stationId: ctx.stationId,
+        supervisorUserId: uid,
+        supervisorPin: superPin,
+        reason: 'Condition 3: ROLE-002 transitional fallback',
+      });
+      assert.equal(res.success, true);
+      assert.equal(lockoutMgr.checkLockout(ctx.stationId, baseNow).isLocked, false);
+    }
+
+    // Conditions 4 through 9: Denials of display-names / aliases without estacion.desbloquear or ROLE-001/002
+    // 4. ADMIN alone
+    // 5. MANAGER alone
+    // 6. ADMINISTRADOR alone (display name alias without capability)
+    // 7. GERENTE alone
+    // 8. SUPERVISOR alone
+    // 9. Cajero / Mesero / STAFF alone
+    const unauthorizedRoleScenarios = [
+      { name: 'ADMIN alone', roles: ['ADMIN'] },
+      { name: 'MANAGER alone', roles: ['MANAGER'] },
+      { name: 'ADMINISTRADOR alone', roles: ['ADMINISTRADOR'] },
+      { name: 'administrador lowercase', roles: ['administrador'] },
+      { name: 'GERENTE alone', roles: ['GERENTE'] },
+      { name: 'gerente lowercase', roles: ['gerente'] },
+      { name: 'SUPERVISOR alone', roles: ['SUPERVISOR'] },
+      { name: 'supervisor lowercase', roles: ['supervisor'] },
+      { name: 'Cajero alone', roles: ['Cajero'] },
+      { name: 'Mesero alone', roles: ['Mesero'] },
+      { name: 'STAFF alone', roles: ['STAFF'] },
+      { name: 'ROLE-003 Cajero alone', roles: ['ROLE-003'] },
+      { name: 'ROLE-004 Mesero alone', roles: ['ROLE-004'] },
+    ];
+
+    for (const scenario of unauthorizedRoleScenarios) {
+      lockStation();
+      const uid = getNextUserId();
+      ctx.persistence.upsertCachedUser({
+        userId: uid,
+        organizationId: ctx.organizationId,
+        fullName: `Unauthorized ${scenario.name}`,
+        pinHash,
+        roles: scenario.roles,
         credentialVersion: 1,
         issuedAt: baseNow - 100,
         expiresAt: baseNow + 86400,
@@ -1796,7 +1853,7 @@ test('WP010-T30: [QI-010-R2-01] Governed canonical supervisory authority contrac
             stationId: ctx.stationId,
             supervisorUserId: uid,
             supervisorPin: superPin,
-            reason: `Unauthorized unlock attempt with roles: ${roles.join(',')}`,
+            reason: `Attempt by ${scenario.name}`,
           });
         },
         (err: Error) => {
@@ -1806,46 +1863,355 @@ test('WP010-T30: [QI-010-R2-01] Governed canonical supervisory authority contrac
         },
       );
 
-      // Station must STILL be locked
+      // Station MUST remain locked
+      assert.equal(
+        lockoutMgr.checkLockout(ctx.stationId, baseNow).isLocked,
+        true,
+        `Station must remain locked after rejection of ${scenario.name}`,
+      );
+    }
+
+    // 10. User with estacion.desbloquear from a DIFFERENT organization (cross-tenant) is DENIED and station remains locked
+    {
+      lockStation();
+      const foreignUid = getNextUserId();
+      const foreignOrgId = '00000000-0000-4000-9999-000000000099';
+      ctx.persistence.upsertCachedUser({
+        userId: foreignUid,
+        organizationId: foreignOrgId,
+        fullName: 'Cross-Tenant Supervisor',
+        pinHash,
+        roles: ['estacion.desbloquear'],
+        credentialVersion: 1,
+        issuedAt: baseNow - 100,
+        expiresAt: baseNow + 86400,
+        isRevoked: 0,
+      });
+
+      await assert.rejects(
+        async () => {
+          await ctx.iamService.supervisorUnlockStation({
+            stationId: ctx.stationId,
+            supervisorUserId: foreignUid,
+            supervisorPin: superPin,
+            reason: 'Cross-tenant unlock attempt',
+          });
+        },
+        (err: Error) => {
+          assert.ok(err instanceof OfflineIamError);
+          assert.equal(err.code, 'AUTHENTICATION_FAILED');
+          return true;
+        },
+      );
       assert.equal(lockoutMgr.checkLockout(ctx.stationId, baseNow).isLocked, true);
     }
 
-    // 3. Cross-tenant isolation verification: Supervisor from foreign organization must fail closed
-    for (let i = 0; i < 5; i++) {
-      lockoutMgr.recordFailure(ctx.stationId, baseNow);
+    // 11. User with estacion.desbloquear whose credential is REVOKED is DENIED and station remains locked
+    {
+      lockStation();
+      const revokedUid = getNextUserId();
+      ctx.persistence.upsertCachedUser({
+        userId: revokedUid,
+        organizationId: ctx.organizationId,
+        fullName: 'Revoked Supervisor',
+        pinHash,
+        roles: ['estacion.desbloquear'],
+        credentialVersion: 1,
+        issuedAt: baseNow - 100,
+        expiresAt: baseNow + 86400,
+        isRevoked: 1,
+      });
+
+      await assert.rejects(
+        async () => {
+          await ctx.iamService.supervisorUnlockStation({
+            stationId: ctx.stationId,
+            supervisorUserId: revokedUid,
+            supervisorPin: superPin,
+            reason: 'Revoked credential unlock attempt',
+          });
+        },
+        (err: Error) => {
+          assert.ok(err instanceof OfflineIamError);
+          assert.equal(err.code, 'AUTHENTICATION_FAILED');
+          return true;
+        },
+      );
+      assert.equal(lockoutMgr.checkLockout(ctx.stationId, baseNow).isLocked, true);
     }
-    assert.equal(lockoutMgr.checkLockout(ctx.stationId, baseNow).isLocked, true);
 
-    const foreignSuperId = '00000000-0000-4000-8000-ffffffffffff';
-    const foreignOrgId = '00000000-0000-4000-b000-ffffffffffff';
-    ctx.persistence.upsertCachedUser({
-      userId: foreignSuperId,
-      organizationId: foreignOrgId, // Cross-tenant
-      fullName: 'Foreign Supervisor',
-      pinHash,
-      roles: ['Administrador', 'ROLE-001'],
-      credentialVersion: 1,
-      issuedAt: baseNow - 100,
-      expiresAt: baseNow + 86400,
-      isRevoked: 0,
-    });
+    // 12. User with estacion.desbloquear whose credential is EXPIRED is DENIED and station remains locked
+    {
+      lockStation();
+      const expiredUid = getNextUserId();
+      ctx.persistence.upsertCachedUser({
+        userId: expiredUid,
+        organizationId: ctx.organizationId,
+        fullName: 'Expired Supervisor',
+        pinHash,
+        roles: ['estacion.desbloquear'],
+        credentialVersion: 1,
+        issuedAt: baseNow - 86400,
+        expiresAt: baseNow - 60,
+        isRevoked: 0,
+      });
 
-    await assert.rejects(
-      async () => {
+      await assert.rejects(
+        async () => {
+          await ctx.iamService.supervisorUnlockStation({
+            stationId: ctx.stationId,
+            supervisorUserId: expiredUid,
+            supervisorPin: superPin,
+            reason: 'Expired credential unlock attempt',
+          });
+        },
+        (err: Error) => {
+          assert.ok(err instanceof OfflineIamError);
+          assert.equal(err.code, 'CREDENTIAL_EXPIRED');
+          return true;
+        },
+      );
+      assert.equal(lockoutMgr.checkLockout(ctx.stationId, baseNow).isLocked, true);
+    }
+
+    // 13. User with corrupt roles_json in DB is DENIED (fails closed) and station remains locked
+    {
+      lockStation();
+      const corruptUid = getNextUserId();
+      nativeDb
+        .prepare(
+          `INSERT INTO cached_users (
+            user_id, organization_id, full_name, pin_hash, roles_json,
+            credential_version, issued_at, expires_at, is_revoked
+          ) VALUES (?, ?, 'Corrupt User', ?, '{"not":"an_array"}', 1, ?, ?, 0)`,
+        )
+        .run(
+          corruptUid,
+          ctx.organizationId,
+          pinHash,
+          String(baseNow - 100),
+          String(baseNow + 86400),
+        );
+
+      await assert.rejects(
+        async () => {
+          await ctx.iamService.supervisorUnlockStation({
+            stationId: ctx.stationId,
+            supervisorUserId: corruptUid,
+            supervisorPin: superPin,
+            reason: 'Corrupt roles unlock attempt',
+          });
+        },
+        (err: Error) => {
+          assert.ok(err instanceof OfflineIamError);
+          assert.equal(err.code, 'CREDENTIAL_CORRUPT');
+          return true;
+        },
+      );
+      assert.equal(lockoutMgr.checkLockout(ctx.stationId, baseNow).isLocked, true);
+    }
+
+    // 14. Audit log verification: On every successful unlock, verify exactly one SupervisorStationUnlocked event
+    // is recorded with action SUPERVISOR_UNLOCK, station_id, actor_id, success = 1, and reason.
+    {
+      const initialCount = (
+        nativeDb
+          .prepare(
+            "SELECT COUNT(*) as count FROM edge_security_audit WHERE event_type = 'SupervisorStationUnlocked'",
+          )
+          .get() as { count: number }
+      ).count;
+
+      lockStation();
+      const validUid = getNextUserId();
+      ctx.persistence.upsertCachedUser({
+        userId: validUid,
+        organizationId: ctx.organizationId,
+        fullName: 'Audit Test Supervisor',
+        pinHash,
+        roles: ['estacion.desbloquear'],
+        credentialVersion: 1,
+        issuedAt: baseNow - 100,
+        expiresAt: baseNow + 86400,
+        isRevoked: 0,
+      });
+
+      const auditReason = 'Definitive audit check unlock reason';
+      const unlockRes = await ctx.iamService.supervisorUnlockStation({
+        stationId: ctx.stationId,
+        supervisorUserId: validUid,
+        supervisorPin: superPin,
+        reason: auditReason,
+      });
+      assert.equal(unlockRes.success, true);
+
+      const postCount = (
+        nativeDb
+          .prepare(
+            "SELECT COUNT(*) as count FROM edge_security_audit WHERE event_type = 'SupervisorStationUnlocked'",
+          )
+          .get() as { count: number }
+      ).count;
+      assert.equal(postCount, initialCount + 1, 'Exactly one new audit record must be appended');
+
+      const audits = nativeDb
+        .prepare(
+          "SELECT * FROM edge_security_audit WHERE event_type = 'SupervisorStationUnlocked' AND station_id = ?",
+        )
+        .all(ctx.stationId) as Array<{
+        event_type: string;
+        action: string;
+        station_id: string;
+        metadata_json: string;
+      }>;
+      const auditRow = audits.find((row) => row.metadata_json.includes(validUid));
+      assert.ok(auditRow, 'SupervisorStationUnlocked audit row must exist');
+      assert.equal(auditRow.event_type, 'SupervisorStationUnlocked');
+      assert.equal(auditRow.action, 'SUPERVISOR_UNLOCK');
+      assert.equal(auditRow.station_id, ctx.stationId);
+      const parsedMeta = JSON.parse(auditRow.metadata_json);
+      assert.equal(parsedMeta.actorId, validUid);
+      assert.equal(parsedMeta.success, 1);
+      assert.equal(parsedMeta.reason, auditReason);
+    }
+
+    // 15. Audit log verification: On failed unlock (wrong PIN, missing permission, revoked, cross-tenant),
+    // verify no SupervisorStationUnlocked event is recorded.
+    {
+      const countBefore = (
+        nativeDb
+          .prepare(
+            "SELECT COUNT(*) as count FROM edge_security_audit WHERE event_type = 'SupervisorStationUnlocked'",
+          )
+          .get() as { count: number }
+      ).count;
+
+      lockStation();
+      const validUid = getNextUserId();
+      ctx.persistence.upsertCachedUser({
+        userId: validUid,
+        organizationId: ctx.organizationId,
+        fullName: 'Audit Fail Supervisor',
+        pinHash,
+        roles: ['estacion.desbloquear'],
+        credentialVersion: 1,
+        issuedAt: baseNow - 100,
+        expiresAt: baseNow + 86400,
+        isRevoked: 0,
+      });
+
+      // Wrong PIN
+      await assert.rejects(async () => {
         await ctx.iamService.supervisorUnlockStation({
           stationId: ctx.stationId,
-          supervisorUserId: foreignSuperId,
-          supervisorPin: superPin,
-          reason: 'Cross-tenant supervisor unlock attempt',
+          supervisorUserId: validUid,
+          supervisorPin: '0000',
+          reason: 'Failed unlock attempt',
         });
-      },
-      (err: Error) => {
-        assert.ok(err instanceof OfflineIamError);
-        assert.equal(err.code, 'AUTHENTICATION_FAILED');
-        return true;
-      },
-    );
-    assert.equal(lockoutMgr.checkLockout(ctx.stationId, baseNow).isLocked, true);
+      });
+
+      const countAfter = (
+        nativeDb
+          .prepare(
+            "SELECT COUNT(*) as count FROM edge_security_audit WHERE event_type = 'SupervisorStationUnlocked'",
+          )
+          .get() as { count: number }
+      ).count;
+      assert.equal(
+        countAfter,
+        countBefore,
+        'No SupervisorStationUnlocked event recorded on failure',
+      );
+      assert.equal(lockoutMgr.checkLockout(ctx.stationId, baseNow).isLocked, true);
+    }
+
+    // 16. WAL transaction atomicity: Verify that simulated audit failure rolls back lockout state clearance
+    {
+      lockStation();
+      const atomicityUid = getNextUserId();
+      ctx.persistence.upsertCachedUser({
+        userId: atomicityUid,
+        organizationId: ctx.organizationId,
+        fullName: 'Atomicity Supervisor',
+        pinHash,
+        roles: ['estacion.desbloquear'],
+        credentialVersion: 1,
+        issuedAt: baseNow - 100,
+        expiresAt: baseNow + 86400,
+        isRevoked: 0,
+      });
+
+      // Inject simulated failure during audit write
+      ctx.persistence.setSimulateAuditInsertFailure(true, kInternalTestToken);
+
+      await assert.rejects(
+        async () => {
+          await ctx.iamService.supervisorUnlockStation({
+            stationId: ctx.stationId,
+            supervisorUserId: atomicityUid,
+            supervisorPin: superPin,
+            reason: 'Simulated failure atomicity test',
+          });
+        },
+        (err: Error) => {
+          assert.equal(err.message, 'SIMULATED_AUDIT_INSERT_FAILURE');
+          return true;
+        },
+      );
+
+      // Station must still be locked due to transaction rollback
+      assert.equal(
+        lockoutMgr.checkLockout(ctx.stationId, baseNow).isLocked,
+        true,
+        'Lockout state must remain locked after rollback',
+      );
+
+      // Clear simulated failure
+      ctx.persistence.setSimulateAuditInsertFailure(false, kInternalTestToken);
+    }
+
+    // 17. Concurrent / sequential unlock calls leave station in consistent unlocked state with exact failure count 0.
+    {
+      lockStation();
+      const concurrentUid = getNextUserId();
+      ctx.persistence.upsertCachedUser({
+        userId: concurrentUid,
+        organizationId: ctx.organizationId,
+        fullName: 'Concurrent Supervisor',
+        pinHash,
+        roles: ['estacion.desbloquear'],
+        credentialVersion: 1,
+        issuedAt: baseNow - 100,
+        expiresAt: baseNow + 86400,
+        isRevoked: 0,
+      });
+
+      // Execute sequential unlocks
+      const res1 = await ctx.iamService.supervisorUnlockStation({
+        stationId: ctx.stationId,
+        supervisorUserId: concurrentUid,
+        supervisorPin: superPin,
+        reason: 'Sequential unlock 1',
+      });
+      assert.equal(res1.success, true);
+
+      const res2 = await ctx.iamService.supervisorUnlockStation({
+        stationId: ctx.stationId,
+        supervisorUserId: concurrentUid,
+        supervisorPin: superPin,
+        reason: 'Sequential unlock 2',
+      });
+      assert.equal(res2.success, true);
+
+      const finalState = lockoutMgr.checkLockout(ctx.stationId, baseNow);
+      assert.equal(finalState.isLocked, false);
+      assert.equal(finalState.remainingSeconds, 0);
+
+      const stateRow = nativeDb
+        .prepare('SELECT consecutive_failures FROM station_lockout_state WHERE station_id = ?')
+        .get(ctx.stationId) as { consecutive_failures: number };
+      assert.equal(stateRow.consecutive_failures, 0);
+    }
   } finally {
     ctx.cleanup();
   }

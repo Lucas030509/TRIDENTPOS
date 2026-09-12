@@ -599,28 +599,25 @@ export class OfflineIamService {
       );
     }
 
-    // Authoritative supervisory role authorization per canonical repository SSOT:
-    // RESTAURANT_SOFTWARE_RECONSTRUCTION_SPEC.md (v1.1 NORMALIZED, Canonical M9):
-    //   - Section 7 ("ROLES Y USUARIOS"):
-    //     - ROLE-001 — Administrador: full system configuration; sole mandatory role.
-    //     - ROLE-002 — Gerente / Supervisor: authorized for security event overrides (discounts, cancellations, reopenings, lockouts per Cap. 8.2.2 and Cap. 4).
-    //   - Section 8 ("MATRIZ DE PERMISOS"): Perfiles del sistema: Administrador, Gerente.
-    // IAM_SECURITY_MODEL.md Section 3: "un usuario con privilegios de supervisión local."
-    // DATA_MODEL.md line 729: cached_users.roles_json ("JSON array de roles y permisos").
+    // Authoritative supervisory authorization per canonical ACR-2026-012:
+    // Authorized if and only if the validated cached identity contains:
+    //   - A) Exact canonical capability/permission: 'estacion.desbloquear'
+    //   - OR B) Approved transitional canonical functional role code: 'ROLE-001' OR 'ROLE-002'
     //
-    // Governed Canonical Supervisory Authorities:
-    // Exact canonical role codes and functional roles established in Section 7 & 8.
-    // Prohibits invented bilingual role aliases (e.g. ADMIN and MANAGER are strictly NOT authorized).
-    const CANONICAL_SUPERVISORY_AUTHORITIES = new Set([
-      'ROLE-001',
-      'ROLE-002',
-      'ADMINISTRADOR',
-      'GERENTE',
-      'SUPERVISOR',
-    ]);
-    const isSupervisor = roles.some((r) =>
-      CANONICAL_SUPERVISORY_AUTHORITIES.has(r.trim().toUpperCase()),
+    // Display names / role names (e.g. 'ADMINISTRADOR', 'GERENTE', 'SUPERVISOR', 'ADMIN', 'MANAGER',
+    // 'Cajero', 'Mesero', 'STAFF', 'ROLE-003', 'ROLE-004', etc.) strictly DO NOT authorize on their own
+    // unless that cached identity independently contains 'estacion.desbloquear'.
+    const CANONICAL_UNLOCK_PERMISSION = 'estacion.desbloquear';
+    const TRANSITIONAL_CANONICAL_ROLES = new Set(['ROLE-001', 'ROLE-002']);
+
+    const hasCanonicalPermission = roles.some(
+      (r) => r.trim().toLowerCase() === CANONICAL_UNLOCK_PERMISSION,
     );
+    const hasTransitionalRoleFallback = roles.some((r) =>
+      TRANSITIONAL_CANONICAL_ROLES.has(r.trim().toUpperCase()),
+    );
+    const isSupervisor = hasCanonicalPermission || hasTransitionalRoleFallback;
+
     if (!isSupervisor) {
       const failureEval = this.#lockoutManager.recordFailure(request.stationId, now);
       if (failureEval.isNewLockout) {
@@ -628,7 +625,7 @@ export class OfflineIamService {
       }
       throw new OfflineIamError(
         'INSUFFICIENT_PERMISSIONS',
-        'User lacks supervisor privileges required for lockout unlock',
+        'User lacks canonical permission estacion.desbloquear or approved transitional role required for lockout unlock',
       );
     }
 
@@ -647,19 +644,21 @@ export class OfflineIamService {
       throw new OfflineIamError('AUTHENTICATION_FAILED', 'Invalid supervisor PIN');
     }
 
-    // 8. Atomic Unlock & Audit Commitment in Single SQLite Transaction (QI-010-R1-02)
+    // 8. Atomic Unlock & Audit Commitment in Single SQLite Transaction (QI-010-R1-02, ACR-2026-012)
     this.#persistence.unlockStationWithAudit(request.stationId, now, {
       eventId: crypto.randomUUID(),
       organizationId: this.#organizationId,
       branchId: this.#branchId,
       edgeId: this.#edgeId,
       stationId: request.stationId,
-      eventType: 'StationUnlockedBySupervisor',
+      eventType: 'SupervisorStationUnlocked',
       severity: 'WARN',
       action: 'SUPERVISOR_UNLOCK',
       metadata: {
         stationId: request.stationId,
         unlockedByUserId: request.supervisorUserId,
+        actorId: request.supervisorUserId,
+        success: 1,
         reason: request.reason,
       },
       createdAt: now,
