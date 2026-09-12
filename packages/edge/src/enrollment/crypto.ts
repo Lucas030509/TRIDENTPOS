@@ -407,7 +407,15 @@ export function redactSensitiveData<T>(input: T): T {
 
   for (const [k, v] of Object.entries(record)) {
     const norm = k.toLowerCase().replace(/[^a-z]/g, '');
-    if (sensitiveKeys.has(norm)) {
+    const isSensitive =
+      sensitiveKeys.has(norm) ||
+      norm.endsWith('pin') ||
+      norm.endsWith('secret') ||
+      norm.endsWith('token') ||
+      norm.endsWith('password') ||
+      norm.endsWith('key');
+
+    if (isSensitive) {
       result[k] = '[REDACTED]';
     } else if (typeof v === 'object' && v !== null) {
       result[k] = redactSensitiveData(v);
