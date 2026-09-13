@@ -30,11 +30,13 @@ import {
 } from '@trident/core';
 import { TestCloudReceiptIssuer, TestCloudReceiptVerifier } from '@trident/core/test-support';
 import { EdgeDatabaseService, EdgeOutboxPersistence, EdgeSyncPersistence } from '@trident/edge';
+import { SignJWT, generateKeyPair } from 'jose';
 import {
   CloudWebSocketSyncGateway,
   EdgeSyncClient,
   CloudCatalogDeltaService,
   CallbackWebSocketAuthenticator,
+  JwtWebSocketAuthenticator,
   ISyncBatchProcessor,
 } from './index.js';
 
@@ -1056,6 +1058,538 @@ describe('TRIDENTPOS WP-013: Bidirectional Synchronization Service & WAN Reconne
     assert.ok(eventTypes.includes('DELTA_PULLED'));
 
     await client.disconnect();
+    edgeDb.close();
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  // =========================================================================
+  // R2-02 & R2-03: Production JwtWebSocketAuthenticator Suite
+  // Exercises real RS256 cryptographically signed JWTs, signature validation,
+  // issuer/audience checks, tenant authority fencing, and strict boolean
+  // control-plane claim typing.
+  // =========================================================================
+  describe('WP013-T07: Production JwtWebSocketAuthenticator Suite', () => {
+    let rsaKeyPair: { privateKey: any; publicKey: any };
+    let otherKeyPair: { privateKey: any; publicKey: any };
+    const jwtIssuer = 'https://auth.tridentpos.com';
+    const jwtAudience = 'trident-cloud-sync';
+    let jwtPort: number = 0;
+    let jwtHttpServer: http.Server;
+    let jwtGateway: CloudWebSocketSyncGateway;
+    let jwtAuthenticator: JwtWebSocketAuthenticator;
+
+    before(async () => {
+      rsaKeyPair = await generateKeyPair('RS256');
+      otherKeyPair = await generateKeyPair('RS256');
+
+      jwtAuthenticator = new JwtWebSocketAuthenticator({
+        issuer: jwtIssuer,
+        audience: jwtAudience,
+        key: rsaKeyPair.publicKey,
+      });
+
+      jwtHttpServer = http.createServer();
+      jwtGateway = new CloudWebSocketSyncGateway({
+        server: jwtHttpServer,
+        path: '/api/v1/sync/stream',
+        batchProcessor,
+        deltaProvider: deltaService,
+        authenticator: jwtAuthenticator,
+      });
+
+      await new Promise<void>((resolve) => {
+        jwtHttpServer.listen(0, '127.0.0.1', () => {
+          const addr = jwtHttpServer.address();
+          if (typeof addr === 'object' && addr) {
+            jwtPort = addr.port;
+          }
+          resolve();
+        });
+      });
+    });
+
+    after(async () => {
+      await jwtGateway.close();
+      await new Promise<void>((resolve) => jwtHttpServer.close(() => resolve()));
+    });
+
+    it('authenticates valid RS256 station JWT and establishes connection', async () => {
+      const stationSub = crypto.randomUUID();
+      const validToken = await new SignJWT({
+        organizationId: orgId,
+        branchId,
+        isControlPlane: false,
+        roles: ['STATION_OPERATOR'],
+      })
+        .setProtectedHeader({ alg: 'RS256' })
+        .setIssuer(jwtIssuer)
+        .setAudience(jwtAudience)
+        .setSubject(stationSub)
+        .setExpirationTime('1h')
+        .sign(rsaKeyPair.privateKey);
+
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wp013-jwt-valid-'));
+      const edgeDb = new EdgeDatabaseService({ databasePath: path.join(tempDir, 'edge.db') });
+      const outbox = new EdgeOutboxPersistence(edgeDb, testVerifier);
+      const persistence = new EdgeSyncPersistence(edgeDb);
+
+      const client = new EdgeSyncClient({
+        wsUrl: `ws://127.0.0.1:${jwtPort}/api/v1/sync/stream`,
+        auth,
+        authToken: validToken,
+        outbox,
+        syncPersistence: persistence,
+      });
+
+      await client.connect();
+      assert.equal(client.getState(), 'CONNECTED');
+
+      await client.disconnect();
+      edgeDb.close();
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    });
+
+    it('rejects connection when signature is forged / signed by wrong key (HTTP 401)', async () => {
+      const forgedToken = await new SignJWT({
+        organizationId: orgId,
+        branchId,
+      })
+        .setProtectedHeader({ alg: 'RS256' })
+        .setIssuer(jwtIssuer)
+        .setAudience(jwtAudience)
+        .setSubject(crypto.randomUUID())
+        .setExpirationTime('1h')
+        .sign(otherKeyPair.privateKey);
+
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wp013-jwt-forged-'));
+      const edgeDb = new EdgeDatabaseService({ databasePath: path.join(tempDir, 'edge.db') });
+      const outbox = new EdgeOutboxPersistence(edgeDb, testVerifier);
+      const persistence = new EdgeSyncPersistence(edgeDb);
+
+      const client = new EdgeSyncClient({
+        wsUrl: `ws://127.0.0.1:${jwtPort}/api/v1/sync/stream`,
+        auth,
+        authToken: forgedToken,
+        outbox,
+        syncPersistence: persistence,
+      });
+
+      try {
+        await assert.rejects(async () => {
+          await client.connect();
+        }, /Unexpected server response: 401|Sync client error/);
+      } finally {
+        await client.disconnect();
+      }
+
+      edgeDb.close();
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    });
+
+    it('rejects connection when JWT issuer is wrong (HTTP 401)', async () => {
+      const wrongIssuerToken = await new SignJWT({
+        organizationId: orgId,
+        branchId,
+      })
+        .setProtectedHeader({ alg: 'RS256' })
+        .setIssuer('https://malicious-issuer.com')
+        .setAudience(jwtAudience)
+        .setSubject(crypto.randomUUID())
+        .setExpirationTime('1h')
+        .sign(rsaKeyPair.privateKey);
+
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wp013-jwt-wrong-iss-'));
+      const edgeDb = new EdgeDatabaseService({ databasePath: path.join(tempDir, 'edge.db') });
+      const outbox = new EdgeOutboxPersistence(edgeDb, testVerifier);
+      const persistence = new EdgeSyncPersistence(edgeDb);
+
+      const client = new EdgeSyncClient({
+        wsUrl: `ws://127.0.0.1:${jwtPort}/api/v1/sync/stream`,
+        auth,
+        authToken: wrongIssuerToken,
+        outbox,
+        syncPersistence: persistence,
+      });
+
+      try {
+        await assert.rejects(async () => {
+          await client.connect();
+        }, /Unexpected server response: 401|Sync client error/);
+      } finally {
+        await client.disconnect();
+      }
+
+      edgeDb.close();
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    });
+
+    it('rejects connection when JWT audience is wrong (HTTP 401)', async () => {
+      const wrongAudToken = await new SignJWT({
+        organizationId: orgId,
+        branchId,
+      })
+        .setProtectedHeader({ alg: 'RS256' })
+        .setIssuer(jwtIssuer)
+        .setAudience('wrong-audience')
+        .setSubject(crypto.randomUUID())
+        .setExpirationTime('1h')
+        .sign(rsaKeyPair.privateKey);
+
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wp013-jwt-wrong-aud-'));
+      const edgeDb = new EdgeDatabaseService({ databasePath: path.join(tempDir, 'edge.db') });
+      const outbox = new EdgeOutboxPersistence(edgeDb, testVerifier);
+      const persistence = new EdgeSyncPersistence(edgeDb);
+
+      const client = new EdgeSyncClient({
+        wsUrl: `ws://127.0.0.1:${jwtPort}/api/v1/sync/stream`,
+        auth,
+        authToken: wrongAudToken,
+        outbox,
+        syncPersistence: persistence,
+      });
+
+      try {
+        await assert.rejects(async () => {
+          await client.connect();
+        }, /Unexpected server response: 401|Sync client error/);
+      } finally {
+        await client.disconnect();
+      }
+
+      edgeDb.close();
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    });
+
+    it('fences authority strictly to verified JWT claims; payload cannot override them', async () => {
+      const tokenTenantA = await new SignJWT({
+        organizationId: orgId,
+        branchId,
+      })
+        .setProtectedHeader({ alg: 'RS256' })
+        .setIssuer(jwtIssuer)
+        .setAudience(jwtAudience)
+        .setSubject(crypto.randomUUID())
+        .setExpirationTime('1h')
+        .sign(rsaKeyPair.privateKey);
+
+      const ws = new WebSocket(`ws://127.0.0.1:${jwtPort}/api/v1/sync/stream`, {
+        headers: { Authorization: `Bearer ${tokenTenantA}` },
+      });
+
+      await new Promise<void>((resolve, reject) => {
+        ws.on('open', resolve);
+        ws.on('error', reject);
+      });
+
+      const maliciousMsg = createSyncStreamMessage('UPSTREAM_BATCH', tenantBId, branchBId, {
+        batchId: crypto.randomUUID(),
+        organizationId: tenantBId,
+        branchId: branchBId,
+        events: [],
+      });
+
+      const errorPromise = new Promise<{ code: string }>((resolve) => {
+        ws.on('message', (raw) => {
+          const msg = JSON.parse(raw.toString('utf8'));
+          if (msg.type === 'SYNC_ERROR') {
+            resolve(msg.payload);
+          }
+        });
+      });
+
+      ws.send(JSON.stringify(maliciousMsg));
+      const errPayload = await errorPromise;
+      assert.equal(errPayload.code, ERROR_CODE_UNAUTHORIZED_TENANT);
+
+      ws.terminate();
+    });
+
+    it('enforces strict control-plane claim typing: string, numeric, and falsy claims fail closed', async () => {
+      async function testKillSwitchPrivilege(
+        claimValue: unknown,
+      ): Promise<{ code?: string; success?: boolean }> {
+        const token = await new SignJWT({
+          organizationId: orgId,
+          branchId,
+          isControlPlane: claimValue,
+          roles: ['STATION_OPERATOR'],
+        })
+          .setProtectedHeader({ alg: 'RS256' })
+          .setIssuer(jwtIssuer)
+          .setAudience(jwtAudience)
+          .setSubject(crypto.randomUUID())
+          .setExpirationTime('1h')
+          .sign(rsaKeyPair.privateKey);
+
+        const ws = new WebSocket(`ws://127.0.0.1:${jwtPort}/api/v1/sync/stream`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+
+        await new Promise<void>((resolve, reject) => {
+          ws.on('open', resolve);
+          ws.on('error', reject);
+        });
+
+        const commandMsg = createSyncStreamMessage('KILL_SWITCH_COMMAND', orgId, branchId, {
+          enabled: false,
+          reason: 'Test claim typing',
+        });
+
+        const responsePromise = new Promise<{ code?: string; success?: boolean }>((resolve) => {
+          const timeout = setTimeout(() => {
+            resolve({ code: 'TIMEOUT' });
+          }, 3000);
+          ws.on('message', (raw) => {
+            const msg = JSON.parse(raw.toString('utf8'));
+            if (msg.type === 'SYNC_ERROR') {
+              clearTimeout(timeout);
+              resolve({ code: msg.payload.code });
+            } else if (msg.type === 'KILL_SWITCH_COMMAND') {
+              clearTimeout(timeout);
+              resolve({ success: true });
+            }
+          });
+        });
+
+        ws.send(JSON.stringify(commandMsg));
+        const res = await responsePromise;
+        ws.terminate();
+        return res;
+      }
+
+      // Case 1: isControlPlane: false -> rejected
+      const resFalse = await testKillSwitchPrivilege(false);
+      assert.equal(resFalse.code, ERROR_CODE_CONTROL_PLANE_FORBIDDEN);
+
+      // Case 2: isControlPlane: "false" (string) -> rejected (must NOT be truthy)
+      const resStringFalse = await testKillSwitchPrivilege('false');
+      assert.equal(resStringFalse.code, ERROR_CODE_CONTROL_PLANE_FORBIDDEN);
+
+      // Case 3: isControlPlane: "true" (string) -> rejected (must NOT grant privilege)
+      const resStringTrue = await testKillSwitchPrivilege('true');
+      assert.equal(resStringTrue.code, ERROR_CODE_CONTROL_PLANE_FORBIDDEN);
+
+      // Case 4: isControlPlane: 1 (number) -> rejected (must NOT grant privilege)
+      const resNumberOne = await testKillSwitchPrivilege(1);
+      assert.equal(resNumberOne.code, ERROR_CODE_CONTROL_PLANE_FORBIDDEN);
+
+      // Case 5: Missing claim -> rejected
+      const resMissing = await testKillSwitchPrivilege(undefined);
+      assert.equal(resMissing.code, ERROR_CODE_CONTROL_PLANE_FORBIDDEN);
+
+      // Case 6: Literal boolean true -> allowed
+      const resTrue = await testKillSwitchPrivilege(true);
+      assert.equal(resTrue.success, true);
+      jwtGateway.setKillSwitch(true);
+    });
+  });
+
+  // =========================================================================
+  // R2-01: True Automatic WAN Reconnection & Outbox Drain Without Manual Connect
+  // Fulfills R2-01: Proves automatic WAN recovery where the SAME client detects
+  // socket termination, enters RECONNECTING, retries autonomously, reconnects
+  // automatically upon server restoration WITHOUT calling client.connect() again,
+  // emits WAN_RECONNECTED telemetry, and drains the pending SQLite Outbox to 0.
+  // =========================================================================
+  it('WP013-T08: True Automatic WAN Reconnection & Outbox Drain Without Manual Connect', async () => {
+    // 1. Setup dedicated ephemeral HTTP server and gateway
+    let autoServer = http.createServer();
+    let autoGateway = new CloudWebSocketSyncGateway({
+      server: autoServer,
+      path: '/api/v1/sync/stream',
+      batchProcessor,
+      deltaProvider: deltaService,
+      authenticator,
+    });
+
+    let autoPort: number = 0;
+    await new Promise<void>((resolve) => {
+      autoServer.listen(0, '127.0.0.1', () => {
+        const addr = autoServer.address();
+        if (typeof addr === 'object' && addr) {
+          autoPort = addr.port;
+        }
+        resolve();
+      });
+    });
+
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wp013-auto-reconnect-'));
+    const dbPath = path.join(tempDir, 'edge.db');
+    const edgeDb = new EdgeDatabaseService({ databasePath: dbPath });
+    const outbox = new EdgeOutboxPersistence(edgeDb, testVerifier);
+    const persistence = new EdgeSyncPersistence(edgeDb);
+
+    // 2. Start EdgeSyncClient with rapid deterministic retry backoff (50ms base)
+    const client = new EdgeSyncClient({
+      wsUrl: `ws://127.0.0.1:${autoPort}/api/v1/sync/stream`,
+      auth,
+      authToken: validTokenTenantA,
+      outbox,
+      syncPersistence: persistence,
+      config: {
+        baseDelayMs: 50,
+        maxDelayMs: 150,
+        heartbeatIntervalMs: 200,
+        heartbeatTimeoutMs: 500,
+      },
+      deterministicBackoff: true,
+    });
+
+    // Step 3: Confirm initial CONNECTED state
+    await client.connect();
+    assert.equal(client.getState(), 'CONNECTED');
+
+    // Step 4: Persist at least one operation and verify it flushes
+    const initialOp = outbox.enqueue({
+      organizationId: orgId,
+      branchId,
+      aggregateType: 'DINING_ORDER',
+      aggregateId: 'ord-init-1',
+      aggregateSequenceNumber: 1,
+      action: 'CREATE_ORDER',
+      clientOpId: crypto.randomUUID(),
+      payload: { tableNumber: 1, total: 100.0 },
+    });
+
+    const initFlush = await client.flushOutbox();
+    assert.equal(initFlush.flushed, 1);
+    assert.equal(initFlush.synced, 1);
+    assert.equal(outbox.getById(initialOp.id)?.status, 'SYNCED');
+    assert.equal(outbox.getBacklogCount(), 0);
+
+    // Step 5: Terminate the real gateway / WebSocket transport
+    await autoGateway.close();
+    await new Promise<void>((resolve) => autoServer.close(() => resolve()));
+
+    // Step 6 & 7: Leave the SAME EdgeSyncClient running; confirm close detected,
+    // WAN_DISCONNECTED emitted, state enters RECONNECTING, retry/backoff loop active.
+    await new Promise<void>((resolve, reject) => {
+      const deadline = Date.now() + 3000;
+      const interval = setInterval(() => {
+        if (client.getState() === 'RECONNECTING') {
+          clearInterval(interval);
+          resolve();
+        } else if (Date.now() > deadline) {
+          clearInterval(interval);
+          reject(
+            new Error(
+              `Timeout waiting for client to enter RECONNECTING; current: ${client.getState()}`,
+            ),
+          );
+        }
+      }, 20);
+    });
+    assert.equal(client.getState(), 'RECONNECTING');
+
+    const telemetryEventsAfterDrop = persistence.getRecentTelemetry().map((t) => t.eventType);
+    assert.ok(
+      telemetryEventsAfterDrop.includes('WAN_DISCONNECTED'),
+      'WAN_DISCONNECTED telemetry must be recorded upon socket drop',
+    );
+
+    // Step 8: While Cloud is unavailable, persist new operations into real SQLite EdgeOutboxPersistence
+    const offlineOp1 = outbox.enqueue({
+      organizationId: orgId,
+      branchId,
+      aggregateType: 'DINING_ORDER',
+      aggregateId: 'ord-auto-1',
+      aggregateSequenceNumber: 1,
+      action: 'CREATE_ORDER',
+      clientOpId: crypto.randomUUID(),
+      payload: { tableNumber: 3, total: 250.0 },
+    });
+
+    const offlineOp2 = outbox.enqueue({
+      organizationId: orgId,
+      branchId,
+      aggregateType: 'DINING_ORDER',
+      aggregateId: 'ord-auto-2',
+      aggregateSequenceNumber: 1,
+      action: 'CREATE_ORDER',
+      clientOpId: crypto.randomUUID(),
+      payload: { tableNumber: 4, total: 310.0 },
+    });
+
+    assert.equal(outbox.getBacklogCount(), 2);
+    assert.equal(outbox.getById(offlineOp1.id)?.status, 'PENDING');
+    assert.equal(outbox.getById(offlineOp2.id)?.status, 'PENDING');
+
+    // Step 9: Restore the gateway on the EXACT SAME endpoint (same port & path)
+    autoServer = http.createServer();
+    await new Promise<void>((resolve) => {
+      autoServer.listen(autoPort, '127.0.0.1', () => resolve());
+    });
+    autoGateway = new CloudWebSocketSyncGateway({
+      server: autoServer,
+      path: '/api/v1/sync/stream',
+      batchProcessor,
+      deltaProvider: deltaService,
+      authenticator,
+    });
+
+    // Step 10 & 11: DO NOT call client.connect() again. Wait for existing retry loop.
+    // Step 12: Assert the SAME client transitions automatically to CONNECTED.
+    await new Promise<void>((resolve, reject) => {
+      const deadline = Date.now() + 5000;
+      const interval = setInterval(() => {
+        if (client.getState() === 'CONNECTED') {
+          clearInterval(interval);
+          resolve();
+        } else if (Date.now() > deadline) {
+          clearInterval(interval);
+          reject(
+            new Error(
+              `Timeout waiting for automatic reconnect without manual connect(); current: ${client.getState()}`,
+            ),
+          );
+        }
+      }, 25);
+    });
+    assert.equal(client.getState(), 'CONNECTED');
+
+    // Step 13: Assert WAN_RECONNECTED telemetry
+    const hasReconnectedTelem = persistence
+      .getRecentTelemetry()
+      .some((t) => t.eventType === 'WAN_RECONNECTED');
+    assert.ok(hasReconnectedTelem, 'WAN_RECONNECTED telemetry must be emitted by retry loop');
+
+    // Step 14 & 16: Assert pending SQLite Outbox automatically drains to 0
+    await new Promise<void>((resolve, reject) => {
+      const deadline = Date.now() + 5000;
+      const interval = setInterval(() => {
+        if (outbox.getBacklogCount() === 0) {
+          clearInterval(interval);
+          resolve();
+        } else if (Date.now() > deadline) {
+          clearInterval(interval);
+          reject(
+            new Error(
+              `Timeout waiting for pending outbox to automatically drain; count: ${outbox.getBacklogCount()}`,
+            ),
+          );
+        }
+      }, 25);
+    });
+    assert.equal(outbox.getBacklogCount(), 0);
+    assert.equal(outbox.getPendingEvents().length, 0);
+
+    // Step 15: Assert records reach SYNCED only after valid receipt verification
+    const verifiedRow1 = outbox.getById(offlineOp1.id);
+    const verifiedRow2 = outbox.getById(offlineOp2.id);
+    assert.ok(verifiedRow1);
+    assert.equal(verifiedRow1.status, 'SYNCED');
+    assert.ok(verifiedRow1.receiptToken);
+    assert.ok(verifiedRow1.syncedAt);
+
+    assert.ok(verifiedRow2);
+    assert.equal(verifiedRow2.status, 'SYNCED');
+    assert.ok(verifiedRow2.receiptToken);
+    assert.ok(verifiedRow2.syncedAt);
+
+    // Teardown
+    await client.disconnect();
+    await autoGateway.close();
+    await new Promise<void>((resolve) => autoServer.close(() => resolve()));
     edgeDb.close();
     fs.rmSync(tempDir, { recursive: true, force: true });
   });

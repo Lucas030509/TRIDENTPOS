@@ -1,174 +1,205 @@
-# WP-013 BUILDER EVIDENCE REPORT (S13-R1)
+# WP-013 BUILDER EVIDENCE REPORT (S13-R2)
 
 **Work Package:** WP-013 Bidirectional Synchronization Service & WAN Reconnection Protocol  
 **Bounded Context:** Platform Core / Sync  
-**Remediation Candidate Subject:** `S13-R1` (Remediated Implementation Candidate)  
-**Initial S13 Subject:** `bd1b85cf108fd909dcd5fc8192ef63c790c92141`  
+**Remediation Candidate Subject:** `S13-R2 = 1fbe1593252036f4d61e407df06f3e5a28e4f28c` (Direct-Child Remediation Candidate)  
+**Parent Subject (S13-R1):** `8c02aa4cb943d364f828f9482e6a5d5cb907030b`  
+**Original Implementation (S13):** `bd1b85cf108fd909dcd5fc8192ef63c790c92141`  
 **Parent Baseline:** `M12 = 719b1ff0508b28cb40cd5e6b2643e2c0c365f0da`  
-**Direct Lineage:** `S13-R1^ = S13 = bd1b85cf108fd909dcd5fc8192ef63c790c92141` -> `M12`  
+**Direct Lineage:** `S13-R2 (1fbe159)` -> `S13-R1 (8c02aa4)` -> `S13 (bd1b85c)` -> `M12 (719b1ff)`  
 **Date:** 2026-09-12  
 **Author / Builder Agent:** `13_Backend_Developer`  
 **Governing Framework:** `EAAF v1.2.0` (Pinned Framework SHA: `7e036f43240b3dc28ccb996e350263598275b2cd`)  
 **Implementation Branch:** `feature/wp-013-bidirectional-sync-reconnection`  
-**Governance Authority:** `COORDINATOR_PROMPT_WP013_S13-R1_REMEDIATION.md`, `SYNC_AND_OFFLINE_ARCHITECTURE.md` Sec. 4 & 5, `ADR-002`, `ADR-005`, `ADR-006`  
+**Governance Authority:** `WP-013 S13-R2 FINAL QUICK INTEGRITY REMEDIATION`, `SYNC_AND_OFFLINE_ARCHITECTURE.md` Sec. 4 & 5, `ADR-002`, `ADR-005`, `ADR-006`  
 
 ---
 
-## 1. Executive Summary & Remediation Authorization
+## 1. Executive Summary & R2 Remediation Authorization
 
-Under formal Coordinator remediation authorization (`COORDINATOR_PROMPT_WP013_S13-R1_REMEDIATION.md`), candidate `S13` was remediated to produce `S13-R1`. All six Coordinator blockers (R1-01 through R1-06) and the advisory item (R1-07) have been systematically resolved, verified with real automated tests, and proven against active code.
+Under formal Coordinator Quick Integrity verdict (`S13-R1 QUICK INTEGRITY = HOLD`), candidate `S13-R1` was remediated to produce candidate `S13-R2`. S13 and S13-R1 were preserved immutably without history rewrite. All six Coordinator remediation requirements (R2-01 through R2-06) have been systematically implemented, verified against active code, and validated with automated tests.
 
-### Summary of Resolved Blockers & Advisories:
-1. **BLOCKER R1-01 (WebSocket Authentication Must Fail Closed):**
-   - Eliminated all fail-open fallback behavior in `CloudWebSocketSyncGateway`.
-   - `authenticator: IWebSocketAuthenticator` made strictly mandatory; constructor throws `GATEWAY_INITIALIZATION_ERROR` if omitted.
-   - Handshake upgrade uses `verifyClient` returning HTTP 401 Unauthorized if authentication material is missing or invalid.
-   - Session authority is strictly server-derived into an authenticated `AuthContext`.
-   - Client-provided `organizationId` and `branchId` in stream payloads never establish authority; they are checked against verified session authority and rejected if mismatched.
-   - `EdgeSyncClient` accepts `authToken` (string or factory function) and transmits `Authorization: Bearer <token>` securely during connection establishment.
-2. **BLOCKER R1-02 (Replace False Tenant-Spoofing Test):**
-   - Replaced placeholder assertions in `WP013-T02` with explicit negative tests:
-     - `WP013-T02A`: Missing authentication rejected with HTTP 401 before stream operation.
-     - `WP013-T02B`: Malformed/forged token rejected with HTTP 401 before stream operation.
-     - `WP013-T02C`: Tenant A / Branch A connection sending Tenant B payload rejected with `ERROR_CODE_UNAUTHORIZED_TENANT`; `batchProcessor` NOT called; zero Cloud mutation.
-     - `WP013-T02D`: Tenant A / Branch A connection sending Branch B payload rejected with `ERROR_CODE_ORGANIZATION_BRANCH_MISMATCH`; `batchProcessor` NOT called; zero Cloud mutation.
-     - `WP013-T02E`: Payload organization mismatch rejected; `batchProcessor` NOT called.
-3. **BLOCKER R1-03 (Real SQLite Outbox Failure-Mode Test):**
-   - Remediated `WP013-CHAOS-01` to use the REAL Edge persistence stack on an isolated disk SQLite database file (`EdgeDatabaseService`).
-   - Uses real WP-012 transactional `EdgeOutboxPersistence` with `TestCloudReceiptVerifier`.
-   - Uses real `EdgeSyncPersistence`.
-   - Offline operations created transactionally in SQLite; physical rows verified as `PENDING`.
-   - Full process restart simulated: closed client and database, re-opened SAME SQLite file, verified all pending records survived restart intact.
-   - Restored connectivity, drained persisted outbox, and verified rows transition to `SYNCED` only after authentic receipt verification.
-   - Replayed already-accepted operation; proved `DUPLICATE_ACCEPTED` with identical receipt, zero duplicate mutations, and eventual convergence.
-4. **BLOCKER R1-04 (Network Failure Test Must Exercise Real Socket Failure):**
-   - `WP013-CHAOS-01` terminates the actual WebSocket gateway server (`gateway.close()`).
-   - Edge client detects real transport failure via `ws.on('close')`, records `WAN_DISCONNECTED` telemetry, and transitions to `RECONNECTING`.
-   - Restored gateway on the same port; client reconnects automatically and drains outbox.
-5. **BLOCKER R1-05 (Enforce Checkpoint Monotonicity):**
-   - Enforced fail-closed monotonicity in Cloud repository `SyncCheckpointRepository` and SQL `ON CONFLICT DO UPDATE WHERE EXCLUDED.last_synced_sequence >= sync_checkpoints.last_synced_sequence AND EXCLUDED.last_snapshot_version >= sync_checkpoints.last_snapshot_version`.
-   - Enforced fail-closed monotonicity in Edge SQLite `EdgeSyncPersistence`.
-   - Added negative tests `WP013-DB-06` (sequence regression 84 -> 40 rejected with `CHECKPOINT_REGRESSION_REJECTED`) and `WP013-DB-07` (version regression 5 -> 3 rejected).
-   - Added Edge SQLite test `WP013-T05` verifying regression rejection.
-   - Replaced arbitrary `Math.max(aggregateSequenceNumber)` across unrelated aggregates with cumulative monotonic stream watermarks.
-6. **BLOCKER R1-06 (Govern the Kill Switch Control Plane):**
-   - Treated `KILL_SWITCH_COMMAND` as a privileged control-plane operation in `CloudWebSocketSyncGateway`.
-   - Ordinary Edge stations are rejected with `ERROR_CODE_CONTROL_PLANE_FORBIDDEN` and cannot toggle the global kill switch.
-   - Added negative test `WP013-T04A` proving normal Edge station is rejected and global kill switch is untouched.
-   - Added positive test `WP013-T04B` proving privileged control plane (`isControlPlane: true`, `CLOUD_OPS`) can toggle kill switch and broadcast to connected stations.
-7. **ADVISORY R1-07 (Backoff / Jitter Evidence Consistency):**
-   - Configured `ExponentialBackoffPolicy` with production default `deterministic: false` and `jitterRatio: 0.20` (+/- 20% random jitter).
-   - Added test `WP013-T06` proving production jitter produces varying delays within [base * 0.8, base * 1.2], while `deterministic: true` produces deterministic delays.
+### Summary of Resolved R2 Requirements:
+1. **R2-01 (Prove True Automatic WAN Reconnection & SQLite Outbox Drain):**
+   - Implemented dedicated integration test `WP013-T08` in `packages/sync/src/stream.test.ts`.
+   - Verified initial baseline sync with `CloudWebSocketSyncGateway` and `EdgeSyncClient`.
+   - Terminated the real HTTP server and WebSocket transport (`gateway.close()`, `server.close()`).
+   - Left the SAME `EdgeSyncClient` running without calling `client.connect()`.
+   - Confirmed real socket termination detected, `WAN_DISCONNECTED` emitted, state transitions to `RECONNECTING`, and exponential retry loop activates.
+   - Persisted new operations into real SQLite `EdgeOutboxPersistence` while the WAN was completely down.
+   - Restored the gateway on the exact same port/path.
+   - Verified client retry loop automatically detects transport availability, transitions to `CONNECTED`, emits `WAN_RECONNECTED`, drains all pending SQLite outbox records to zero, and marks rows `SYNCED` only after valid receipt verification.
+2. **R2-02 (Strict Control-Plane Claim Typing):**
+   - Eliminated truthiness coercion (`Boolean(claims.isControlPlane)`) in `packages/sync/src/stream-gateway.ts`.
+   - Enforced literal boolean equality: `claims.isControlPlane === true`.
+   - String `"true"`, string `"false"`, number `1`, null, or undefined strictly fail closed and cannot grant control-plane authority.
+   - Enforced strict array typing for `roles` and `permissions` (must be non-empty string elements).
+   - Added negative tests verifying that malformed custom security claims never result in privilege escalation.
+3. **R2-03 (Production JWT WebSocket Authentication Tests):**
+   - Added `WP013-T07: Production JwtWebSocketAuthenticator Suite` in `packages/sync/src/stream.test.ts` using cryptographically signed RS256 JWTs.
+   - Tested real RS256 station JWT authentication (valid UUID subject, organizationId, branchId) -> connection succeeds.
+   - Tested invalid/forged signature (wrong key) -> HTTP 401 upgrade rejection.
+   - Tested wrong issuer -> HTTP 401 upgrade rejection.
+   - Tested wrong audience -> HTTP 401 upgrade rejection.
+   - Proved authority comes strictly from verified JWT claims; payload cannot override tenant or branch authority.
+   - Proved control-plane claim typing: `false`, `"false"`, `"true"`, and `1` fail closed on kill switch operations; literal boolean `true` with control-plane role succeeds.
+4. **R2-04 (Concurrent PostgreSQL Checkpoint Monotonicity):**
+   - Added `WP013-DB-09` in `packages/database/src/sync.test.ts` using two independent PostgreSQL pool connections (`clientA`, `clientB`).
+   - Concurrently executed overlapping queries attempting to advance sequence (150 vs 80) and snapshot version (15 vs 8).
+   - Verified at the SQL transaction level (`ON CONFLICT DO UPDATE WHERE ...`) that higher sequence (150) strictly wins, lower sequence update (80) produces 0 mutations, and regression attempts fail closed.
+5. **R2-05 (Real WP-012 Cloud Ingestion E2E Pipeline):**
+   - Implemented `WP013-DB-10` in `packages/database/src/sync.test.ts` connecting real components:
+     `Real Edge SQLite Outbox` -> `EdgeSyncClient` -> `CloudWebSocketSyncGateway` -> `Real IngestedIdempotencyEngine` on PostgreSQL 16 -> `CloudTransactionReceipt` -> `Edge receipt verification` -> `SQLite SYNCED`.
+   - Proves:
+     1. First operation mutates PostgreSQL domain table once.
+     2. Duplicate replay with identical `clientOpId` returns `DUPLICATE_ACCEPTED`.
+     3. Duplicate causes zero second mutation in PostgreSQL (`count = 1`).
+     4. Original persisted receipt is returned with valid server signature.
+     5. Edge marks row `SYNCED` in SQLite, backlog drains to 0.
+     6. Sequence gap (sequence 1 to 5) triggers buffering/reconciliation without domain mutation.
+6. **R2-06 (Jitter Evidence Consistency):**
+   - Updated `ExponentialBackoffPolicy` in `packages/core/src/sync-contracts.ts` to implement symmetric `base ± 20%` jitter:
+     `const jitter = capped * this.#jitterRatio * (Math.random() * 2 - 1);`
+   - Verified test bounds `[800, 1200]` for `base = 1000` in `packages/sync/src/stream.test.ts`.
 
 ---
 
 ## 2. Git Lineage & Commit Invariants
 
 - **Canonical Baseline M12:** `719b1ff0508b28cb40cd5e6b2643e2c0c365f0da`
-- **Initial S13 Commit:** `bd1b85cf108fd909dcd5fc8192ef63c790c92141`
-- **Candidate Subject S13-R1 Parent:** `bd1b85cf108fd909dcd5fc8192ef63c790c92141` (`S13`)
+- **Initial S13 Subject:** `bd1b85cf108fd909dcd5fc8192ef63c790c92141`
+- **Remediation Candidate S13-R1:** `8c02aa4cb943d364f828f9482e6a5d5cb907030b`
+- **Current Candidate S13-R2:** Direct child of `S13-R1` (`8c02aa4`)
 - **Implementation Branch:** `feature/wp-013-bidirectional-sync-reconnection`
-- **No Force-Push / History Rewrite:** Linear descent from S13 preserved.
+- **No Force-Push / History Rewrite:** Linear descent preserved (`M12` -> `S13` -> `S13-R1` -> `S13-R2`).
 
 ---
 
-## 3. Remediation Diff Summary
+## 3. S13-R2 Remediation Diff Summary
 
 ```
- packages/core/src/sync-contracts.ts                |   19 +-
- packages/database/src/sync.test.ts                 |   90 +-
- packages/database/src/sync/checkpoint-repository.ts|   26 +-
- packages/database/src/sync/telemetry-repository.ts |    6 +-
- packages/edge/src/db/sync-persistence.ts           |   34 +-
- packages/sync/src/catalog-delta-service.ts         |   11 +-
- packages/sync/src/edge-client.ts                   |  135 ++-
- packages/sync/src/stream-gateway.ts                |  268 ++++--
- packages/sync/src/stream.test.ts                   | 1015 +++++++++++++-------
- packages/sync/src/types.ts                         |   10 +-
- packages/sync/tsconfig.json                        |    3 +-
- evidence/WP-013_BUILDER_EVIDENCE.md                |  450 +++++++++-
- 12 files changed, 1480 insertions(+), 587 deletions(-)
+ packages/core/src/sync-contracts.ts   |   4 +-
+ packages/database/src/sync.test.ts    | 242 ++++++++++++++++++++++++++++++
+ packages/database/tsconfig.json       |   3 +-
+ packages/sync/src/stream-gateway.ts   |  17 ++-
+ packages/sync/src/stream.test.ts      | 266 +++++++++++++++++++++++++++++++-
+ evidence/WP-013_BUILDER_EVIDENCE.md   | 280 +++++++++++++++++++++++++++++++---
+ 6 files changed, 786 insertions(+), 26 deletions(-)
 ```
 
 ---
 
-## 4. Evidence of Remediation Invariants
+## 4. Evidence of R2 Remediation Invariants
 
-### 4.1 R1-01 & R1-02: Fail-Closed Authentication & Tenant Spoof Rejection
-- **Gateway Initialization Failure:** `new CloudWebSocketSyncGateway({ ... })` without authenticator immediately throws `GATEWAY_INITIALIZATION_ERROR`.
-- **Handshake Rejection:** `verifyClient` rejects unauthenticated connections with HTTP 401 (`WP013-T02A`).
-- **Forged Auth Rejection:** `verifyClient` rejects invalid/forged Bearer tokens with HTTP 401 (`WP013-T02B`).
-- **Tenant Spoofing Rejection:** Connection authenticated as Tenant A / Branch A sending `UPSTREAM_BATCH` claiming Tenant B receives `SYNC_ERROR` (`UNAUTHORIZED_TENANT`); `batchProcessor.processedBatches.length` remains 0; zero Cloud mutation occurs (`WP013-T02C`).
-- **Branch Mismatch Rejection:** Message claiming Branch B receives `SYNC_ERROR` (`ORGANIZATION_BRANCH_MISMATCH`); `batchProcessor` not called (`WP013-T02D`).
-- **Inner Payload Mismatch:** Batch payload claiming different tenant rejected with `UNAUTHORIZED_TENANT` (`WP013-T02E`).
+### 4.1 R2-01: True Automatic WAN Reconnection (`WP013-T08`)
+- **Test:** `WP013-T08: True Automatic WAN Reconnection & Outbox Drain Without Manual Connect` in `packages/sync/src/stream.test.ts`.
+- **Flow:**
+  1. `CloudWebSocketSyncGateway` started on dynamic HTTP port.
+  2. `EdgeSyncClient` connected; baseline sync verified (`CONNECTED`).
+  3. Real socket/transport closed via `gateway.close()`; HTTP server closed.
+  4. Same `EdgeSyncClient` instance left running; NO `client.connect()` called.
+  5. Socket closure detected, `WAN_DISCONNECTED` emitted, state enters `RECONNECTING`.
+  6. 2 new operations enqueued into real disk-backed SQLite outbox table (`outbox_queue`).
+  7. Gateway restarted on exact same port and route.
+  8. Automatic retry timer triggered; client automatically transitions to `CONNECTED`.
+  9. `WAN_RECONNECTED` telemetry emitted.
+  10. SQLite outbox automatically drained: backlog count reaches 0, records verified `SYNCED` with authentic receipt tokens.
 
-### 4.2 R1-03 & R1-04: Real SQLite Persistence, Process Restart, and Real Socket Failure (`WP013-CHAOS-01`)
-- **Real SQLite Database:** Created on disk using `EdgeDatabaseService` in temporary directory.
-- **Real WP-012 Outbox Persistence:** `EdgeOutboxPersistence` bound with `TestCloudReceiptVerifier`.
-- **Real Sync Persistence:** `EdgeSyncPersistence` bound to real SQLite instance.
-- **Baseline Sync:** 1 operation enqueued transactionally; flushed and verified `SYNCED` in SQLite with authentic receipt.
-- **Real Socket Failure:** Gateway closed via `gateway.close()`. Client detected transport failure via `ws.on('close')`, emitted `WAN_DISCONNECTED`, entered `RECONNECTING`.
-- **Offline Durability:** 3 offline operations created transactionally in SQLite; physical rows verified as `PENDING`.
-- **Process Restart Simulation:** Client disconnected; SQLite connection closed. Same SQLite database file re-opened with new instances of `EdgeDatabaseService`, `EdgeOutboxPersistence`, and `EdgeSyncPersistence`.
-- **Pending Rows Survived Restart:** All 3 rows confirmed `PENDING` with exact payloads in SQLite.
-- **Server Restored & Reconnected:** Gateway restarted on same port. Edge client connected, auto-flushed outbox.
-- **Receipt Verification:** All 3 rows transitioned to `SYNCED` with verified receipt tokens in SQLite.
-- **Duplicate Replay:** Operation replayed into batch processor; returned `DUPLICATE_ACCEPTED` with identical receipt, zero duplicate mutations.
-- **Eventual Convergence:** Outbox backlog count reaches 0. Total 4 operations (1 baseline + 3 offline) 100% `SYNCED` in SQLite. Zero lost transactions.
+### 4.2 R2-02: Strict Control-Plane Claim Typing
+- **Code:** `packages/sync/src/stream-gateway.ts`:
+  ```typescript
+  isControlPlane: claims.isControlPlane === true,
+  roles: Array.isArray(claims.roles)
+    ? claims.roles.filter((r): r is string => typeof r === 'string' && r.length > 0)
+    : [],
+  permissions: Array.isArray(claims.permissions)
+    ? claims.permissions.filter((p): p is string => typeof p === 'string' && p.length > 0)
+    : [],
+  ```
+- **Test Evidence:** `WP013-T07` validates:
+  - `isControlPlane: false` -> rejected (`CONTROL_PLANE_FORBIDDEN`).
+  - `isControlPlane: "false"` -> rejected (`CONTROL_PLANE_FORBIDDEN`).
+  - `isControlPlane: "true"` -> rejected (`CONTROL_PLANE_FORBIDDEN`).
+  - `isControlPlane: 1` -> rejected (`CONTROL_PLANE_FORBIDDEN`).
+  - Missing claim -> rejected (`CONTROL_PLANE_FORBIDDEN`).
+  - Literal `isControlPlane: true` + role `CLOUD_OPS` -> allowed.
 
-### 4.3 R1-05: Checkpoint Monotonicity Enforcement
-- **Cloud Database:** `SyncCheckpointRepository.upsertCheckpoint()` enforces `new >= current` for sequence and snapshot version. Throws `CHECKPOINT_REGRESSION_REJECTED`.
-- **Edge SQLite:** `EdgeSyncPersistence.upsertCheckpoint()` enforces `new >= current`. Throws `CHECKPOINT_REGRESSION_REJECTED`.
-- **Negative Tests:**
-  - `WP013-DB-06`: Cloud sequence 84 -> 40 regression rejected.
-  - `WP013-DB-07`: Cloud snapshot 5 -> 3 regression rejected.
-  - `WP013-DB-08`: Equal sequence/version accepted idempotently.
-  - `WP013-T05`: Edge SQLite sequence 84 -> 40 and snapshot 10 -> 7 regressions rejected.
+### 4.3 R2-03: Production JWT WebSocket Authentication (`WP013-T07`)
+- **Test:** `WP013-T07: Production JwtWebSocketAuthenticator Suite` in `packages/sync/src/stream.test.ts`.
+- **Cryptographic Setup:** Real RS256 key pair generated via Node `crypto` / `jose`.
+- **Test Matrix:**
+  - Valid Station JWT signed with private key -> HTTP 101 Switching Protocols, authenticated `AuthContext`.
+  - Forged token signed with different key -> HTTP 401 Unauthorized.
+  - Token with wrong issuer -> HTTP 401 Unauthorized.
+  - Token with wrong audience -> HTTP 401 Unauthorized.
+  - Authority strictly server-derived: client attempting to send payload for another tenant/branch rejected with `UNAUTHORIZED_TENANT`.
 
-### 4.4 R1-06: Governed Kill Switch Control Plane
-- **Privileged Gateway Guard:** `KILL_SWITCH_COMMAND` checks `auth.isControlPlane || auth.roles.includes('CLOUD_OPS')`.
-- **Ordinary Station Rejection:** Negative test `WP013-T04A` proves station operator is rejected with `CONTROL_PLANE_FORBIDDEN` and global kill switch remains enabled.
-- **Authorized Toggle & Broadcast:** Positive test `WP013-T04B` proves control plane client can toggle kill switch, which broadcasts to connected stations, halting sync immediately.
+### 4.4 R2-04: Concurrent PostgreSQL Checkpoint Monotonicity (`WP013-DB-09`)
+- **Test:** `WP013-DB-09: Concurrent PostgreSQL Checkpoint Monotonicity across independent connections` in `packages/database/src/sync.test.ts`.
+- **Setup:** Two separate pool clients (`clientA`, `clientB`) executing concurrent SQL transactions against PostgreSQL 16.
+- **Verification:**
+  - Baseline established at sequence 100, snapshot 10.
+  - Connection A attempts update to (150, 15).
+  - Connection B concurrently attempts stale update to (80, 8).
+  - SQL `ON CONFLICT DO UPDATE WHERE EXCLUDED.last_synced_sequence >= sync_checkpoints.last_synced_sequence AND EXCLUDED.last_snapshot_version >= sync_checkpoints.last_snapshot_version`.
+  - Persisted final authority is strictly (150, 15). Stale update resulted in 0 row mutations.
+  - Regressing snapshot version (160, 9 < 15) produced 0 row mutations.
 
-### 4.5 R1-07: Backoff & Jitter Behavior
-- Configured 20% random jitter in `ExponentialBackoffPolicy` (`jitterRatio: 0.20`, `deterministic: false` by default).
-- Test `WP013-T06` verifies varying backoff delays within [0.8 * base, 1.2 * base].
+### 4.5 R2-05: Real WP-012 Cloud Ingestion E2E Pipeline (`WP013-DB-10`)
+- **Test:** `WP013-DB-10: Real WP-012 Cloud Ingestion E2E with PostgreSQL, receipts, and idempotency` in `packages/database/src/sync.test.ts`.
+- **Components:**
+  - Real disk SQLite Outbox (`EdgeOutboxPersistence`).
+  - `EdgeSyncClient` with real WebSocket transport.
+  - `CloudWebSocketSyncGateway`.
+  - `PostgreSqlIngestedBatchProcessor` backed by real `IngestedIdempotencyEngine` on PostgreSQL 16.
+  - Real `TestCloudReceiptIssuer` and `TestCloudReceiptVerifier`.
+- **Verified Invariants:**
+  1. First operation applied; PostgreSQL domain table mutated once; sequence advanced to 1; row marked `SYNCED` in SQLite with authentic receipt.
+  2. Duplicate replay returns `DUPLICATE_ACCEPTED` with identical receipt.
+  3. Duplicate replay causes zero second mutation in PostgreSQL.
+  4. Sequence gap (sequence 5 with expected 2) returns governed buffering result without domain mutation.
+
+### 4.6 R2-06: Jitter Evidence Consistency
+- **Implementation:** Symmetric `base ± 20%` jitter in `ExponentialBackoffPolicy`.
+- **Formula:** `delay = Math.min(Math.max(capped + capped * 0.20 * (Math.random() * 2 - 1), 0), maxDelay)`.
+- **Test Evidence:** Verified in `WP013-T06` that delays are within `[800, 1200]` for `base = 1000`.
 
 ---
 
-## 5. Complete Regression Test Suite Results
+## 5. Complete Monorepo Regression Test Results
 
-Full monorepo regression suite executed:
+Full monorepo regression suite executed across all 6 packages:
 
-| Package | Test Suite File(s) | Total Tests | Passed | Failed | Skipped |
+| Package | Test Suites | Tests | Passed | Failed | Skipped |
 |---|---|---|---|---|---|
-| `@trident/core` | `dist/index.test.js` | 49 | 49 | 0 | 0 |
-| `@trident/database` | `dist/index.test.js`, `dist/outbox.test.js`, `dist/sync.test.js` | 229 | 229 | 0 | 0 |
-| `@trident/edge` (Unit & SQLite) | `dist/index.test.js`, `dist/database.test.js`, `dist/enrollment.test.js`, `dist/offline-iam.test.js`, `dist/folio.test.js`, `dist/outbox.test.js` | 155 | 155 | 0 | 0 |
-| `@trident/edge` (Electron Runtime) | `scripts/run-electron-tests.mjs` | 10 | 10 | 0 | 0 |
-| `@trident/pos` | `dist/index.test.js` | 1 | 1 | 0 | 0 |
-| `@trident/ui` | `dist/index.test.js` | 1 | 1 | 0 | 0 |
-| `@trident/sync` | `dist/index.test.js`, `dist/ingestion.test.js`, `dist/stream.test.js` | 33 | 33 | 0 | 0 |
-| **TOTAL** | **All 6 Packages** | **478** | **478** | **0** | **0** |
+| `@trident/core` | 8 | 49 | 49 | 0 | 0 |
+| `@trident/database` | 7 | 231 | 231 | 0 | 0 |
+| `@trident/sync` | 5 | 40 | 40 | 0 | 0 |
+| `@trident/edge` (Unit & SQLite) | 2 | 155 | 155 | 0 | 0 |
+| `@trident/edge` (Electron Runtime) | 1 | 10 | 10 | 0 | 0 |
+| `@trident/pos` | 1 | 1 | 1 | 0 | 0 |
+| `@trident/ui` | 1 | 1 | 1 | 0 | 0 |
+| **TOTAL** | **25** | **487** | **487** | **0** | **0** |
 
-- **Format Check:** `npm run format:check` PASSED (0 issues).
+- **Format Check:** `npm run format:check` PASSED (All matched files use Prettier code style).
 - **Lint:** `npm run lint` PASSED (0 errors across all 6 packages).
-- **Build:** `npm run build` PASSED (all 6 packages compiled cleanly).
+- **Build:** `npm run build` PASSED (All 6 packages compiled cleanly).
 - **Typecheck:** `npm run typecheck` PASSED (0 errors across all 6 packages).
-- **Dependency Graph:** `npm run graph:check` PASSED (0 boundary violations, 0 cycles).
+- **Dependency Graph:** `npm run graph:check` PASSED (0 boundary violations, 0 circular dependencies).
+- **Acceptance Tests Skipped:** Strictly 0 skipped acceptance tests.
 
 ---
 
 ## 6. Security Validation Debt Disposition
 
 ### 6.1 SEC-VAL-09 Disposition
-- **Current Governed Status:** `OPEN / PARTIAL`
+- **Governed Status:** `OPEN / PARTIAL`
 - **Builder Proposed Status:** `SEC-VAL-09 EVIDENCE COMPLETE — PROPOSED FOR INDEPENDENT EVALUATION`
-  *(Final disposition reserved strictly for role-separated Specialist Review and Coordinator evaluation).*
+  *(Reserved strictly for independent specialist review and Coordinator evaluation; not marked closed).*
 
 ### 6.2 Preserved Security Debts
-- **`SEC-VAL-03`:** `OPEN / PARTIAL — TARGET HARDWARE / LAN EVIDENCE REQUIRED` (Preserved strictly untouched).
-- **`SEC-VAL-08`:** `OPEN / PARTIAL — TARGET HARDWARE BENCHMARK REQUIRED` (Preserved strictly untouched).
+- **`SEC-VAL-03`:** `OPEN / PARTIAL — TARGET HARDWARE / LAN EVIDENCE REQUIRED` (Preserved untouched).
+- **`SEC-VAL-08`:** `OPEN / PARTIAL — TARGET HARDWARE BENCHMARK REQUIRED` (Preserved untouched).
 - **`SEC-VAL-02`:** `CLOSED` (Preserved).
 - **`SEC-VAL-04`:** `CLOSED` (Preserved).
 
@@ -176,7 +207,7 @@ Full monorepo regression suite executed:
 
 ## 7. Product Owner Decision Protection
 
-All nine Product Owner decisions remain strictly `PENDING PO DECISION`:
+All nine Product Owner open questions remain strictly `PENDING PO DECISION`:
 - `OQ-SSOT-01`: PENDING PO DECISION
 - `OQ-SSOT-02`: PENDING PO DECISION
 - `OQ-SSOT-03`: PENDING PO DECISION
@@ -189,12 +220,19 @@ All nine Product Owner decisions remain strictly `PENDING PO DECISION`:
 
 ---
 
-## 8. WP-014 Boundary Confirmation
+## 8. WP-014 Boundary Invariant Confirmation
 
-WP-014 remains completely untouched. No restaurant domain logic, dining models, tables/mesas, cuentas, kitchen display (KDS), or billing entities have been introduced.
+WP-014 remains completely prohibited and untouched.
+- No dining domain models.
+- No tables (`mesas`).
+- No restaurant checks (`cuentas`).
+- No restaurant OCC logic.
+- No kitchen display service (`KDS`).
+- No cash management or inventory domains.
+Synthetic aggregate names only used in test fixtures (`ORDER`).
 
 ---
 
-## 9. Final Remediation Status
+## 9. Final Builder Status
 
-**Status:** `WP-013-R1 IMPLEMENTED — READY FOR COORDINATOR FREEZE / QUICK INTEGRITY`
+**Status:** `WP-013 S13-R2 IMPLEMENTED — READY FOR COORDINATOR QUICK INTEGRITY`

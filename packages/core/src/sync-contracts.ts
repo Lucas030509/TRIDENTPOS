@@ -305,9 +305,9 @@ export class ExponentialBackoffPolicy implements BackoffPolicy {
     if (this.#deterministic) {
       return capped;
     }
-    // Governed jitter within specified ratio (default 20%)
-    const jitter = capped * this.#jitterRatio * Math.random();
-    return Math.min(capped + jitter, this.#maxDelayMs);
+    // Governed symmetric jitter within specified ratio (default ±20%)
+    const jitter = capped * this.#jitterRatio * (Math.random() * 2 - 1);
+    return Math.min(Math.max(capped + jitter, 0), this.#maxDelayMs);
   }
 
   public calculateDelay(retryCount: number): number {

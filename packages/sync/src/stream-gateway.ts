@@ -62,12 +62,25 @@ export class JwtWebSocketAuthenticator implements IWebSocketAuthenticator {
     if (!organizationId || !branchId || !isValidUuid(organizationId) || !isValidUuid(branchId)) {
       return null;
     }
+    // R2-02: Strict control-plane claim validation. Literal boolean true ONLY.
+    const rawControlPlane =
+      claims.isControlPlane !== undefined ? claims.isControlPlane : claims.is_control_plane;
+    const isControlPlane = rawControlPlane === true;
+
+    // Strict role/permission array typing: only non-empty strings allowed
+    const roles = Array.isArray(claims.roles)
+      ? claims.roles.filter((r): r is string => typeof r === 'string' && r.trim().length > 0)
+      : [];
+    const permissions = Array.isArray(claims.permissions)
+      ? claims.permissions.filter((p): p is string => typeof p === 'string' && p.trim().length > 0)
+      : [];
+
     return {
       organizationId,
       branchId,
-      isControlPlane: Boolean(claims.isControlPlane ?? claims.is_control_plane),
-      roles: Array.isArray(claims.roles) ? claims.roles.map(String) : [],
-      permissions: Array.isArray(claims.permissions) ? claims.permissions.map(String) : [],
+      isControlPlane,
+      roles,
+      permissions,
     };
   }
 }
@@ -380,12 +393,11 @@ export class CloudWebSocketSyncGateway {
       }
 
       case 'KILL_SWITCH_COMMAND': {
-        // Blocker R1-06: Treat kill switch as a privileged control-plane operation
-        const hasControlPlaneAuth = Boolean(
-          auth.isControlPlane ||
-          auth.roles?.includes('CLOUD_OPS') ||
-          auth.permissions?.includes('sync.kill_switch.manage'),
-        );
+        // Blocker R1-06 & R2-02: Treat kill switch as a privileged control-plane operation
+        const hasControlPlaneAuth =
+          auth.isControlPlane === true ||
+          (Array.isArray(auth.roles) && auth.roles.includes('CLOUD_OPS')) ||
+          (Array.isArray(auth.permissions) && auth.permissions.includes('sync.kill_switch.manage'));
 
         if (!hasControlPlaneAuth) {
           this.#sendError(
