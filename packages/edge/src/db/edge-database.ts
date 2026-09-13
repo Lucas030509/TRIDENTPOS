@@ -328,6 +328,46 @@ export class EdgeDatabaseService {
   }
 
   /**
+   * Executes DDL or batch SQL statements (e.g. table initialization) with fail-closed checks.
+   */
+  public executeSchema(sql: string): void {
+    this.assertOpen();
+    this.#db.exec(sql);
+  }
+
+  /**
+   * Executes a parameterized mutation statement (INSERT, UPDATE, DELETE).
+   * Parameterized execution prevents SQL injection per security invariants.
+   */
+  public executeMutation(
+    sql: string,
+    ...params: unknown[]
+  ): { readonly changes: number; readonly lastInsertRowid: number | bigint } {
+    this.assertOpen();
+    const stmt = this.#db.prepare(sql);
+    const result = stmt.run(...params);
+    return { changes: result.changes, lastInsertRowid: result.lastInsertRowid };
+  }
+
+  /**
+   * Queries a single row via parameterized statement.
+   */
+  public queryRow<T = unknown>(sql: string, ...params: unknown[]): T | undefined {
+    this.assertOpen();
+    const stmt = this.#db.prepare(sql);
+    return stmt.get(...params) as T | undefined;
+  }
+
+  /**
+   * Queries multiple rows via parameterized statement.
+   */
+  public queryRows<T = unknown>(sql: string, ...params: unknown[]): T[] {
+    this.assertOpen();
+    const stmt = this.#db.prepare(sql);
+    return stmt.all(...params) as T[];
+  }
+
+  /**
    * Executes a write operation through the in-process WriteSerializer queue.
    * Serializes competing writes to prevent avoidable SQLITE_BUSY errors.
    */

@@ -21,3 +21,8 @@ export function getPosPackageInfo(): PosPackageInfo {
     coreDependency: CORE_PACKAGE_NAME,
   };
 }
+export * from './types.js';
+export * from './errors.js';
+export * from './policies.js';
+export * from './ports.js';
+export * from './dining-service.js';
