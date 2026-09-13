@@ -1,16 +1,21 @@
 # DATA DICTIONARY — ERP RESTAURANTES / TRIDENTPOS
 
 > [!NOTE]
+> **ACR-2026-013 PROPOSED ARCHITECTURE CHANGE — PENDING GOVERNANCE APPROVAL**
+> 
+> Proposed amendment under `ACR-2026-013`: Harmonization of Edge SQLite monetary representation from floating point to exact signed 64-bit `INTEGER` (Fixed-Point Escala 4: factor $10^4 = 10,000$, `ADR-012`). Pending formal review and Product Owner approval.
+
+> [!NOTE]
 > **ACR-2026-011 APPROVED / MERGED / CANONICAL ON MAIN — G9**
 > 
 > The additions in this document relating to WP-009 (`enrollment_tokens`, `station_credentials`, `edge_security_audit`) represent governance overlays formally approved and merged into canonical main under G9 (`0e50fe12ba7a95638c8efe57d4cd9c598b56daa9`). The underlying baseline remains `APPROVED / FROZEN — 2026-09-01`.
 
 **Document ID:** `ARCH-DIC-001`  
-**Version:** `1.0 APPROVED / FROZEN` (with ACR-2026-011 Canonical Overlay — G9)  
-**Status:** `APPROVED / FROZEN — 2026-09-01` (`ACR-2026-011 APPROVED / MERGED / CANONICAL ON MAIN — G9`)  
-**Date:** 2026-09-01  
+**Version:** `1.1 PROPOSED OVERLAY — ACR-2026-013` (Underlying baseline: `1.0 APPROVED / FROZEN — 2026-09-01` with ACR-2026-011 Canonical Overlay — G9)  
+**Status:** `PROPOSED ARCHITECTURE CHANGE — PENDING GOVERNANCE APPROVAL`  
+**Date:** 2026-09-13  
 **Framework:** `EAAF v1.2.0 @ 7e036f43240b3dc28ccb996e350263598275b2cd`  
-**Author Agent:** `03_Data_Architect` (Overlay Synthesis: `01_Solution_Architect`)  
+**Author Agent:** `01_Solution_Architect` (Original author: `03_Data_Architect`)  
 **Approved Solution Baseline:** `e35205906055a8425ab875d05789652b3c3497b7` (Tag `solution-architecture-v1.3-approved`)  
 
 ---
@@ -115,11 +120,11 @@
 | `cuentas` | `version` | INTEGER | NO | Internal | Versión monotónica para Control de Concurrencia Optimista (OCC). |
 | `cuentas` | `folio_number` | INTEGER | SÍ | Confidential | Folio consecutivo de ticket asignado bajo el lease de la época activa. |
 | `cuentas` | `status` | VARCHAR(50) | NO | Internal | `ABIERTA`, `IMPRESA`, `PAGADA`, `ANULADA`. |
-| `cuenta_items` | `unit_price_applied` | DECIMAL(12,4)| NO | Confidential | **Frozen Economic Snapshot:** Precio unitario inmutable congelado al ordenar. |
-| `cuenta_items` | `tax_rate_applied` | DECIMAL(6,4) | NO | Confidential | Tasa de impuesto congelada vigente al instante de la comanda. |
+| `cuenta_items` | `unit_price_applied` | INTEGER (Scale 4) / DECIMAL(12,4)| NO | Confidential | **Frozen Economic Snapshot:** Precio unitario inmutable congelado al ordenar. Almacenado como INTEGER escala 4 (factor 10,000, ej. $45.0000 = 450000) en Edge SQLite (`ADR-012`) y `DECIMAL(12,4)` en Cloud. |
+| `cuenta_items` | `tax_rate_applied` | INTEGER (Scale 4) / DECIMAL(6,4) | NO | Confidential | Tasa de impuesto congelada vigente al instante de la comanda. Almacenada como INTEGER escala 4 (ej. 16% = 1600) en Edge SQLite (`ADR-012`) y `DECIMAL(6,4)` en Cloud. |
 | `mesas` | `version` | INTEGER | NO | Internal | Versión monotónica OCC para prevenir colisiones entre comanderos móviles. |
 | `turnos_caja` | `version` | INTEGER | NO | Internal | Versión monotónica OCC para aperturas y cierres de turno de cajero. |
-| `turnos_caja` | `closing_declared_cash`| DECIMAL(12,4)| SÍ | Confidential | Efectivo físicamente contado en arqueo ciego por el operador. |
+| `turnos_caja` | `closing_declared_cash`| INTEGER (Scale 4) / DECIMAL(12,4)| SÍ | Confidential | Efectivo físicamente contado en arqueo ciego por el operador. Almacenado como INTEGER escala 4 en Edge SQLite (`ADR-012`) y `DECIMAL(12,4)` en Cloud. |
 | `pagos` | `payment_method` | VARCHAR(50) | NO | Confidential | `EFECTIVO`, `TARJETA`, `TRANSFERENCIA`, `RESTCARD`, `CXC`. |
 | `outbox_queue` | `client_op_id` | TEXT / UUID | NO | Internal | UUIDv4 generado determinísticamente por el cliente antes del envío. |
 | `outbox_queue` | `idempotency_key` | TEXT | NO | Internal | Clave lógica compuesta única: `org:branch:aggType:aggId:action:clientOpId`. |

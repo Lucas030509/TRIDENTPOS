@@ -1,15 +1,20 @@
 # IMPLEMENTATION PLAN — ERP RESTAURANTES / TRIDENTPOS
 
 > [!NOTE]
+> **ACR-2026-013 PROPOSED ARCHITECTURE CHANGE — PENDING GOVERNANCE APPROVAL**
+> 
+> Proposed amendment under `ACR-2026-013`: Harmonization of Edge exact fixed-point signed integer storage (`INTEGER` scale 4, `ADR-012`) and monorepo package composition topology (`ADR-013`) for WP-014 (`@trident/pos` + `@trident/pos-edge-runtime`) and WP-017 (`@trident/inventory` + `@trident/cloud-server`). Pending formal review and Product Owner approval.
+
+> [!NOTE]
 > **ACR-2026-011 APPROVED / MERGED / CANONICAL ON MAIN — G9**
 > 
 > The additions and test specifications in this document relating to WP-009 (`DATA-INV-WP009-01`, `StationPinStore`, `EdgeSecureStore`, `edge_security_audit`, exact test obligations) represent governance overlays formally approved and merged into canonical main under G9 (`0e50fe12ba7a95638c8efe57d4cd9c598b56daa9`). The underlying baseline remains `APPROVED / FROZEN — 2026-09-03`.
 
 **Document ID:** `PLAN-IMP-001`  
-**Version:** `1.1 APPROVED OVERLAY` (ACR-2026-011 Canonical Overlay — G9)  
-**Status:** `READY FOR INDEPENDENT IMPLEMENTATION READINESS REVIEW` (`ACR-2026-011 APPROVED / MERGED / CANONICAL ON MAIN — G9`)  
-**Date:** `2026-09-03`  
-**Author Agent:** `01_Solution_Architect — IMPLEMENTATION READINESS REMEDIATION AUTHOR` (Overlay Synthesis: `01_Solution_Architect`)  
+**Version:** `1.2 PROPOSED OVERLAY — ACR-2026-013` (Underlying baseline: `1.0 APPROVED / FROZEN — 2026-09-03` with ACR-2026-011 Canonical Overlay — G9)  
+**Status:** `PROPOSED ARCHITECTURE CHANGE — PENDING GOVERNANCE APPROVAL`  
+**Date:** `2026-09-13`  
+**Author Agent:** `01_Solution_Architect` (Overlay Synthesis: `01_Solution_Architect`)  
 **Target Gate:** `gates/IMPLEMENTATION_READINESS_GATE.md`  
 **Governing Framework:** `EAAF v1.2.0 @ 7e036f43240b3dc28ccb996e350263598275b2cd`  
 **Immutable Architecture Baseline Commit:** `6c31b64c435d50177e192fc6c5b7e83e18ffd87f`  
@@ -588,17 +593,21 @@ Dining room, counter orders, kitchen display (KDS), cash drawer, Cortes X/Z, and
 
 #### `WP-014`: Dining Room, Tables & Orders Domain Engine with OCC
 * **Bounded Context:** TRIDENTPOS
-* **Frozen Requirements:** `DATA_MODEL.md` Sec. 2; `FUNCTIONAL_ARCHITECTURE.md` Sec. 3; `ADR-002`
-* **ADRs:** `ADR-002`, `ADR-004`
-* **Data Objects:** SQLite & Cloud `zonas_mesas`, `mesas`, `cuentas`, `ordenes`, `orden_partidas`, `orden_modificadores`
+* **Frozen Requirements:** `DATA_MODEL.md` Sec. 2 & 3; `FUNCTIONAL_ARCHITECTURE.md` Sec. 3; `ADR-002`, `ADR-004`, `ADR-012`, `ADR-013`, `ACR-2026-013`
+* **ADRs:** `ADR-002`, `ADR-004`, `ADR-012`, `ADR-013`
+* **Data Objects:** SQLite `mesas`, `cuentas`, `cuenta_items`, `cuenta_item_modificadores` almacenados con enteros fixed-point escala 4 (`INTEGER`, factor $10^4 = 10,000$, `ADR-012`); Cloud read replica `local_products`.
+* **Package Placement & Topology (`ADR-013`):**
+  - Dominio puro: `@trident/pos` (entidades `Mesa`, `Cuenta`, `CuentaItem`, motor OCC, interfaces `CancellationPolicy` y `BillSplitProrationStrategy`). Depende únicamente de `@trident/core`.
+  - Persistencia e Infraestructura: `@trident/edge` (`EdgeDatabaseService` SQLite WAL, `EdgeOutboxPersistence`). Depende de `@trident/core`.
+  - Ensamblado y Raíz de Composición: `@trident/pos-edge-runtime` (Fastify LAN REST API, inyección de dependencias, adaptadores de persistencia y suite de pruebas de integración con SQLite real).
 * **APIs / Contracts:** Fastify local POS REST API (`POST /cuentas`, `POST /ordenes/partidas`, `PUT /cuentas/:id/cerrar`)
 * **Builder Agent:** `16_Native_Edge_Developer`
 * **Specialist Reviewer:** `03_Data_Architect`
 * **Code Reviewer:** `11_Code_Reviewer`
 * **Prerequisites:** `WP-008`, `WP-010`, `WP-012`
-* **Dependencies:** SQLite 3 WAL, local Fastify daemon.
-* **Inputs:** `DATA_MODEL.md` Sec. 2, `DATA_AUTHORITY_MATRIX.md`
-* **Outputs:** Local dining room aggregate service enforcing `expectedVersion` on `cuentas` and `mesas`; returns HTTP 409 Conflict on version mismatch; persists orders with Transactional Outbox records; defines `CancellationPolicy` and `BillSplitProrationStrategy` interfaces.
+* **Dependencies:** SQLite 3 WAL, local Fastify daemon, Value Object `Money` (`ADR-012`).
+* **Inputs:** `DATA_MODEL.md` Sec. 3, `DATA_AUTHORITY_MATRIX.md`, `ADR-012`, `ADR-013`
+* **Outputs:** Local dining room aggregate service enforcing `expectedVersion` on `cuentas` and `mesas`; returns HTTP 409 Conflict on version mismatch; persists orders with Transactional Outbox records; defines `CancellationPolicy` and `BillSplitProrationStrategy` interfaces; fastify endpoints and real SQLite integration test suite.
 * **Acceptance Criteria:** Prevents concurrent waiters from overwriting orders on shared table; detects conflict and provides current aggregate snapshot; orders saved locally under target latency (`< 5 ms`).
 * **Tests:** OCC race condition test (two concurrent clients submitting mutations with identical `expectedVersion`, exactly one succeeds, second receives 409); local latency benchmark.
 * **Security Debt:** None. (Local order latency benchmarking is classified as `PERFORMANCE / IMPLEMENTATION ENGINEERING VALIDATION`, not `SEC-VAL-08`).
@@ -668,18 +677,22 @@ Stock management, recipes, automated depletion via KDS production, purchase orde
 
 #### `WP-017`: Inventory Catalog, Multi-Warehouse & Recipe Explosion Engine
 * **Bounded Context:** Inventory
-* **Frozen Requirements:** `DATA_MODEL.md` Sec. 3; `FUNCTIONAL_ARCHITECTURE.md` Sec. 4; `MODULE_CATALOG.md`
-* **ADRs:** `ADR-001`, `ADR-002`
-* **Data Objects:** `insumos`, `unidades_medida`, `almacenes`, `recetas`, `receta_ingredientes`, `subrecetas`
+* **Frozen Requirements:** `DATA_MODEL.md` Sec. 2.3; `FUNCTIONAL_ARCHITECTURE.md` Sec. 4; `MODULE_CATALOG.md`; `ADR-013`, `ACR-2026-013`
+* **ADRs:** `ADR-001`, `ADR-002`, `ADR-013`
+* **Package Placement & Topology (`ADR-013`):**
+  - Dominio puro: `@trident/inventory` (entidades `Insumo`, `UnidadMedida`, `Almacen`, `Receta`, `RecetaIngrediente`, `Subreceta`, motor de explosión recursiva y costeo promedio ponderado, interfaz `ModifierRecipeResolver`). Depende únicamente de `@trident/core`. Cero dependencia hacia `@trident/pos`.
+  - Persistencia e Infraestructura: `@trident/database` (migraciones PostgreSQL 16 y políticas RLS para inventario).
+  - Ensamblado y Raíz de Composición Cloud: `@trident/cloud-server` (inyección de repositorios PostgreSQL y exposición de endpoints Backoffice).
+* **Data Objects:** PostgreSQL `insumos`, `unidades_medida`, `almacenes`, `recetas`, `receta_ingredientes`, `subrecetas` (`DECIMAL(12,4)`)
 * **APIs / Contracts:** Recipe service (`calculateRecipeCost()`, `explodeIngredients()`)
 * **Builder Agent:** `13_Backend_Developer`
 * **Specialist Reviewer:** `03_Data_Architect`
 * **Code Reviewer:** `11_Code_Reviewer`
 * **Prerequisites:** `WP-004`
 * **Dependencies:** PostgreSQL 16 in Supabase (`FROZEN ARCHITECTURE`).
-* **Inputs:** `DATA_MODEL.md` Sec. 3
+* **Inputs:** `DATA_MODEL.md` Sec. 2.3, `MODULE_CATALOG.md`, `ADR-013`
 * **Outputs:** Multi-warehouse inventory schema; hierarchical sub-recipe explosion engine supporting yield factors and waste percentages; defines `ModifierRecipeResolver` contract.
-* **Acceptance Criteria:** Correctly explodes nested sub-recipes to base raw materials; calculates theoretical unit cost based on weighted average purchase price.
+* **Acceptance Criteria:** Correctly explodes nested sub-recipes to base raw materials; calculates theoretical unit cost based on weighted average purchase price; operates standalone without runtime dependency on TRIDENTPOS.
 * **Tests:** Recursive recipe unit test; zero-division edge case test (zero cost insumo); cycle detection test in recipe graph.
 * **Security Debt:** None
 * **Evidence Required:** Recipe explosion test report with mathematical validation of yields.

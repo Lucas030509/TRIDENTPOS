@@ -1,10 +1,14 @@
 # TECH STACK DECISIONS & RUNTIME EVALUATION — ERP RESTAURANTES
 
+> [!NOTE]
+> **ACR-2026-013 PROPOSED ARCHITECTURE CHANGE — PENDING GOVERNANCE APPROVAL**
+> 
+> Proposed amendment under `ACR-2026-013`: Ratification of Edge SQLite exact fixed-point signed integer storage (`INTEGER` scale 4, `ADR-012`) and the 4-layer monorepo package composition model (`ADR-013`). Pending formal review and Product Owner approval.
+
 **Document ID:** `ARCH-STK-001`  
-**Version:** `1.3 NORMALIZED / REMEDIATED (with Proposed ADR-011 Amendment)`  
-**Canonical Baseline:** `v1.3 APPROVED / FROZEN` (2026-09-01)  
-**ADR-011 Amendment Status:** `PROPOSED — PENDING ROLE-SEPARATED REVIEW / PRODUCT OWNER APPROVAL`  
-**Date:** 2026-09-04  
+**Version:** `1.4 PROPOSED OVERLAY — ACR-2026-013` (Underlying baseline: `v1.3 APPROVED / FROZEN — 2026-09-01`)  
+**Status:** `PROPOSED ARCHITECTURE CHANGE — PENDING GOVERNANCE APPROVAL`  
+**Date:** 2026-09-13  
 **Baseline:** `EAAF v1.2.0 @ 7e036f43240b3dc28ccb996e350263598275b2cd`  
 **Supersedes:** `TECH_STACK_DECISIONS.md v1.1`  
 
@@ -18,7 +22,8 @@
 | **Cloud Backend & Sync** | Node.js (Node 24 LTS, ADR-011) / TypeScript (Express / Fastify) en Render | Ejecución del Monolito Modular con tipado estricto compartido y soporte para workers en segundo plano. |
 | **Base de Datos Central** | PostgreSQL multi-tenant en Supabase | Integridad transaccional ACID, soporte de Row-Level Security (RLS) y notificaciones `LISTEN / NOTIFY` para el outbox. |
 | **Edge Host Runtime** | Electron / Node.js (TypeScript) — *Baseline Actual* | Ecosistema probado para drivers de periféricos (ESC/POS, serial, básculas), reutilización 100% de tipos TypeScript con Cloud. Runtime embebido gobernado por Electron (`ADR-011`). |
-| **Base de Datos en Borde** | SQLite 3 (Modo WAL) | Motor embebido de cero administración con transacciones ACID y lecturas concurrentes sin bloqueo. |
+| **Base de Datos en Borde** | SQLite 3 (Modo WAL) con enteros fixed-point escala 4 (`ADR-012`) | Motor embebido de cero administración con transacciones ACID, lecturas concurrentes sin bloqueo y aritmética exacta libre de punto flotante. |
+| **Arquitectura de Monorepo** | Monolito Modular en 4 Capas con Raíces de Composición (`ADR-013`) | Separación estricta entre Kernel (`@trident/core`), Dominios de negocio puros, Adaptadores de Infraestructura técnica y Raíces de Composición ejecutables. |
 | **Comunicaciones LAN** | HTTP REST (Comandos) + WebSockets `ws` (Push) | Mínima sobrecarga de red y actualización en tiempo real de pantallas KDS y comanderos. |
 | **Monitoreo & Telemetría** | Sentry Cloud + Buffer Local Offline | Trazabilidad de excepciones, detección de degradación en sincronización y monitoreo de periféricos. |
 
@@ -50,11 +55,24 @@ Se evaluó la selección del runtime para el Edge Server en sucursal entre **Ele
 ## 3. Durabilidad del Almacenamiento Local (SQLite 3 WAL) (REM-07)
 
 - **Configuración:** `PRAGMA journal_mode = WAL;` con `PRAGMA synchronous = NORMAL;` para operaciones operativas y `PRAGMA synchronous = FULL;` para cierres de turno y Cortes Z.
+- **Representación Numérica (`ADR-012`):** Todos los campos monetarios, impuestos y cantidades se almacenan como `INTEGER` con escala fija 4 ($10^4 = 10,000$). Punto flotante (`REAL` / `FLOAT`) estrictamente prohibido.
 - **Dependencia de Hardware:** Requiere almacenamiento de estado sólido (SSD/eMMC) y respaldo eléctrico (UPS) en la sucursal para evitar pérdida de escrituras en caché volátil ante cortes de energía.
 - **Certificación Requerida:** `REQUIRES HARDWARE POWER-LOSS VALIDATION.`
+
+---
+
+## 4. Topología de Monorepo y Modelo de Composición (`ADR-013`)
+
+- **Estructura en 4 Capas:**
+  1. *Capa 1 (Kernel):* `@trident/core` (contratos, capabilities, Value Objects como `Money`).
+  2. *Capa 2 (Dominios de Negocio):* `@trident/pos`, `@trident/inventory`, etc. Dependen únicamente de `@trident/core`. Jamás se importan entre sí ni importan infraestructura técnica.
+  3. *Capa 3 (Infraestructura Técnica):* `@trident/database`, `@trident/edge`, `@trident/sync`, `@trident/ui`. Dependen de `@trident/core`.
+  4. *Capa 4 (Raíces de Composición):* `@trident/pos-edge-runtime` (Fastify LAN + ensamblado SQLite/outbox en Edge), `@trident/cloud-server` (Cloud API Gateway + Modular Monolith root).
+- **Invariante de Aislamiento:** Dominios puros e independientes de la tecnología de persistencia; raíces de composición asépticas sin lógica de negocio propia.
 
 ---
 
 DOCUMENT STATUS:
 - Canonical Baseline v1.3: APPROVED / FROZEN — 2026-09-01
 - ADR-011 Proposed Amendment: PROPOSED — PENDING ROLE-SEPARATED REVIEW & PRODUCT OWNER APPROVAL
+- ACR-2026-013 (ADR-012, ADR-013) Proposed Amendment: PROPOSED — PENDING GOVERNANCE APPROVAL
