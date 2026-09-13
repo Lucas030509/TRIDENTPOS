@@ -23,7 +23,8 @@
 ## 1. Convenciones Generales de Tipos y Nomenclatura
 
 - **Identificadores:** UUIDv4 estándar en Cloud (`uuid`) y texto canónico en Edge (`TEXT`).
-- **Valores Monetarios:** `DECIMAL(12, 4)` en Cloud y `INTEGER` (Fixed-Point Escala 4: factor $10^4 = 10,000$, ej. `$150.5000` = `1505000`) en Edge SQLite (`ADR-012`, `ACR-2026-013`). Prohibido punto flotante (`REAL` / `FLOAT`).
+- **Valores Monetarios:** `DECIMAL(12, 4)` en Cloud y `INTEGER` (Fixed-Point Escala 4: factor $10^4 = 10,000$, ej. `$150.5000` = `1505000`) en Edge SQLite (`ADR-012`, `ACR-2026-013`). Prohibido punto flotante (`REAL` / `FLOAT`). La nulabilidad permanece gobernada por el ciclo de vida de cada campo individual (los precios y totales de partidas son NOT NULL; campos de arqueo como `closing_declared_cash` son NULL mientras el turno está abierto).
+- **Tasas Impositivas:** `DECIMAL(6, 4)` en Cloud y `INTEGER` (Fixed-Point Escala 4: factor $10^4 = 10,000$, ej. 16% IVA = `1600`) en Edge SQLite.
 - **Cantidades e Insumos:** `DECIMAL(12, 4)` en Cloud y `INTEGER` (Fixed-Point Escala 4: factor $10^4 = 10,000$, ej. `0.2500` kg = `2500`) en Edge SQLite para soportar gramajes, mililitros y fracciones de receta sin deriva numérica (`ADR-012`).
 - **Fechas y Tiempos:** `TIMESTAMPTZ` (UTC ISO 8601) en Cloud y `TEXT` (formato `YYYY-MM-DDTHH:MM:SS.SSSZ`) o `INTEGER` (Unix Epoch Seconds según subsistema gobernado) en SQLite.
 - **Nomenclatura:** `snake_case` para tablas y columnas.
@@ -292,7 +293,8 @@ CREATE TABLE products (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     deleted_at TIMESTAMPTZ NULL,
-    CONSTRAINT uq_products_org_code UNIQUE (organization_id, code)
+    CONSTRAINT uq_products_org_code UNIQUE (organization_id, code),
+    CONSTRAINT uq_products_org_id UNIQUE (organization_id, id)
 );
 
 -- Overrides de Producto por Sucursal (Branch Overrides)
@@ -390,19 +392,23 @@ CREATE TABLE synced_cortes_z (
 ### 2.3 Bounded Context 3 & 4: Inventory & Procurement
 
 ```sql
--- Almacenes y Centros de Consumo
+-- Almacenes y Centros de Consumo (WP-017)
 CREATE TABLE warehouses (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     organization_id UUID NOT NULL REFERENCES organizations(id),
-    branch_id UUID NOT NULL REFERENCES branches(id),
+    branch_id UUID NOT NULL,
     code VARCHAR(50) NOT NULL,
     name VARCHAR(100) NOT NULL,
     warehouse_type VARCHAR(50) NOT NULL, -- PRINCIPAL, PRODUCCION, BARRA, COCINA
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
-    CONSTRAINT uq_warehouses_org_branch_code UNIQUE (organization_id, branch_id, code)
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_warehouses_org_branch_code UNIQUE (organization_id, branch_id, code),
+    CONSTRAINT uq_warehouses_org_id UNIQUE (organization_id, id),
+    CONSTRAINT fk_warehouses_branch FOREIGN KEY (organization_id, branch_id) REFERENCES branches(organization_id, id)
 );
 
--- Insumos e Ingredientes Base
+-- Insumos e Ingredientes Base (WP-017)
 CREATE TABLE ingredients (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     organization_id UUID NOT NULL REFERENCES organizations(id),
@@ -412,32 +418,70 @@ CREATE TABLE ingredients (
     current_average_cost DECIMAL(12, 4) NOT NULL DEFAULT 0.0000,
     last_purchase_cost DECIMAL(12, 4) NOT NULL DEFAULT 0.0000,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
-    CONSTRAINT uq_ingredients_org_code UNIQUE (organization_id, code)
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_ingredients_org_code UNIQUE (organization_id, code),
+    CONSTRAINT uq_ingredients_org_id UNIQUE (organization_id, id)
 );
 
--- Recetas Escandallo (Subrecetas y Productos Compuestos)
+-- Recetas Escandallo (Subrecetas y Productos Compuestos) (WP-017)
 CREATE TABLE recipes (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     organization_id UUID NOT NULL REFERENCES organizations(id),
-    product_id UUID NULL REFERENCES products(id), -- Null si es subreceta intermedia
+    product_id UUID NULL, -- Null si es subreceta intermedia
     code VARCHAR(50) NOT NULL,
     name VARCHAR(255) NOT NULL,
     yield_quantity DECIMAL(12, 4) NOT NULL DEFAULT 1.0000,
     yield_unit VARCHAR(20) NOT NULL,
     total_cost DECIMAL(12, 4) NOT NULL DEFAULT 0.0000,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
-    CONSTRAINT uq_recipes_org_code UNIQUE (organization_id, code)
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_recipes_org_code UNIQUE (organization_id, code),
+    CONSTRAINT uq_recipes_org_id UNIQUE (organization_id, id),
+    CONSTRAINT fk_recipes_product FOREIGN KEY (organization_id, product_id) REFERENCES products(organization_id, id)
 );
 
 CREATE TABLE recipe_items (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    recipe_id UUID NOT NULL REFERENCES recipes(id),
-    ingredient_id UUID NULL REFERENCES ingredients(id),
-    sub_recipe_id UUID NULL REFERENCES recipes(id),
+    organization_id UUID NOT NULL REFERENCES organizations(id),
+    recipe_id UUID NOT NULL,
+    ingredient_id UUID NULL,
+    sub_recipe_id UUID NULL,
     quantity DECIMAL(12, 4) NOT NULL,
     gross_quantity DECIMAL(12, 4) NOT NULL, -- Incluye factor de merma
-    unit_cost_snapshot DECIMAL(12, 4) NOT NULL
+    unit_cost_snapshot DECIMAL(12, 4) NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_recipe_items_org_id UNIQUE (organization_id, id),
+    CONSTRAINT fk_recipe_items_recipe FOREIGN KEY (organization_id, recipe_id) REFERENCES recipes(organization_id, id),
+    CONSTRAINT fk_recipe_items_ingredient FOREIGN KEY (organization_id, ingredient_id) REFERENCES ingredients(organization_id, id),
+    CONSTRAINT fk_recipe_items_sub_recipe FOREIGN KEY (organization_id, sub_recipe_id) REFERENCES recipes(organization_id, id),
+    CONSTRAINT chk_recipe_items_exclusive_source CHECK (
+        (ingredient_id IS NOT NULL AND sub_recipe_id IS NULL) OR
+        (ingredient_id IS NULL AND sub_recipe_id IS NOT NULL)
+    )
 );
+
+-- Row-Level Security (RLS) Specification for WP-017 Inventory Tables
+ALTER TABLE warehouses ENABLE ROW LEVEL SECURITY;
+ALTER TABLE warehouses FORCE ROW LEVEL SECURITY;
+CREATE POLICY warehouses_tenant_isolation_policy ON warehouses
+    FOR ALL USING (organization_id = current_app_org_id());
+
+ALTER TABLE ingredients ENABLE ROW LEVEL SECURITY;
+ALTER TABLE ingredients FORCE ROW LEVEL SECURITY;
+CREATE POLICY ingredients_tenant_isolation_policy ON ingredients
+    FOR ALL USING (organization_id = current_app_org_id());
+
+ALTER TABLE recipes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE recipes FORCE ROW LEVEL SECURITY;
+CREATE POLICY recipes_tenant_isolation_policy ON recipes
+    FOR ALL USING (organization_id = current_app_org_id());
+
+ALTER TABLE recipe_items ENABLE ROW LEVEL SECURITY;
+ALTER TABLE recipe_items FORCE ROW LEVEL SECURITY;
+CREATE POLICY recipe_items_tenant_isolation_policy ON recipe_items
+    FOR ALL USING (organization_id = current_app_org_id());
 
 -- Kárdex de Movimientos de Stock (Append-Only)
 CREATE TABLE stock_ledger (

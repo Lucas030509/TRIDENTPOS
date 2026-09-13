@@ -54,10 +54,15 @@ Se requiere establecer una única representación física y lógica, determinist
 
 ### Option D: `INTEGER` Fixed-Point con Escala 4 (Factor Multiplicador $10^4 = 10,000$) — *Seleccionada*
 - *Pros:*
-  1. **Exactitud 100% Determinista:** Todos los valores monetarios se almacenan como enteros con signo de 64 bits en SQLite (`INTEGER`), representando micro-unidades de escala 4 ($1.0000 = 10,000$).
+  1. **Exactitud 100% Determinista:** Todos los valores monetarios se almacenan como enteros con signo de 64 bits en SQLite (`INTEGER`), representando unidades fixed-point de escala 4 (diezmilésimas, $1.0000 = 10,000$).
   2. **Isomorfismo Exacto con Cloud `DECIMAL(12,4)`:** La escala 4 en Edge empata 1:1 con los 4 decimales de PostgreSQL `DECIMAL(12,4)` sin truncación, redondeo intermedio, ni pérdida de precisión.
-  3. **Rango de Seguridad Absoluto:** El tipo `INTEGER` de SQLite es un entero de 64 bits con signo (hasta $\pm 9.22 \times 10^{18}$). A escala 4 ($10^4$), soporta transacciones de hasta $\pm 922$ billones de pesos/dólares ($9.22 \times 10^{14}$ unidades monetarias). En JavaScript, los valores caben holgadamente dentro de `Number.MAX_SAFE_INTEGER` ($9 \times 10^{15}$, equivalente a 900 mil millones a escala 4) y se procesan nativamente con `BigInt` para garantizar aritmética libre de desbordamiento.
-  4. **Agregaciones Nativas en SQLite:** Las funciones nativas `SUM()`, `AVG()`, `MIN()`, `MAX()` y los operadores de comparación sobre `INTEGER` son computacionalmente óptimos y matemáticamente exactos.
+  3. **Rango Común Interoperable y Autoridad de BigInt:** 
+     - El rango canónico interoperable está gobernado por el tipo más restrictivo: Cloud PostgreSQL `DECIMAL(12,4)` (12 dígitos decimales totales, 4 fraccionarios, 8 enteros), lo que delimita estrictamente el rango de importes a $[-99,999,999.9999, +99,999,999.9999]$. En Edge SQLite a escala 4, esto equivale al rango de enteros $[-999999999999, +999999999999]$ ($[-999\_999\_999\_999\text{n}, +999\_999\_999\_999\text{n}]$).
+     - Se define validación de límites antes de la persistencia, aceptación de resultados aritméticos, sincronización y serialización Cloud.
+     - Toda la aritmética en el dominio TypeScript se ejecuta exclusivamente con `bigint`. Debido a que la multiplicación a escala 4 genera productos intermedios a escala 8, se prohíbe el uso de `number` de JavaScript para aritmética financiera autoritativa a fin de prevenir desbordamientos de precisión.
+  4. **Semántica de Agregaciones en SQLite:**
+     - *Permitidas para operaciones autoritativas de punto fijo:* `MIN(integer)`, `MAX(integer)` y `SUM(integer)`, siempre que cada entrada sea `INTEGER`, que los límites de la aplicación/base de datos garanticen ausencia de desbordamiento de 64 bits con signo, y que cualquier desbordamiento sea tratado como falla explícita.
+     - *Prohibidas para cálculo monetario autoritativo:* `AVG()` y `TOTAL()`, debido a que SQLite retorna números en punto flotante (`REAL`). Cuando se requiera un promedio, debe computarse como `sumScale4 = SUM(col)`, `count = COUNT(col)` y `averageScale4 = roundDiv(sumScale4, count)` utilizando la primitiva canónica de redondeo con BigInt.
 - *Verdict:* **Seleccionada como estándar canónico oficial.**
 
 ---
@@ -66,68 +71,126 @@ Se requiere establecer una única representación física y lógica, determinist
 
 Se establece como **norma arquitectónica obligatoria e inmutable**:
 
-### 4.1 Representación Física en SQLite
-En todos los esquemas locales de Edge SQLite (incluyendo `cuentas`, `cuenta_items`, `cuenta_item_modificadores`, `turnos_caja`, `pagos` y catálogos en caché), **todas las columnas monetarias, tasas de impuesto y cantidades fraccionarias se declaran como `INTEGER NOT NULL`** con escala fija de **4 decimales** (factor de escala $S = 10,000$).
+### 4.1 Representación Física en SQLite y Gobernanza de Nulabilidad
+Todos los valores numéricos monetarios, tasas impositivas y cantidades fraccionarias persistidos en Edge SQLite se almacenan como `INTEGER` con escala fija de **4 decimales** (factor de escala $S = 10,000$).
+
+La nulabilidad de las columnas permanece gobernada por el ciclo de vida y el modelo de datos de cada campo individual. Los campos de balance transaccional y totales de partida son `INTEGER NOT NULL`. Por el contrario, los campos cuyo ciclo de vida exige que no estén disponibles antes de un evento de negocio (por ejemplo, en `turnos_caja`: `closing_declared_cash`, `calculated_cash_total` y `cash_difference`) permanecen como `INTEGER NULL` durante el turno abierto y solo se asignan al momento del arqueo y cierre.
 
 Queda **terminantemente prohibido** el uso de `REAL`, `FLOAT` o números flotantes de JavaScript en cualquier esquema, consulta o payload de base de datos Edge.
 
-### 4.2 Escalas Canónicas
-| Concepto | Escala ($10^N$) | Divisor / Factor | Ejemplo Decimal | Ejemplo SQLite `INTEGER` |
-|---|---|---|---|---|
-| **Importes Monetarios** (subtotal, total, propinas, descuentos) | 4 | $10,000$ | `$150.5000` | `1505000` |
-| **Precios Unitarios** (`unit_price_applied`) | 4 | $10,000$ | `$45.0000` | `450000` |
-| **Precios de Modificadores** (`modifier_price_applied`) | 4 | $10,000$ | `$8.5000` | `85000` |
-| **Tasas Impositivas** (`tax_rate_applied`, ej. IVA 16%) | 4 | $10,000$ | `0.1600` (16%) | `1600` |
-| **Cantidades Fraccionarias** (`quantity`, insumos/recetas) | 4 | $10,000$ | `1.0000` unidad | `10000` |
-| **Cantidades Fraccionarias** (`quantity`, ej. 250 g) | 4 | $10,000$ | `0.2500` kg | `2500` |
+### 4.2 Escalas Canónicas y Taxonomía de Precisión Cloud
+Se distingue formalmente la precisión entre conceptos de negocio:
+- **Importes Monetarios, Precios Unitarios, Costos y Cantidades:** En Cloud se definen como `DECIMAL(12,4)`; en Edge SQLite se almacenan como `INTEGER` escala 4 ($S = 10,000$).
+- **Tasas Impositivas (`tax_rate_applied`):** En Cloud se definen como `DECIMAL(6,4)`; en Edge SQLite se almacenan como `INTEGER` escala 4 ($S = 10,000$, ej. 16% IVA = `1600`).
+- **Otras Razones y Factores Gobernados:** Utilizan su precisión explícita congelada en Cloud; en Edge se representan como `INTEGER` escala 4.
+
+| Concepto | Escala ($10^N$) | Divisor / Factor | Tipo Cloud | Ejemplo Decimal Canónico | Ejemplo SQLite `INTEGER` |
+|---|---|---|---|---|---|
+| **Importes Monetarios** (subtotal, total, propinas, descuentos) | 4 | $10,000$ | `DECIMAL(12,4)` | `"150.5000"` | `1505000` |
+| **Precios Unitarios** (`unit_price_applied`) | 4 | $10,000$ | `DECIMAL(12,4)` | `"45.0000"` | `450000` |
+| **Precios de Modificadores** (`modifier_price_applied`) | 4 | $10,000$ | `DECIMAL(12,4)` | `"8.5000"` | `85000` |
+| **Tasas Impositivas** (`tax_rate_applied`, IVA 16%) | 4 | $10,000$ | `DECIMAL(6,4)` | `"0.1600"` | `1600` |
+| **Cantidades Fraccionarias** (`quantity`, insumos/recetas) | 4 | $10,000$ | `DECIMAL(12,4)` | `"1.0000"` | `10000` |
+| **Cantidades Fraccionarias** (`quantity`, ej. 250 g) | 4 | $10,000$ | `DECIMAL(12,4)` | `"0.2500"` | `2500` |
 
 ### 4.3 Regla de Redondeo y Secuencia de Aritmética Comercial
-Para prevenir discrepancias de redondeo entre partidas individuales y totales de cuenta:
-1. **Aritmética de Partida (`cuenta_items`):**
-   $$\text{subtotal\_cents4} = \left\lfloor \frac{\text{unit\_price\_applied} \times \text{quantity} + 5,000}{10,000} \right\rfloor$$
-   $$\text{net\_subtotal\_cents4} = \text{subtotal\_cents4} - \text{discount\_amount\_applied}$$
-   $$\text{tax\_amount\_applied} = \left\lfloor \frac{\text{net\_subtotal\_cents4} \times \text{tax\_rate\_applied} + 5,000}{10,000} \right\rfloor$$
-   $$\text{total\_cents4} = \text{net\_subtotal\_cents4} + \text{tax\_amount\_applied}$$
-2. **Modo de Redondeo Oficial:**
-   Se adopta **Half Away From Zero** (redondeo comercial estándar / SAT México), computado exactamente mediante división entera:
-   $$\text{roundDiv}(A, B) = \text{sign}(A \cdot B) \times \left\lfloor \frac{|A| + \lfloor |B| / 2 \rfloor}{|B|} \right\rfloor$$
-   Para división entre $10,000$ con números positivos: `(valor + 5000n) / 10000n`.
-3. **Totales del Agregado de Cuenta (`cuentas`):**
-   Los totales de la cuenta (`subtotal`, `tax_total`, `discounts_total`, `total_amount`) se calculan como la **suma entera exacta** de los valores correspondientes de sus partidas hijas (`cuenta_items`). El total nunca se recalcula aplicando la tasa impositiva globalmente al subtotal de la cuenta, garantizando que:
-   $$\text{total\_amount} \equiv \sum \text{partidas.total}$$
+Se establece **Half Away From Zero** como el **MODO DE REDONDEO CANÓNICO DEL PROYECTO** (Project Canonical Rounding Mode).
 
-### 4.4 Frontera de Conversión y Serialización
-1. **Edge SQLite $\leftrightarrow$ Dominio TypeScript:**
-   Se procesa internamente como enteros de 64 bits (`bigint` o `number` seguro).
-2. **Dominio $\leftrightarrow$ API Transport (Fastify REST / WebSockets):**
-   En payloads JSON expuestos a clientes LAN o sincronización Cloud, los valores monetarios se transmiten con su representación decimal canónica formateada a 4 decimales fijos como string (ej. `"150.5000"`), o como número entero de escala 4 documentado.
-3. **Edge $\leftrightarrow$ Cloud Sync:**
-   El motor de sincronización (`@trident/sync`) mapea `INTEGER` (escala 4) $\leftrightarrow$ PostgreSQL `DECIMAL(12,4)` de forma determinista y sin pérdida:
-   $$\text{decimalStr} = \frac{\text{cents4}}{10000.0} \to \text{toExponential/toFixed(4)}$$
+1. **Primitiva Genérica de Redondeo Sign-Safe (`roundDiv`):**
+   $$\text{roundDiv}(A, B) = \text{sign}(A \times B) \times \left\lfloor \frac{|A| + \lfloor |B| / 2 \rfloor}{|B|} \right\rfloor \quad (\text{con } B \neq 0)$$
+   
+   En TypeScript con `bigint`:
+   ```typescript
+   export function roundDiv(a: bigint, b: bigint): bigint {
+     if (b === 0n) throw new RangeError("Division by zero");
+     const sign = (a < 0n !== b < 0n) ? -1n : 1n;
+     const absA = a < 0n ? -a : a;
+     const absB = b < 0n ? -b : b;
+     const halfB = absB / 2n;
+     const quotient = (absA + halfB) / absB;
+     return sign * quotient;
+   }
+   ```
+   *Vectores de prueba normativos obligatorios:*
+   - `roundDiv(  5000n, 10000n) =  1n`
+   - `roundDiv( -5000n, 10000n) = -1n`
+   - `roundDiv( 14999n, 10000n) =  1n`
+   - `roundDiv(-14999n, 10000n) = -1n`
+   - `roundDiv( 15000n, 10000n) =  2n`
+   - `roundDiv(-15000n, 10000n) = -2n`
+
+2. **Aritmética de Partida (`cuenta_items`):**
+   $$\text{lineSubtotal} = \text{roundDiv}(\text{unitPriceScale4} \times \text{quantityScale4}, 10000\text{n})$$
+   $$\text{netSubtotal} = \text{lineSubtotal} - \text{discountAmountScale4}$$
+   $$\text{taxAmount} = \text{roundDiv}(\text{netSubtotal} \times \text{taxRateScale4}, 10000\text{n})$$
+   $$\text{lineTotal} = \text{netSubtotal} + \text{taxAmount}$$
+
+3. **Totales del Agregado de Cuenta (`cuentas`):**
+   Los totales de la cuenta (`subtotal`, `tax_total`, `discounts_total`, `total_amount`) se calculan **exclusivamente como la suma entera exacta** de los valores de sus partidas hijas (`cuenta_items`). El total de la cuenta nunca se recalcula aplicando la tasa impositiva globalmente al subtotal de la cuenta:
+   $$\text{cuentas.total\_amount} \equiv \sum \text{cuenta\_items.total}$$
+
+### 4.4 Frontera de Conversión y Transporte Libre de Punto Flotante
+Se define una representación autoritativa por capa:
+- **SQLite:** `signed INTEGER` escala 4.
+- **Dominio TypeScript:** `bigint` escala 4.
+- **Transporte API y Sincronización:** `STRING` decimal canónico con exactamente 4 dígitos fraccionarios (ej. `"150.5000"`).
+- **PostgreSQL Cloud:** `DECIMAL/NUMERIC` según la precisión gobernada (`DECIMAL(12,4)` o `DECIMAL(6,4)`).
+
+1. **Conversión Scaled Integer $\to$ Decimal String (Sin Punto Flotante):**
+   ```typescript
+   export function scaledBigIntToDecimalString(scaled: bigint): string {
+     const sign = scaled < 0n ? "-" : "";
+     const abs = scaled < 0n ? -scaled : scaled;
+     const whole = abs / 10000n;
+     const fraction = abs % 10000n;
+     return `${sign}${whole.toString()}.${fraction.toString().padStart(4, "0")}`;
+   }
+   ```
+   *Ejemplos:*
+   - `1505000n` $\to$ `"150.5000"`
+   - `1n` $\to$ `"0.0001"`
+   - `-1n` $\to$ `"-0.0001"`
+   - `-1505000n` $\to$ `"-150.5000"`
+
+2. **Conversión Decimal String $\to$ Scaled BigInt (Parsing Léxico Estricto):**
+   Se realiza mediante análisis sintáctico léxico de cadena. Se valida contra la expresión regular `/^-?\d+\.\d{4}$/`, extrayendo signo, parte entera y los 4 dígitos fraccionarios para componer `(whole * 10000n + fraction) * sign`.
+   Queda **estrictamente prohibido** el uso de:
+   - `Number()`
+   - `parseFloat()`
+   - `parseInt(decimal * 10000)`
+   - `/ 10000.0`
+   - `toFixed()`
+   - `Math.round()`
+   para conversiones financieras autoritativas.
+
+3. **Transporte JSON Canónico:**
+   En todos los payloads JSON externos de APIs (Fastify REST, WebSockets) y en la sincronización Cloud, la representación canónica externa para valores monetarios y cantidades es **cadena decimal fija de 4 decimales** (`canonical fixed 4-decimal string`). Los enteros escala 4 se permiten internamente únicamente detrás de fronteras de persistencia o dominio explícitamente tipadas.
 
 ### 4.5 Objeto de Valor Canónico en `@trident/core`
-Se define el contrato del Value Object `Money` en Platform Core (`@trident/core`), con representación inmutable basada en `bigint` a escala 4 ($10^4$), prohibiendo la instanciación con tipos flotantes no sanitizados.
+Se define el contrato del Value Object `Money` en Platform Core (`@trident/core`), con representación inmutable respaldada por `amountScale4: bigint` a escala 4 ($10^4$).
 
 ---
 
 ## 5. Consequences
 
 ### Positive
-- Se elimina de forma definitiva el riesgo de errores de redondeo de punto flotante en el POS local.
-- Alineación 100% exacta y reversible con la base de datos central PostgreSQL en Supabase (`DECIMAL(12,4)`).
-- Rendimiento ultra-rápido en SQLite al operar exclusivamente con tipos `INTEGER` de 64 bits.
-- Cumplimiento estricto con las exigencias de auditoría contable y timbrado fiscal del SAT.
+- Eliminación total y permanente del punto flotante IEEE 754 en toda la persistencia y procesamiento del Edge.
+- Alineación 100% exacta y reversible con PostgreSQL en Supabase (`DECIMAL(12,4)` y `DECIMAL(6,4)`).
+- Aritmética sign-safe determinista en subtotales, descuentos e impuestos.
+- Eliminación de ambigüedades en agregaciones de SQLite y transporte JSON.
+- Cumplimiento estricto con las exigencias de auditoría contable y fiscal.
 
 ### Negative / Trade-offs
-- Requiere multiplicar por $10,000$ en la ingesta y dividir por $10,000$ en la presentación gráfica al usuario.
-- Los desarrolladores deben evitar el uso inadvertido del operador flotante `/` de JavaScript, utilizando el Value Object `Money` o división entera.
+- Requiere parseo y serialización de cadenas en las fronteras de red e interfaces de usuario.
+- Requiere uso riguroso de `bigint` en el dominio TypeScript, evitando operadores aritméticos flotantes nativos.
 
 ### Migration Impact
 - **Impacto: Cero en producción.** Ninguna base de datos de producción ha sido desplegada con tablas monetarias en Edge. Las tablas de `WP-014` aún no existen.
-- **Impacto en Documentación:** Se actualizan formalmente `DATA_MODEL.md` (Sec. 3), `DATA_DICTIONARY.md` (Sec. 1.2), `DATA_ARCHITECTURE.md` (Sec. 3) y `TECH_STACK_DECISIONS.md` para reflejar la sustitución de `REAL` por `INTEGER` (escala 4).
+- **Impacto en Documentación:** Se actualizan formalmente `DATA_MODEL.md`, `DATA_DICTIONARY.md`, `DATA_ARCHITECTURE.md` y `TECH_STACK_DECISIONS.md` para reflejar la sustitución de `REAL` por `INTEGER` escala 4 y las reglas de precisión y redondeo.
 
 ---
 
 ## 6. Validation Obligations
-1. Pruebas unitarias de aritmética monetaria en `@trident/core` demostrando exactitud en sumas, restas y divisiones con redondeo comercial.
-2. Pruebas de integración en `WP-014` verificando que las columnas SQLite de `cuentas` y `cuenta_items` se persisten y leen como `INTEGER` exactos sin truncación ni deriva.
+1. Pruebas unitarias en `@trident/core` demostrando la exactitud de `roundDiv` con los 6 vectores normativos y operaciones de `Money` con `bigint`.
+2. Pruebas unitarias de serialización/deserialización léxica entre `bigint` y cadenas decimales de 4 dígitos.
+3. Pruebas de integración en `WP-014` verificando que las columnas SQLite se persisten y recuperan como `INTEGER` exactos sin truncación ni deriva.

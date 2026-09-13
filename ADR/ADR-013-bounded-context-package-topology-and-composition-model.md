@@ -15,10 +15,10 @@ $$\mathbf{MODULAR\ BY\ DESIGN\ —\ INTEGRATED\ BY\ CONTRACT}$$
 
 Formalizado en `ADR-001` (Modular Monolith por Bounded Contexts) y `ADR-002` (Autoridad de Datos Cloud/Branch por Topología), el sistema define 11 Bounded Contexts de negocio:
 1. **Platform Core** (Kernel, Tenancy, IAM, Auditoría)
-2. **TRIDENTPOS** (Salones, Mesas, Cuentas, Comandas de Piso, KDS LAN, Cortes X/Z)
+2. **TRIDENTPOS** (Salones, Mesas, Cuentas, Comandas de Piso, KDS LAN, Turnos de Caja, Arqueos, Cobro POS, Cortes X/Z)
 3. **Inventory** (Catálogo de Insumos, Multialmacén, Recetas, Subrecetas, Kárdex)
 4. **Procurement** (Proveedores, Órdenes de Compra, Recepciones Físicas)
-5. **Finance** (Tesorería, Cuentas por Pagar/Cobrar, Conciliación Bancaria)
+5. **Finance** (Tesorería Central, Cuentas por Pagar/Cobrar, Gastos, Conciliación Bancaria, Interfaz Contable)
 6. **Billing** (Facturación Fiscal Digital CFDI, Timbrado, Leases de Folios)
 7. **CRM** (Clientes, Cuentas Corrientes, Historial de Consumo)
 8. **Delivery** (Repartidores, Logística Propia, Agregadores Externos)
@@ -109,11 +109,11 @@ El monorepo clasifica todos sus paquetes de trabajo en cuatro categorías formal
 ### 4.2 Matriz de Responsabilidad y Dependencias de Paquetes
 | Paquete | Capa | Bounded Context | ¿Contiene Lógica de Dominio? | Dependencias Runtime Permitidas | Dependencias Test Permitidas | Responsabilidad |
 |---|---|---|---|---|---|---|
-| `@trident/core` | 1 (Kernel) | Platform Core | NO (Solo contratos y VOs) | `[]` (Ninguna) | `[]` | Kernel compartido, contratos de capability, Value Objects (`Money`), interfaces de auditoría, JWT, RBAC, criptografía base. |
-| `@trident/pos` | 2 (Dominio) | TRIDENTPOS | **SÍ** | `['@trident/core']` | `['@trident/core']` | Lógica pura de restaurante: agregados `Mesa`, `Cuenta`, `CuentaItem`, motor de cálculo y OCC, interfaces `CancellationPolicy`, `BillSplitProrationStrategy`. Puertos de repositorio. |
-| `@trident/inventory` | 2 (Dominio) | Inventory | **SÍ** | `['@trident/core']` | `['@trident/core']` | Lógica pura de inventario: catálogo de insumos, multialmacén, motor de explosión de recetas/subrecetas, cálculo de costo teórico promedio. Puertos de repositorio. |
+| `@trident/core` | 1 (Kernel) | Platform Core | **SÍ** (Dominio Platform Core + Kernel) | `[]` (Ninguna) | `[]` | Representa tanto el Bounded Context Platform Core como la superficie pública de kernel compartido. Posee lógica de dominio propia para: Organización, Sucursal, Identidad de Estación, Usuarios/RBAC, Module Entitlements, Catálogo Maestro de Productos, Modificadores, Overrides de Sucursal, y primitivas de Auditoría y Criptografía. Expone contratos de capability públicos para consumo de los restantes Bounded Contexts. |
+| `@trident/pos` | 2 (Dominio) | TRIDENTPOS | **SÍ** | `['@trident/core']` | `['@trident/core']` | Lógica pura de restaurante y operaciones de piso: Salones, Mesas, Cuentas, Partidas (`cuenta_items`), Modificadores, Comandas de Piso, KDS LAN, Turnos de Caja (`turnos_caja`), Movimientos de Efectivo, Cobro POS (`pagos`), Arqueos de Turno, Cortes X y Cortes Z. Motor OCC con snapshot conflictivo. Puertos de repositorio y contratos de políticas (`CancellationPolicy`, `BillSplitProrationStrategy`). |
+| `@trident/inventory` | 2 (Dominio) | Inventory | **SÍ** | `['@trident/core']` | `['@trident/core']` | Lógica pura de inventario: catálogo de insumos, multialmacén, motor de explosión de recetas/subrecetas, cálculo de costo promedio ponderado. Puertos de repositorio e interfaz `ModifierRecipeResolver`. |
 | `@trident/procurement`| 2 (Dominio) | Procurement | **SÍ** | `['@trident/core']` | `['@trident/core']` | Proveedores, órdenes de compra, recepciones de almacén. |
-| `@trident/finance` | 2 (Dominio) | Finance | **SÍ** | `['@trident/core']` | `['@trident/core']` | Tesorería, turnos de caja, cierres, arqueos ciegos, cuentas por cobrar/pagar. |
+| `@trident/finance` | 2 (Dominio) | Finance | **SÍ** | `['@trident/core']` | `['@trident/core']` | Finanzas corporativas y contabilidad central: Cuentas por Pagar (CxP), Cuentas por Cobrar (CxC / Crédito a Clientes), Gastos Operativos, Liquidación de Propinas, Comisiones de Agentes, Conciliación Bancaria e Interfaz con Libros Diarios Contables. (Los turnos de caja operativos, arqueos de piso y cobros POS pertenecen exclusivamente a TRIDENTPOS). |
 | `@trident/billing` | 2 (Dominio) | Billing | **SÍ** | `['@trident/core']` | `['@trident/core']` | Facturación fiscal electrónica, folios digitales, leases. |
 | `@trident/crm` | 2 (Dominio) | CRM | **SÍ** | `['@trident/core']` | `['@trident/core']` | Clientes, límites de crédito, cuentas corporativas. |
 | `@trident/delivery` | 2 (Dominio) | Delivery | **SÍ** | `['@trident/core']` | `['@trident/core']` | Despacho de pedidos, asignación de rutas y repartidores. |
@@ -138,7 +138,7 @@ El monorepo clasifica todos sus paquetes de trabajo en cuatro categorías formal
 
 ### 5.1 Composición Canónica de WP-014 (TRIDENTPOS Floor Engine)
 1. **Lógica de Dominio (`@trident/pos`):**
-   - Define entidades y agregados: `Mesa`, `Cuenta`, `CuentaItem`, `CuentaItemModificador`.
+   - Define entidades y agregados: `Mesa`, `Cuenta`, `CuentaItem`, `CuentaItemModificador`, `TurnoCaja`.
    - Implementa motor OCC: `expectedVersion`, compare-and-swap y generación de `OCCConflictError` con snapshot actual.
    - Define interfaces de política: `CancellationPolicy` y `BillSplitProrationStrategy` (ambas neutrales y sin valores por defecto, preservando `OQ-SSOT-01` y `OQ-SSOT-06`).
    - Define el puerto de persistencia: `DiningRoomRepositoryPort`, `AccountRepositoryPort`.
@@ -160,16 +160,16 @@ El monorepo clasifica todos sus paquetes de trabajo en cuatro categorías formal
 
 ### 5.2 Composición Canónica de WP-017 (Inventory Catalog & Recipes)
 1. **Lógica de Dominio (`@trident/inventory`):**
-   - Define agregados: `Insumo`, `UnidadMedida`, `Almacen`, `Receta`, `RecetaIngrediente`, `Subreceta`.
+   - Define conceptos y agregados de dominio: Almacén (Warehouse), Insumo (Ingredient), Unidad de Medida (Unit of Measure), Receta (Recipe), Partida de Receta (Recipe Item) y Subreceta.
    - Implementa algoritmo recursivo de explosión de recetas con factor de merma y cálculo de costo promedio ponderado.
    - Define interfaz `ModifierRecipeResolver` (neutral, preservando `OQ-SSOT-07`).
    - **Dependencias:** Exclusivamente `@trident/core`.
 2. **Infraestructura Cloud (`@trident/database`):**
-   - Contiene migraciones PostgreSQL 16 para las tablas de inventario (`202609..._inventory.sql`) y políticas RLS.
+   - Contiene migraciones PostgreSQL 16 para las tablas físicas canónicas: `warehouses`, `ingredients`, `recipes` y `recipe_items` (con candidate keys `(organization_id, id)` y aislamiento RLS estricto). Queda prohibida la introducción de tablas duplicadas en español (`insumos`, `almacenes`, `recetas`, `subrecetas`).
 3. **Ensamblado Cloud (`@trident/cloud-server`):**
    - Inyecta conexión PostgreSQL de `@trident/database` en el servicio de `@trident/inventory`.
    - Expone APIs administrativas de recetas a la consola Backoffice.
-   - **Cero dependencia hacia `@trident/pos`:** Inventario opera de forma autónoma.
+   - **Cero dependencia hacia `@trident/pos`:** Inventario opera de forma autónoma. La futura integración con KDS (`WP-018`) se realizará consumiendo el evento durable canónico `OrdenProduccionConfirmadaEnKDS`.
 
 ---
 

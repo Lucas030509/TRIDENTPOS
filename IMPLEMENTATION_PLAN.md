@@ -617,7 +617,7 @@ Dining room, counter orders, kitchen display (KDS), cash drawer, Cortes X/Z, and
 * **Migration Impact:** Expand
 * **Risk:** Medium
 * **PO Dependency:** `OQ-SSOT-01` (Classification: B & E; parameterization hook created; concrete policy PENDING PO DECISION), `OQ-SSOT-02` (Classification: B & E; transfer rule hook created; concrete rule PENDING PO DECISION), `OQ-SSOT-06` (Classification: B & E; split proration interface created; concrete algorithm PENDING PO DECISION).
-* **Parallelizable:** NO
+* **Parallelizable:** YES — with `WP-017` only after ACR-2026-013 and graph-enforcement remediation are canonical on main. Independent sibling branches from the same current canonical main baseline.
 * **Handoff Target:** `WP-015`, `WP-016`, `WP-017`
 
 #### `WP-015`: Kitchen Display System (KDS) LAN Event Dispatcher & Printer Service
@@ -680,10 +680,10 @@ Stock management, recipes, automated depletion via KDS production, purchase orde
 * **Frozen Requirements:** `DATA_MODEL.md` Sec. 2.3; `FUNCTIONAL_ARCHITECTURE.md` Sec. 4; `MODULE_CATALOG.md`; `ADR-013`, `ACR-2026-013`
 * **ADRs:** `ADR-001`, `ADR-002`, `ADR-013`
 * **Package Placement & Topology (`ADR-013`):**
-  - Dominio puro: `@trident/inventory` (entidades `Insumo`, `UnidadMedida`, `Almacen`, `Receta`, `RecetaIngrediente`, `Subreceta`, motor de explosión recursiva y costeo promedio ponderado, interfaz `ModifierRecipeResolver`). Depende únicamente de `@trident/core`. Cero dependencia hacia `@trident/pos`.
+  - Dominio puro: `@trident/inventory` (conceptos de dominio: Insumo, Unidad de Medida, Almacén, Receta, Partida de Receta, Subreceta; motor de explosión recursiva y costeo promedio ponderado, interfaz `ModifierRecipeResolver`). Depende únicamente de `@trident/core`. Cero dependencia hacia `@trident/pos`.
   - Persistencia e Infraestructura: `@trident/database` (migraciones PostgreSQL 16 y políticas RLS para inventario).
   - Ensamblado y Raíz de Composición Cloud: `@trident/cloud-server` (inyección de repositorios PostgreSQL y exposición de endpoints Backoffice).
-* **Data Objects:** PostgreSQL `insumos`, `unidades_medida`, `almacenes`, `recetas`, `receta_ingredientes`, `subrecetas` (`DECIMAL(12,4)`)
+* **Data Objects:** PostgreSQL tablas físicas canónicas: `warehouses`, `ingredients`, `recipes`, `recipe_items` (`DECIMAL(12,4)`), con candidate keys `(organization_id, id)` y políticas RLS default-deny. Conceptos de dominio: Insumos (Raw Materials), Unidades de Medida (Unit of Measure), Almacenes (Warehouses), Recetas (Recipes), Partidas de Receta (Recipe Items) y Subrecetas.
 * **APIs / Contracts:** Recipe service (`calculateRecipeCost()`, `explodeIngredients()`)
 * **Builder Agent:** `13_Backend_Developer`
 * **Specialist Reviewer:** `03_Data_Architect`
@@ -701,7 +701,7 @@ Stock management, recipes, automated depletion via KDS production, purchase orde
 * **Migration Impact:** Expand
 * **Risk:** Medium
 * **PO Dependency:** `OQ-SSOT-07` (Classification: B & E; modifier recipe resolution contract created; concrete algorithm semantics PENDING PO DECISION).
-* **Parallelizable:** YES (with `WP-014`)
+* **Parallelizable:** YES — with `WP-014` only after ACR-2026-013 and graph-enforcement remediation are canonical on main. Independent sibling branches from the same current canonical main baseline.
 * **Handoff Target:** `WP-018`, `WP-019`
 
 #### `WP-018`: Real-Time Kárdex, Waste Tracking & KDS Depletion Service

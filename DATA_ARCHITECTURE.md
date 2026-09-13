@@ -83,11 +83,12 @@ El sistema implementa una **Arquitectura de Persistencia Híbrida Cloud-Edge**:
    - Mantiene tablas de outbox local (`outbox_queue`) y registro de idempotencia (`ingested_idempotency_log`) para sincronización asíncrona bidireccional tolerante a desconexión.
 
 ### 2.1 Estándar de Representación Numérica y Monetaria Exacta (`ADR-012`, `ACR-2026-013`)
-- **Persistencia Cloud:** PostgreSQL `DECIMAL(12,4)` para todos los valores monetarios, precios unitarios, costos promedio, impuestos y cantidades.
+- **Taxonomía de Precisión Cloud:** PostgreSQL `DECIMAL(12,4)` para valores monetarios, precios unitarios, costos y cantidades; PostgreSQL `DECIMAL(6,4)` para tasas impositivas (`tax_rate_applied`).
 - **Persistencia Edge:** SQLite `INTEGER` (signed 64-bit) con **Escala Fija 4** ($S = 10,000$, ej. `$150.5000` = `1505000`, 16% IVA = `1600`).
-- **Prohibición Estricta de Punto Flotante:** Queda terminantemente prohibido el uso de `REAL` o `FLOAT` en esquemas, consultas o entidades de base de datos en Edge.
-- **Aritmética y Redondeo:** Redondeo comercial *Half Away From Zero* exclusivamente en la frontera de cálculo de partida; el total del agregado `cuentas` es la suma entera exacta de sus partidas hijas (`cuenta_items`).
-- **Mapeo Bidireccional:** Conversión 1:1 determinista y reversible entre `DECIMAL(12,4)` y `INTEGER` (escala 4) sin deriva numérica.
+- **Prohibición Estricta de Punto Flotante:** Queda terminantemente prohibido el uso de `REAL`, `FLOAT` o IEEE 754 en esquemas, consultas o entidades de base de datos en Edge.
+- **Rango Común Interoperable:** Delimitado por el tipo Cloud más estricto `DECIMAL(12,4)` a $[-99,999,999.9999, +99,999,999.9999]$ (en Edge escala 4: $[-999999999999, +999999999999]$).
+- **Aritmética y Redondeo:** Modo de redondeo canónico del proyecto *Half Away From Zero* mediante la primitiva sign-safe `roundDiv(A, B)`. Cálculo por partida en `cuenta_items`; el total del agregado `cuentas` es la suma entera exacta de sus partidas hijas.
+- **Frontera de Conversión y Transporte:** Dominio en TypeScript operando con `bigint`. Cero conversión flotante (`Number()`, `parseFloat()`, `/ 10000.0`, `toFixed()`). Transporte externo en API REST y Sync como cadenas decimales fijas canónicas de 4 dígitos (`"150.5000"`).
 
 ---
 

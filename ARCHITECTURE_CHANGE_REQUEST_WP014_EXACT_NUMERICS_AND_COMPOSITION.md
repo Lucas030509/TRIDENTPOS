@@ -55,29 +55,55 @@ Pursuant to EAAF v1.2 governance directives:
 
 ## 3. Decision 1: Edge Exact Fixed-Point Monetary Representation (`ADR-012`)
 
-### 3.1 Canonical Physical Storage
-In all Edge SQLite tables, **every monetary amount, unit price, modifier price, tax amount, discount, tip, and fractional quantity is stored as an exact signed 64-bit `INTEGER NOT NULL`**.
+### 3.1 Canonical Physical Storage & Lifecycle Nullability
+In all Edge SQLite tables, **every persisted monetary amount, unit price, modifier price, tax rate, discount, tip, and fractional quantity is stored as an exact signed 64-bit `INTEGER` with a fixed scale of 4 decimal places** (Scale Factor $S = 10^4 = 10,000$).
 
-The use of `REAL`, `FLOAT`, or unscaled numbers is **permanently prohibited**.
+Column nullability remains governed by the domain lifecycle and data model of each individual field. Transactional balances, line items, and totals are `INTEGER NOT NULL`. Fields that are intentionally unpopulated prior to specific business lifecycle events (such as `turnos_caja.closing_declared_cash`, `calculated_cash_total`, and `cash_difference`) remain `INTEGER NULL` while the shift is open and are populated only upon shift close and reconciliation.
 
-### 3.2 Canonical Scale
-The uniform scale for currency amounts, tax rates, and quantities in Edge SQLite is **4 decimal places** (Scale Factor $S = 10^4 = 10,000$):
-- `$1.0000` is represented as the integer `10000`.
-- `$150.5000` is represented as the integer `1505000`.
-- A 16% tax rate (`0.1600`) is represented as the integer `1600` (where $1.0000 = 10000$).
-- A quantity of `1.0000` is represented as `10000`; a fractional quantity of `0.2500` kg is represented as `2500`.
+The use of `REAL`, `FLOAT`, or unscaled IEEE 754 floating-point numbers is **permanently prohibited** in all Edge schemas, queries, and network payloads.
 
-### 3.3 Rounding & Arithmetic Sequence
-- **Sequence:** Line Subtotal $\to$ Line Discount $\to$ Net Line Subtotal $\to$ Line Tax $\to$ Line Total.
-- **Rounding Mode:** **Half Away From Zero** (commercial rounding / Mexican SAT standard), executed via exact integer math:
-  $$\text{tax\_amount} = \left\lfloor \frac{\text{net\_subtotal} \times \text{tax\_rate} + 5000}{10000} \right\rfloor$$
+### 3.2 Canonical Scale, Cloud Precision Taxonomy & Interoperable Range
+- **Cloud Precision Taxonomy:**
+  - Monetary amounts, prices, costs, and quantities: Cloud `DECIMAL(12,4)`.
+  - Tax rates (`tax_rate_applied`): Cloud `DECIMAL(6,4)` (e.g. 16% IVA = `0.1600`).
+  - Other ratios: Explicitly governed Cloud precision.
+  - Edge SQLite represents all the above using scale-4 `INTEGER` ($S = 10,000$, where `$1.0000 = 10000`, and `0.1600 = 1600`).
+- **Common Interoperable Range:**
+  The interoperable range is bounded by the stricter Cloud PostgreSQL type `DECIMAL(12,4)` (12 total digits, 4 fractional, 8 integer), establishing the canonical valid range as:
+  $$\mathbf{[-99,999,999.9999, +99,999,999.9999]}$$
+  corresponding to Edge scale-4 integers in the range $\mathbf{[-999999999999, +999999999999]}$ ($\mathbf{[-999\_999\_999\_999\text{n}, +999\_999\_999\_999\text{n}]}$). Explicit boundary checks must validate values prior to persistence, arithmetic result acceptance, synchronization, and Cloud serialization. Values outside this range are rejected.
+- **BigInt Domain Authority:**
+  All authoritative domain calculations in TypeScript are executed exclusively using native `bigint`. JavaScript `number` is strictly prohibited for authoritative financial arithmetic.
+
+### 3.3 Rounding, Arithmetic Sequence & SQLite Aggregates
+- **Project Canonical Rounding Mode:**
+  **Half Away From Zero** is established as the project's canonical rounding mode, executed via the sign-safe primitive:
+  $$\text{roundDiv}(A, B) = \text{sign}(A \times B) \times \left\lfloor \frac{|A| + \lfloor |B| / 2 \rfloor}{|B|} \right\rfloor \quad (\text{with } B \neq 0)$$
+  *Normative Test Vectors:*
+  - `roundDiv(5000n, 10000n) = 1n`
+  - `roundDiv(-5000n, 10000n) = -1n`
+  - `roundDiv(14999n, 10000n) = 1n`
+  - `roundDiv(-14999n, 10000n) = -1n`
+  - `roundDiv(15000n, 10000n) = 2n`
+  - `roundDiv(-15000n, 10000n) = -2n`
+- **Authoritative Line Arithmetic:**
+  $$\text{lineSubtotal} = \text{roundDiv}(\text{unitPriceScale4} \times \text{quantityScale4}, 10000\text{n})$$
+  $$\text{netSubtotal} = \text{lineSubtotal} - \text{discountAmountScale4}$$
+  $$\text{taxAmount} = \text{roundDiv}(\text{netSubtotal} \times \text{taxRateScale4}, 10000\text{n})$$
+  $$\text{lineTotal} = \text{netSubtotal} + \text{taxAmount}$$
 - **Account Total Invariant:** Account totals (`subtotal`, `tax_total`, `discounts_total`, `total_amount`) are computed exclusively as the exact integer sum of line item components:
   $$\text{cuentas.total\_amount} \equiv \sum \text{cuenta\_items.total}$$
+- **SQLite Aggregate Semantics:**
+  - *Permitted:* `MIN(integer)`, `MAX(integer)`, and `SUM(integer)` provided every input is an `INTEGER`, application/database bounds ensure no signed 64-bit overflow, and any overflow condition fails explicitly.
+  - *Prohibited:* `AVG()` and `TOTAL()` are prohibited for authoritative monetary values because SQLite returns IEEE 754 floating point (`REAL`). Averages must be computed as `sumScale4 = SUM(col)`, `count = COUNT(col)`, and `averageScale4 = roundDiv(sumScale4, count)` using BigInt.
 
-### 3.4 Transport & Synchronization Boundary
-- **Fastify LAN REST API:** Monetary values in JSON request/response payloads are serialized as fixed-point decimal strings (e.g. `"150.5000"`) or scale-4 integers, eliminating client-side floating-point parsing hazards.
-- **Cloud Sync (`@trident/sync`):** The synchronization service deterministically maps Edge SQLite `INTEGER` (scale 4) $\leftrightarrow$ Cloud PostgreSQL `DECIMAL(12,4)` via exact decimal string formatting without floating-point conversion.
-- **Platform Core Value Object:** A canonical `Money` value object contract is specified for `@trident/core`, backed by `bigint` at scale 4.
+### 3.4 Transport & Synchronization Boundary (Float-Free String Standard)
+- **External JSON Representation:** In all external Fastify LAN REST APIs, WebSocket events, and Cloud synchronization payloads, monetary and quantity values are formatted as **canonical fixed 4-decimal strings** (e.g. `"150.5000"`, `"0.0001"`, `"-0.0001"`, `"-150.5000"`). Ambiguous dual representation (`string OR number`) in external JSON is eliminated.
+- **Conversion Algorithms (Zero Floating-Point):**
+  - Scaled Integer $\to$ Decimal String: Integer division and modulo formatting (`whole.toString() + "." + fraction.toString().padStart(4, "0")`) with sign preservation.
+  - Decimal String $\to$ Scaled BigInt: Strict lexical parsing against `/^-?\d+\.\d{4}$/`.
+  - Prohibited: `Number()`, `parseFloat()`, `parseInt(decimal * 10000)`, `/ 10000.0`, `toFixed()`, `Math.round()`.
+- **Platform Core Value Object:** Canonical `Money` value object specified in `@trident/core`, backed by `amountScale4: bigint`.
 
 ---
 
@@ -111,22 +137,27 @@ The TRIDENTPOS codebase is organized into four distinct architectural layers:
                     └────────────────┬───────────────────┘
                                      ▼
 ┌────────────────────────────────────────────────────────────────────────┐
-│ Layer 1: Platform Kernel (@trident/core)                               │
-│ Shared interfaces, capabilities, value objects, cryptographic base     │
+│ Layer 1: Platform Kernel & Bounded Context (@trident/core)             │
+│ Shared capability contracts, Platform Core domain logic & entities     │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### 4.2 Structural Rules & Adjacency Policy
-1. **Domain Package Invariants (Layer 2):**
-   - Each of the 10 business bounded contexts has its own dedicated package (e.g., `@trident/pos`, `@trident/inventory`, `@trident/finance`).
-   - Domain packages contain pure domain logic, entities, aggregates, domain events, domain services, and repository port interfaces.
+1. **Platform Core (Layer 1):**
+   - `@trident/core` represents **both** the Platform Core bounded context and the stable public kernel/capability contract surface.
+   - Owns domain logic for Organization, Branch, StationIdentity, User/RBAC, Module Entitlements, Master Product Catalog, Modifiers, Branch Overrides, Audit primitives, and Value Objects (`Money`).
+   - Other business domains depend solely on the stable public contracts and export surface of `@trident/core`.
+2. **Domain Package Invariants (Layer 2):**
+   - Dedicated package per business bounded context (`@trident/pos`, `@trident/inventory`, `@trident/finance`, etc.).
+   - `@trident/pos` owns: Dining Room, Tables, Accounts, Orders, Floor Comandas, KDS LAN, Cash Shifts (`turnos_caja`), Cash Movements, POS Payment Processing (`pagos`), Blind Cash Counts (Arqueos), Daily X Cuts, and Daily Z Cuts.
+   - `@trident/finance` owns: Central Treasury, Accounts Payable (AP), Accounts Receivable (AR / Customer Credit), Operating Expenses, Tip Settlements, Agent Commissions, Bank Reconciliation, and Accounting Journal Interface.
    - **Allowed Runtime Dependencies:** `['@trident/core']` ONLY.
    - **Prohibitions:** A domain package MUST NOT depend on any other domain package. A domain package MUST NOT depend on any technical infrastructure package (`@trident/database`, `@trident/edge`).
-2. **Infrastructure Package Invariants (Layer 3):**
-   - Infrastructure packages encapsulate concrete storage drivers, host APIs, or transport mechanisms.
+3. **Infrastructure Package Invariants (Layer 3):**
+   - Infrastructure packages encapsulate concrete storage drivers, host APIs, or transport mechanisms (`@trident/database`, `@trident/edge`, `@trident/sync`, `@trident/ui`).
    - **Allowed Runtime Dependencies:** `['@trident/core']` ONLY.
    - Infrastructure packages MUST NOT contain business domain rules.
-3. **Composition Root Invariants (Layer 4):**
+4. **Composition Root Invariants (Layer 4):**
    - Composition packages contain zero domain logic. Their sole responsibility is process bootstrap, configuration, route mapping, dependency injection (wiring repository implementations to domain ports), and integration test execution.
    - `@trident/pos-edge-runtime`: Permitted to depend on `['@trident/core', '@trident/pos', '@trident/edge']`.
    - `@trident/cloud-server`: Permitted to depend on `['@trident/core', '@trident/database', ...approved domain packages]`.
@@ -138,7 +169,7 @@ The TRIDENTPOS codebase is organized into four distinct architectural layers:
 ### 5.1 WP-014 Execution Path (TRIDENTPOS Floor Engine)
 Under this ratified architecture:
 1. `@trident/pos` implements:
-   - Entities and Aggregates: `Mesa`, `Cuenta`, `CuentaItem`, `CuentaItemModificador`.
+   - Entities and Aggregates: `Mesa`, `Cuenta`, `CuentaItem`, `CuentaItemModificador`, `TurnoCaja`.
    - OCC Engine: CAS version increment, conflict detection, snapshot extraction.
    - Policy Contracts: `CancellationPolicy` and `BillSplitProrationStrategy` (parameterized, 0 default business behavior).
    - Ports: `IDiningRoomRepository`, `IAccountRepository`.
@@ -153,11 +184,11 @@ Under this ratified architecture:
 ### 5.2 WP-017 Execution Path (Inventory Catalog & Recipes)
 Under this ratified architecture:
 1. `@trident/inventory` will be created as a pure domain package depending solely on `@trident/core`.
-2. Owns multi-warehouse entities, raw materials (`Insumos`), standard units of measure, and recursive recipe explosion logic with yield and waste calculations.
+2. Owns multi-warehouse entities, raw materials (Insumos), standard units of measure, and recursive recipe explosion logic with yield and waste calculations.
 3. Defines `ModifierRecipeResolver` contract (parameterized per `OQ-SSOT-07`).
-4. `@trident/database` houses PostgreSQL 16 migrations for inventory tables (`almacenes`, `insumos`, `recetas`, etc.) and RLS policies.
+4. `@trident/database` houses PostgreSQL 16 migrations for canonical physical inventory tables: `warehouses`, `ingredients`, `recipes`, and `recipe_items` (with tenant-safe candidate keys and composite foreign references) and RLS default-deny policies. Queda prohibida la introducción de tablas duplicadas en español (`insumos`, `almacenes`, `recetas`, `subrecetas`).
 5. `@trident/cloud-server` wires `@trident/database` repositories to `@trident/inventory` domain services.
-6. Zero dependency on `@trident/pos`. Standalone operation guaranteed.
+6. Zero dependency on `@trident/pos`. Standalone operation guaranteed. Cross-context inventory depletion upon kitchen completion in `WP-018` is performed via the canonical durable event `OrdenProduccionConfirmadaEnKDS`.
 
 ---
 
@@ -221,15 +252,16 @@ export const ALLOWED_TEST_INTERNAL_DEPENDENCIES = {
 
 The following canonical architecture documents are amended with this change request (labeled `PROPOSED ARCHITECTURE CHANGE`):
 1. **`DATA_MODEL.md`:**
-   - Section 1 (Line 21): Normalized to define `INTEGER` (Fixed-Point Escala 4) as the sole, mandatory physical storage for Edge SQLite, eliminating ambiguity.
-   - Section 3 (Lines 840–875, 895–916): Replaced all `REAL` monetary and quantity columns in Edge SQLite DDL with `INTEGER NOT NULL` (representing scale 4 micro-units).
+   - Section 1 (Line 26): Normalized to define signed `INTEGER` (Fixed-Point Scale 4: factor $10^4 = 10,000$) as the mandatory physical storage for Edge SQLite, distinguishing Cloud `DECIMAL(12,4)` for amounts/quantities and `DECIMAL(6,4)` for tax rates, eliminating ambiguity and floating-point types.
+   - Section 2.3: Normalized Cloud Inventory physical schema with tenant-safe candidate keys and composite foreign references for `warehouses`, `ingredients`, `recipes`, and `recipe_items`, an exclusivity constraint on recipe items, and default-deny RLS specifications.
+   - Section 3 (Lines 805–918): Replaced all `REAL` monetary and quantity columns in Edge SQLite DDL with `INTEGER` (representing scale-4 fixed-point units) while preserving lifecycle-appropriate nullability (e.g. `turnos_caja.closing_declared_cash INTEGER NULL`).
 2. **`DATA_DICTIONARY.md`:**
-   - Section 1.2: Updated data types for `cuentas`, `cuenta_items`, `turnos_caja` and `pagos` to reflect `INTEGER (Scale 4)` in Edge SQLite.
+   - Section 1.2: Updated data types for `cuentas`, `cuenta_items`, `turnos_caja`, and `pagos` to reflect `INTEGER (Scale 4)` in Edge SQLite.
 3. **`DATA_ARCHITECTURE.md`:**
-   - Section 3: Documented the exact fixed-point storage standard and conversion rules.
+   - Section 2.1: Documented the exact fixed-point storage standard, common interoperable range `[-99,999,999.9999, +99,999,999.9999]`, sign-safe Half Away From Zero rounding, and lexical string transport.
 4. **`TECH_STACK_DECISIONS.md`:**
-   - Documented the Edge exact numerics decision and layered monorepo composition model.
+   - Documented the Edge exact numerics decision, BigInt authority, and layered monorepo composition model.
 5. **`SOLUTION_ARCHITECTURE.md`:**
-   - Documented the 4-layer monorepo package topology and composition root pattern.
+   - Documented the 4-layer monorepo package topology, Platform Core dual role, TRIDENTPOS/Finance boundaries, and composition root pattern.
 6. **`IMPLEMENTATION_PLAN.md`:**
-   - Updated `WP-014` and `WP-017` descriptions to reflect package placement and composition roots.
+   - Updated `WP-014` and `WP-017` descriptions to reflect package placement, reciprocal parallelism, canonical physical table names (`warehouses`, `ingredients`, `recipes`, `recipe_items`), and composition roots.

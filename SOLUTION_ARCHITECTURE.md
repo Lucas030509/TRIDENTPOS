@@ -154,12 +154,13 @@ Dentro del Monolito Modular en Cloud se implementa una separación estricta:
 
 Para preservar el principio **Modular by Design — Integrated by Contract**, el monorepo implementa una arquitectura hexagonal en cuatro capas:
 
-1. **Capa 1 — Kernel de Plataforma (`@trident/core`):**
-   - Aloja contratos de capabilities, Value Objects (`Money`, `ADR-012`), tipos de eventos base, primitivas de seguridad, JWT, RBAC y utilidades criptográficas. Dependencias internas: ninguna.
+1. **Capa 1 — Kernel de Plataforma y Bounded Context Platform Core (`@trident/core`):**
+   - Representa tanto el Bounded Context Platform Core como la superficie pública de kernel compartido. Aloja contratos de capabilities, Value Objects (`Money`, `ADR-012`), y posee lógica de dominio propia para: Organización, Sucursal, Identidad de Estación, Usuarios/RBAC, Module Entitlements, Catálogo Maestro de Productos, Modificadores, Overrides de Sucursal, primitivas de Auditoría y Criptografía. Dependencias internas: ninguna.
 2. **Capa 2 — Paquetes de Dominio de Negocio (10 Bounded Contexts):**
-   - `@trident/pos`: Agregados `Mesa`, `Cuenta`, `CuentaItem`, motor OCC, interfaces de políticas de cancelación y división de cuentas.
-   - `@trident/inventory`: Catálogo de insumos, multialmacén, motor de explosión de recetas y kárdex.
-   - `@trident/procurement`, `@trident/finance`, `@trident/billing`, `@trident/crm`, `@trident/delivery`, `@trident/loyalty`, `@trident/analytics`, `@trident/integrations`.
+   - `@trident/pos`: Lógica pura de restaurante y operaciones de piso: Salones, Mesas, Cuentas, Partidas (`cuenta_items`), Modificadores, Comandas de Piso, KDS LAN, Turnos de Caja (`turnos_caja`), Movimientos de Efectivo, Cobro POS (`pagos`), Arqueos de Turno, Cortes X y Cortes Z. Motor OCC con snapshot conflictivo. Contratos de políticas (`CancellationPolicy`, `BillSplitProrationStrategy`).
+   - `@trident/inventory`: Catálogo de insumos, multialmacén, motor de explosión de recetas/subrecetas y kárdex.
+   - `@trident/finance`: Finanzas corporativas y contabilidad central: CxP, CxC (crédito a clientes), Gastos, Liquidación de Propinas, Comisiones, Conciliación Bancaria e Interfaz Contable. (Los turnos de caja, arqueos y cobros POS pertenecen exclusivamente a TRIDENTPOS).
+   - `@trident/procurement`, `@trident/billing`, `@trident/crm`, `@trident/delivery`, `@trident/loyalty`, `@trident/analytics`, `@trident/integrations`.
    - **Invariante de Dominio:** Dependen única y exclusivamente de `@trident/core`. Cero importaciones entre dominios. Cero importaciones hacia paquetes de infraestructura.
 3. **Capa 3 — Adaptadores de Infraestructura Técnica:**
    - `@trident/database`: Conexión PostgreSQL 16, migraciones y RLS.
