@@ -50,7 +50,7 @@ export function buildRuntimeAdjacencyList(workspaces) {
     };
 
     for (const depName of Object.keys(runtimeDeps)) {
-      if (workspaces.has(depName)) {
+      if (workspaces.has(depName) || depName.startsWith('@trident/')) {
         deps.add(depName);
       }
     }
@@ -79,7 +79,7 @@ export function buildTestDevAdjacencyList(workspaces) {
     };
 
     for (const depName of Object.keys(devDeps)) {
-      if (workspaces.has(depName)) {
+      if (workspaces.has(depName) || depName.startsWith('@trident/')) {
         deps.add(depName);
       }
     }
@@ -92,11 +92,15 @@ export function buildTestDevAdjacencyList(workspaces) {
 
 export function detectCycles(adj) {
   const visited = new Map(); // 0 = unvisited, 1 = visiting, 2 = visited
-  const parent = new Map();
   const cycles = [];
 
-  for (const node of adj.keys()) {
+  for (const [node, neighbors] of adj.entries()) {
     visited.set(node, 0);
+    for (const neighbor of neighbors) {
+      if (!visited.has(neighbor)) {
+        visited.set(neighbor, 0);
+      }
+    }
   }
 
   function dfs(u, pathStack) {
@@ -119,7 +123,7 @@ export function detectCycles(adj) {
     visited.set(u, 2);
   }
 
-  for (const node of adj.keys()) {
+  for (const node of visited.keys()) {
     if (visited.get(node) === 0) {
       dfs(node, []);
     }
@@ -129,21 +133,49 @@ export function detectCycles(adj) {
 }
 
 export const ALLOWED_INTERNAL_DEPENDENCIES = {
+  // Layer 1: Kernel
   '@trident/core': [],
-  '@trident/database': ['@trident/core'],
+
+  // Layer 2: Business Domains (Domain purity: Core only)
   '@trident/pos': ['@trident/core'],
+  '@trident/inventory': ['@trident/core'],
+  '@trident/procurement': ['@trident/core'],
+  '@trident/finance': ['@trident/core'],
+  '@trident/billing': ['@trident/core'],
+  '@trident/crm': ['@trident/core'],
+  '@trident/delivery': ['@trident/core'],
+  '@trident/loyalty': ['@trident/core'],
+  '@trident/analytics': ['@trident/core'],
+  '@trident/integrations': ['@trident/core'],
+
+  // Layer 3: Technical Infrastructure (Infra purity: Core only)
+  '@trident/database': ['@trident/core'],
+  '@trident/edge': ['@trident/core'],
   '@trident/sync': ['@trident/core'],
   '@trident/ui': ['@trident/core'],
-  '@trident/edge': ['@trident/core'],
+
+  // Layer 4: Composition Roots (Explicit wiring allowlists)
+  '@trident/pos-edge-runtime': ['@trident/core', '@trident/pos', '@trident/edge'],
+  '@trident/cloud-server': [
+    '@trident/core',
+    '@trident/database',
+    '@trident/pos',
+    '@trident/inventory',
+    '@trident/procurement',
+    '@trident/finance',
+    '@trident/billing',
+    '@trident/crm',
+    '@trident/delivery',
+    '@trident/loyalty',
+    '@trident/analytics',
+    '@trident/integrations',
+    '@trident/sync',
+  ],
 };
 
 export const ALLOWED_TEST_INTERNAL_DEPENDENCIES = {
-  '@trident/core': [],
-  '@trident/database': ['@trident/core'],
-  '@trident/pos': ['@trident/core'],
+  ...ALLOWED_INTERNAL_DEPENDENCIES,
   '@trident/sync': ['@trident/core', '@trident/edge'],
-  '@trident/ui': ['@trident/core'],
-  '@trident/edge': ['@trident/core'],
 };
 
 /**
@@ -156,7 +188,7 @@ export function checkArchitecturalRules(adj) {
     const allowed = ALLOWED_INTERNAL_DEPENDENCIES[pkgName];
     if (allowed === undefined) {
       violations.push(
-        `Architectural violation: Unrecognized internal package '${pkgName}' has no defined dependency policy.`,
+        `Architectural boundary violation: Unrecognized internal package '${pkgName}' has no defined dependency policy.`,
       );
       continue;
     }
@@ -183,7 +215,7 @@ export function checkTestArchitecturalRules(testDevAdj) {
     const allowed = ALLOWED_TEST_INTERNAL_DEPENDENCIES[pkgName];
     if (allowed === undefined) {
       violations.push(
-        `Architectural test violation: Unrecognized internal package '${pkgName}' has no defined test dependency policy.`,
+        `Architectural test boundary violation: Unrecognized internal package '${pkgName}' has no defined test dependency policy.`,
       );
       continue;
     }
@@ -248,13 +280,13 @@ export function checkSourceFileImports(content, relativePath, pkgName, allowedDe
     }
 
     // 1. Boundary check: must be permitted by policy
-    if (!allowedDeps.includes(importedPkg)) {
+    if (!allowedDeps || !allowedDeps.includes(importedPkg)) {
       violations.push({
         type: 'ARCHITECTURAL_BOUNDARY_VIOLATION',
         file: relativePath,
         pkgName,
         importedPkg,
-        message: `Architectural boundary source violation: File '${relativePath}' in package '${pkgName}' imports '${importedPkg}', which is not permitted by architecture policy. Permitted internal dependencies: [${allowedDeps.map((d) => `'${d}'`).join(', ')}]`,
+        message: `Architectural boundary source violation: File '${relativePath}' in package '${pkgName}' imports '${importedPkg}', which is not permitted by architecture policy. Permitted internal dependencies: [${(allowedDeps || []).map((d) => `'${d}'`).join(', ')}]`,
       });
     }
 
@@ -290,6 +322,11 @@ export function scanWorkspaceSourceImports(workspaces) {
   const violations = [];
 
   for (const [pkgName, { dir, pkgJson }] of workspaces.entries()) {
+    if (ALLOWED_INTERNAL_DEPENDENCIES[pkgName] === undefined) {
+      violations.push(
+        `Architectural boundary violation: Unrecognized internal package '${pkgName}' in 'packages/${dir}' has no defined dependency policy.`,
+      );
+    }
     const pkgDir = path.join(packagesDir, dir);
     const files = getSourceFiles(pkgDir);
 
