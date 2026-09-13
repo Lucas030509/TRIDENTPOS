@@ -6,6 +6,7 @@ import {
   checkTestArchitecturalRules,
   buildRuntimeAdjacencyList,
   buildTestDevAdjacencyList,
+  detectCycles,
   isTestFile,
   ALLOWED_INTERNAL_DEPENDENCIES,
   ALLOWED_TEST_INTERNAL_DEPENDENCIES,
@@ -281,27 +282,77 @@ describe('Dependency Graph Architectural Integrity Checker', () => {
   });
 
   // =========================================================================
-  // Canonical Policy Map Preservations
+  // Canonical Policy Map Preservations (ACR-2026-013 4-Layer Taxonomy)
   // =========================================================================
   it('preserves canonical runtime ALLOWED_INTERNAL_DEPENDENCIES mapping strictly', () => {
     assert.deepEqual(ALLOWED_INTERNAL_DEPENDENCIES, {
       '@trident/core': [],
-      '@trident/database': ['@trident/core'],
       '@trident/pos': ['@trident/core'],
+      '@trident/inventory': ['@trident/core'],
+      '@trident/procurement': ['@trident/core'],
+      '@trident/finance': ['@trident/core'],
+      '@trident/billing': ['@trident/core'],
+      '@trident/crm': ['@trident/core'],
+      '@trident/delivery': ['@trident/core'],
+      '@trident/loyalty': ['@trident/core'],
+      '@trident/analytics': ['@trident/core'],
+      '@trident/integrations': ['@trident/core'],
+      '@trident/database': ['@trident/core'],
+      '@trident/edge': ['@trident/core'],
       '@trident/sync': ['@trident/core'],
       '@trident/ui': ['@trident/core'],
-      '@trident/edge': ['@trident/core'],
+      '@trident/pos-edge-runtime': ['@trident/core', '@trident/pos', '@trident/edge'],
+      '@trident/cloud-server': [
+        '@trident/core',
+        '@trident/database',
+        '@trident/pos',
+        '@trident/inventory',
+        '@trident/procurement',
+        '@trident/finance',
+        '@trident/billing',
+        '@trident/crm',
+        '@trident/delivery',
+        '@trident/loyalty',
+        '@trident/analytics',
+        '@trident/integrations',
+        '@trident/sync',
+      ],
     });
   });
 
   it('preserves canonical test ALLOWED_TEST_INTERNAL_DEPENDENCIES mapping strictly', () => {
     assert.deepEqual(ALLOWED_TEST_INTERNAL_DEPENDENCIES, {
       '@trident/core': [],
-      '@trident/database': ['@trident/core'],
       '@trident/pos': ['@trident/core'],
+      '@trident/inventory': ['@trident/core'],
+      '@trident/procurement': ['@trident/core'],
+      '@trident/finance': ['@trident/core'],
+      '@trident/billing': ['@trident/core'],
+      '@trident/crm': ['@trident/core'],
+      '@trident/delivery': ['@trident/core'],
+      '@trident/loyalty': ['@trident/core'],
+      '@trident/analytics': ['@trident/core'],
+      '@trident/integrations': ['@trident/core'],
+      '@trident/database': ['@trident/core'],
+      '@trident/edge': ['@trident/core'],
       '@trident/sync': ['@trident/core', '@trident/edge'],
       '@trident/ui': ['@trident/core'],
-      '@trident/edge': ['@trident/core'],
+      '@trident/pos-edge-runtime': ['@trident/core', '@trident/pos', '@trident/edge'],
+      '@trident/cloud-server': [
+        '@trident/core',
+        '@trident/database',
+        '@trident/pos',
+        '@trident/inventory',
+        '@trident/procurement',
+        '@trident/finance',
+        '@trident/billing',
+        '@trident/crm',
+        '@trident/delivery',
+        '@trident/loyalty',
+        '@trident/analytics',
+        '@trident/integrations',
+        '@trident/sync',
+      ],
     });
   });
 
@@ -330,5 +381,234 @@ describe('Dependency Graph Architectural Integrity Checker', () => {
 
     const testDevAdj = buildTestDevAdjacencyList(mockWorkspaces);
     assert.deepEqual(testDevAdj.get('@trident/sync'), ['@trident/edge']);
+  });
+
+  it('verifies undeclared internal @trident/* packages are captured in adjacency builders', () => {
+    const mockWorkspaces = new Map([
+      [
+        '@trident/pos',
+        {
+          dir: 'pos',
+          pkgJson: {
+            name: '@trident/pos',
+            dependencies: { '@trident/core': '*', '@trident/rogue-pkg': '*' },
+            devDependencies: { '@trident/rogue-dev': '*' },
+          },
+        },
+      ],
+      ['@trident/core', { dir: 'core', pkgJson: { name: '@trident/core', dependencies: {} } }],
+    ]);
+
+    const runtimeAdj = buildRuntimeAdjacencyList(mockWorkspaces);
+    assert.deepEqual(runtimeAdj.get('@trident/pos'), ['@trident/core', '@trident/rogue-pkg']);
+
+    const testDevAdj = buildTestDevAdjacencyList(mockWorkspaces);
+    assert.deepEqual(testDevAdj.get('@trident/pos'), ['@trident/rogue-dev']);
+  });
+
+  // =========================================================================
+  // REQUIRED GRAPH TEST MATRIX (Section 11)
+  // =========================================================================
+  describe('Required Graph Test Matrix — Allowed Relations', () => {
+    const allowedCases = [
+      { from: '@trident/core', to: [] },
+      { from: '@trident/pos', to: ['@trident/core'] },
+      { from: '@trident/inventory', to: ['@trident/core'] },
+      { from: '@trident/finance', to: ['@trident/core'] },
+      { from: '@trident/database', to: ['@trident/core'] },
+      { from: '@trident/edge', to: ['@trident/core'] },
+      { from: '@trident/sync', to: ['@trident/core'] },
+      { from: '@trident/pos-edge-runtime', to: ['@trident/core'] },
+      { from: '@trident/pos-edge-runtime', to: ['@trident/pos'] },
+      { from: '@trident/pos-edge-runtime', to: ['@trident/edge'] },
+      { from: '@trident/cloud-server', to: ['@trident/core'] },
+      { from: '@trident/cloud-server', to: ['@trident/database'] },
+      { from: '@trident/cloud-server', to: ['@trident/inventory'] },
+      { from: '@trident/cloud-server', to: ['@trident/finance'] },
+    ];
+
+    for (const { from, to } of allowedCases) {
+      it(`PASS: ${from} -> [${to.join(', ')}]`, () => {
+        const adj = new Map([[from, to]]);
+        const violations = checkArchitecturalRules(adj);
+        assert.equal(
+          violations.length,
+          0,
+          `Expected 0 violations for allowed edge ${from} -> [${to.join(', ')}]`,
+        );
+      });
+    }
+  });
+
+  describe('Required Graph Test Matrix — Forbidden Relations', () => {
+    const forbiddenCases = [
+      {
+        from: '@trident/pos',
+        to: ['@trident/edge'],
+        label: 'pos -> edge (domain to infrastructure violation)',
+      },
+      {
+        from: '@trident/pos',
+        to: ['@trident/inventory'],
+        label: 'pos -> inventory (domain to domain violation)',
+      },
+      {
+        from: '@trident/inventory',
+        to: ['@trident/pos'],
+        label: 'inventory -> pos (domain to domain violation)',
+      },
+      {
+        from: '@trident/inventory',
+        to: ['@trident/database'],
+        label: 'inventory -> database (domain to infrastructure violation)',
+      },
+      {
+        from: '@trident/finance',
+        to: ['@trident/pos'],
+        label: 'finance -> pos (domain to domain violation)',
+      },
+      {
+        from: '@trident/procurement',
+        to: ['@trident/inventory'],
+        label: 'procurement -> inventory (domain to domain violation)',
+      },
+      {
+        from: '@trident/edge',
+        to: ['@trident/pos'],
+        label: 'edge -> pos (infrastructure to domain reverse violation)',
+      },
+      {
+        from: '@trident/database',
+        to: ['@trident/inventory'],
+        label: 'database -> inventory (infrastructure to domain reverse violation)',
+      },
+      {
+        from: '@trident/rogue-domain',
+        to: ['@trident/core'],
+        label: 'unknown -> core (unrecognized package violation)',
+      },
+      {
+        from: '@trident/pos',
+        to: ['@trident/unknown-domain'],
+        label: 'known -> unknown (unregistered dependency violation)',
+      },
+      {
+        from: '@trident/rogue-a',
+        to: ['@trident/rogue-b'],
+        label: 'unknown -> unknown (unrecognized package violation)',
+      },
+    ];
+
+    for (const { from, to, label } of forbiddenCases) {
+      it(`FAIL: ${label}`, () => {
+        const adj = new Map([[from, to]]);
+        const violations = checkArchitecturalRules(adj);
+        assert.ok(
+          violations.length > 0,
+          `Expected violation for forbidden relation ${from} -> [${to.join(', ')}]`,
+        );
+        assert.match(violations[0], /Architectural boundary violation/);
+      });
+    }
+  });
+
+  describe('Required Graph Test Matrix — Test-Only Separation', () => {
+    it('prove sync test dependency -> edge = PASS', () => {
+      const testDevAdj = new Map([['@trident/sync', ['@trident/edge']]]);
+      const violations = checkTestArchitecturalRules(testDevAdj);
+      assert.equal(violations.length, 0, 'Test dev dependency on @trident/edge must be permitted');
+    });
+
+    it('prove sync runtime dependency -> edge = FAIL', () => {
+      const runtimeAdj = new Map([['@trident/sync', ['@trident/edge']]]);
+      const violations = checkArchitecturalRules(runtimeAdj);
+      assert.ok(violations.length > 0, 'Runtime dependency on @trident/edge must fail');
+      assert.match(
+        violations[0],
+        /Package '@trident\/sync' is not permitted to depend on internal package '@trident\/edge'/,
+      );
+    });
+  });
+
+  // =========================================================================
+  // FAIL-CLOSED UNKNOWN PACKAGE TESTS (Section 10)
+  // =========================================================================
+  describe('Fail-Closed Unknown Package Enforcement', () => {
+    it('unknown governed internal package in runtime manifest fails closed', () => {
+      const adj = new Map([['@trident/rogue-domain', ['@trident/core']]]);
+      const violations = checkArchitecturalRules(adj);
+      assert.equal(violations.length, 1);
+      assert.match(
+        violations[0],
+        /Architectural boundary violation: Unrecognized internal package '@trident\/rogue-domain' has no defined dependency policy\./,
+      );
+    });
+
+    it('unknown governed internal package in test/dev manifest fails closed', () => {
+      const adj = new Map([['@trident/rogue-domain', ['@trident/core']]]);
+      const violations = checkTestArchitecturalRules(adj);
+      assert.equal(violations.length, 1);
+      assert.match(
+        violations[0],
+        /Architectural test boundary violation: Unrecognized internal package '@trident\/rogue-domain' has no defined test dependency policy\./,
+      );
+    });
+
+    it('unknown governed internal package in source imports fails closed', () => {
+      const code = `import { something } from '@trident/core';`;
+      const violations = checkSourceFileImports(
+        code,
+        'packages/rogue-domain/src/index.ts',
+        '@trident/rogue-domain',
+        undefined, // unknown package has undefined allowedDeps
+        new Set(['@trident/core']),
+      );
+      assert.ok(violations.length > 0);
+      assert.equal(violations[0].type, 'ARCHITECTURAL_BOUNDARY_VIOLATION');
+    });
+  });
+
+  // =========================================================================
+  // CYCLE DETECTION TESTS (Section 12)
+  // =========================================================================
+  describe('Cycle Detection Tests', () => {
+    it('direct cycle: core -> pos, pos -> core must fail cycle detection', () => {
+      const cyclicAdj = new Map([
+        ['@trident/core', ['@trident/pos']],
+        ['@trident/pos', ['@trident/core']],
+      ]);
+      const cycles = detectCycles(cyclicAdj);
+      assert.ok(cycles.length > 0, 'Must detect circular dependency between core and pos');
+      assert.deepEqual(cycles[0], ['@trident/core', '@trident/pos', '@trident/core']);
+    });
+
+    it('composition roots diamond DAG produces zero cycles (no false positive)', () => {
+      const diamondAdj = new Map([
+        ['@trident/pos-edge-runtime', ['@trident/core', '@trident/pos', '@trident/edge']],
+        ['@trident/pos', ['@trident/core']],
+        ['@trident/edge', ['@trident/core']],
+        ['@trident/core', []],
+      ]);
+      const cycles = detectCycles(diamondAdj);
+      assert.equal(
+        cycles.length,
+        0,
+        'Valid diamond DAG with composition root must produce zero cycles',
+      );
+    });
+
+    it('cycle involving composition root must fail cycle detection', () => {
+      const cyclicAdj = new Map([
+        ['@trident/pos-edge-runtime', ['@trident/pos']],
+        ['@trident/pos', ['@trident/pos-edge-runtime']],
+      ]);
+      const cycles = detectCycles(cyclicAdj);
+      assert.ok(cycles.length > 0, 'Must detect circular dependency involving composition root');
+      assert.deepEqual(cycles[0], [
+        '@trident/pos-edge-runtime',
+        '@trident/pos',
+        '@trident/pos-edge-runtime',
+      ]);
+    });
   });
 });
