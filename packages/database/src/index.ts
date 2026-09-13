@@ -8,3 +8,4 @@ export * from './iam.js';
 export * from './audit.js';
 export * from './leases.js';
 export * from './outbox/index.js';
+export * from './sync/index.js';

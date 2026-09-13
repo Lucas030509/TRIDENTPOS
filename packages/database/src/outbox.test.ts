@@ -69,6 +69,8 @@ describe('TRIDENTPOS WP-012 Cloud Transactional Outbox & Ingested Idempotency En
       if (!orgCheck.rows[0]?.reg) {
         await prepClient.query(`
           DROP TABLE IF EXISTS
+            sync_telemetry,
+            sync_checkpoints,
             wp012_test_domain_fixtures,
             cloud_integration_dlq,
             cloud_integration_outbox,

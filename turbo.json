@@ -17,6 +17,9 @@
       "dependsOn": ["build"],
       "outputs": [],
       "env": ["DATABASE_URL"]
+    },
+    "clean": {
+      "cache": false
     }
   }
 }

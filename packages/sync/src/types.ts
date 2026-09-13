@@ -42,6 +42,15 @@ export interface FolioHeartbeatResponseDTO {
 export interface AuthContext {
   readonly organizationId: string;
   readonly branchId: string;
+  readonly isControlPlane?: boolean;
+  readonly roles?: readonly string[];
+  readonly permissions?: readonly string[];
+}
+
+export interface IWebSocketAuthenticator {
+  authenticate(
+    req: import('node:http').IncomingMessage,
+  ): Promise<AuthContext | null> | AuthContext | null;
 }
 
 export interface HttpResponse {
@@ -95,4 +104,11 @@ export interface ISyncBatchProcessor {
     auth: AuthContext,
     batch: import('@trident/core').SyncBatchDTO,
   ): Promise<import('@trident/core').SyncBatchAckDTO>;
+}
+
+export interface IDownstreamDeltaProvider {
+  getCatalogDeltas(
+    auth: AuthContext,
+    request: import('@trident/core').CatalogDeltaRequest,
+  ): Promise<import('@trident/core').CatalogDeltaResponse>;
 }
