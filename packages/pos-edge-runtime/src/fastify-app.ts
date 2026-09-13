@@ -11,6 +11,8 @@ import {
   type Cuenta,
   type CuentaItem,
   type CuentaItemModificador,
+  type Mesa,
+  type MesaStatus,
   DiningDomainService,
   DomainError,
   OCCConflictError,
@@ -76,6 +78,41 @@ export function serializeModifierToDTO(mod: CuentaItemModificador): Record<strin
   };
 }
 
+export function serializeMesaToDTO(mesa: Mesa): Record<string, unknown> {
+  return {
+    id: mesa.id,
+    roomName: mesa.roomName,
+    tableNumber: mesa.tableNumber,
+    status: mesa.status,
+    currentAccountId: mesa.currentAccountId,
+    version: mesa.version,
+    updatedAt: mesa.updatedAt,
+  };
+}
+
+export function serializeSnapshotToDTO(snapshot: unknown): {
+  aggregateType: 'CUENTA' | 'MESA' | 'UNKNOWN';
+  snapshot: Record<string, unknown> | null;
+} {
+  if (!snapshot || typeof snapshot !== 'object') {
+    return { aggregateType: 'UNKNOWN', snapshot: null };
+  }
+  const rec = snapshot as Record<string, unknown>;
+  if ('tableNumber' in rec && 'roomName' in rec) {
+    return {
+      aggregateType: 'MESA',
+      snapshot: serializeMesaToDTO(snapshot as Mesa),
+    };
+  }
+  if ('items' in rec && 'subtotal' in rec) {
+    return {
+      aggregateType: 'CUENTA',
+      snapshot: serializeCuentaToDTO(snapshot as Cuenta),
+    };
+  }
+  return { aggregateType: 'UNKNOWN', snapshot: null };
+}
+
 export async function createPosFastifyApp(options: FastifyAppOptions): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
   const repo = new SqliteDiningRoomRepository(options.edgeDb);
@@ -85,15 +122,16 @@ export async function createPosFastifyApp(options: FastifyAppOptions): Promise<F
   });
 
   // Custom Error Handler mapping domain & OCC errors
-  app.setErrorHandler((error, _req, reply) => {
+  app.setErrorHandler((error, req, reply) => {
     if (error instanceof OCCConflictError) {
-      const snapshotDTO = error.currentSnapshot
-        ? serializeCuentaToDTO(error.currentSnapshot as Cuenta)
-        : null;
+      const { aggregateType, snapshot: snapshotDTO } = serializeSnapshotToDTO(
+        error.currentSnapshot,
+      );
 
       return reply.status(409).send({
         error: 'OCC_CONFLICT',
         message: error.message,
+        aggregateType,
         aggregateId: error.aggregateId,
         expectedVersion: error.expectedVersion,
         actualVersion: error.actualVersion,
@@ -115,9 +153,12 @@ export async function createPosFastifyApp(options: FastifyAppOptions): Promise<F
       });
     }
 
+    // Safe generic internal error boundary:
+    // Zero raw SQLite or internal infrastructure error leakage to client
+    req.log?.error(error);
     return reply.status(500).send({
       error: 'INTERNAL_SERVER_ERROR',
-      message: (error as Error).message,
+      message: 'An internal server error occurred',
     });
   });
 
@@ -133,12 +174,50 @@ export async function createPosFastifyApp(options: FastifyAppOptions): Promise<F
     }
 
     const mesa = await service.createMesa(body);
-    return reply.status(201).send(mesa);
+    return reply.status(201).send(serializeMesaToDTO(mesa));
   });
 
   app.get('/mesas', async (_req, reply) => {
     const mesas = await repo.listMesas();
-    return reply.send(mesas);
+    return reply.send(mesas.map((m) => serializeMesaToDTO(m)));
+  });
+
+  app.put('/mesas/:id', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = req.body as {
+      roomName: string;
+      tableNumber: string;
+      status: MesaStatus;
+      currentAccountId?: string | null;
+      expectedVersion: number;
+    };
+
+    if (
+      !body?.roomName ||
+      !body?.tableNumber ||
+      !body?.status ||
+      body?.expectedVersion === undefined
+    ) {
+      return reply.status(400).send({
+        error: 'MISSING_FIELDS',
+        message: 'Missing roomName, tableNumber, status, or expectedVersion',
+      });
+    }
+
+    const updatedMesa = repo.saveMesaSync(
+      {
+        id,
+        roomName: body.roomName,
+        tableNumber: body.tableNumber,
+        status: body.status,
+        currentAccountId: body.currentAccountId ?? null,
+        version: body.expectedVersion + 1,
+        updatedAt: new Date().toISOString(),
+      },
+      body.expectedVersion,
+    );
+
+    return reply.status(200).send(serializeMesaToDTO(updatedMesa));
   });
 
   // -------------------------------------------------------------
@@ -167,23 +246,26 @@ export async function createPosFastifyApp(options: FastifyAppOptions): Promise<F
       });
     }
 
-    // Standard service openCuenta with OCC
-    const op = await service.openCuenta(body);
-
-    options.outbox.enqueue({
-      organizationId: options.organizationId,
-      branchId: options.branchId,
-      aggregateType: 'CUENTA',
-      aggregateId: body.id,
-      action: 'OPEN_CUENTA',
-      clientOpId: body.clientOpId,
-      aggregateSequenceNumber: 1,
-      payload: { cuentaId: body.id, mesaId: body.mesaId, accountType: body.accountType },
-    });
+    // Atomic execution with transactional outbox under one synchronous SQLite transaction
+    const op = options.outbox.executeWithOutbox(
+      () => service.openCuentaSync(body),
+      [
+        {
+          organizationId: options.organizationId,
+          branchId: options.branchId,
+          aggregateType: 'CUENTA',
+          aggregateId: body.id,
+          action: 'OPEN_CUENTA',
+          clientOpId: body.clientOpId,
+          aggregateSequenceNumber: 1,
+          payload: { cuentaId: body.id, mesaId: body.mesaId, accountType: body.accountType },
+        },
+      ],
+    );
 
     return reply.status(201).send({
       cuenta: serializeCuentaToDTO(op.cuenta),
-      mesa: op.mesa,
+      mesa: op.mesa ? serializeMesaToDTO(op.mesa) : undefined,
     });
   });
 
@@ -254,34 +336,38 @@ export async function createPosFastifyApp(options: FastifyAppOptions): Promise<F
       modifierPriceApplied: decimalStringToScaledBigInt(m.modifierPriceApplied),
     }));
 
-    // Execute with transactional outbox
-    const updatedCuenta = await service.addItemToCuenta(cuentaId, body.expectedVersion, {
-      id: body.id,
-      productId: body.productId,
-      productNameSnapshot: body.productNameSnapshot,
-      unitPriceApplied,
-      quantity,
-      taxRateApplied,
-      discountAmountApplied,
-      modifiers,
-    });
-
-    options.outbox.enqueue({
-      organizationId: options.organizationId,
-      branchId: options.branchId,
-      aggregateType: 'CUENTA',
-      aggregateId: cuentaId,
-      action: 'ADD_ITEM',
-      clientOpId: body.clientOpId,
-      aggregateSequenceNumber: updatedCuenta.version,
-      payload: {
-        cuentaId,
-        itemId: body.id,
-        productId: body.productId,
-        quantity: body.quantity,
-        total: scaledBigIntToDecimalString(updatedCuenta.totalAmount),
-      },
-    });
+    // Execute with transactional outbox under one synchronous transaction
+    const updatedCuenta = options.outbox.executeWithOutbox(
+      () =>
+        service.addItemToCuentaSync(cuentaId, body.expectedVersion, {
+          id: body.id,
+          productId: body.productId,
+          productNameSnapshot: body.productNameSnapshot,
+          unitPriceApplied,
+          quantity,
+          taxRateApplied,
+          discountAmountApplied,
+          modifiers,
+        }),
+      (savedCuenta) => [
+        {
+          organizationId: options.organizationId,
+          branchId: options.branchId,
+          aggregateType: 'CUENTA',
+          aggregateId: cuentaId,
+          action: 'ADD_ITEM',
+          clientOpId: body.clientOpId,
+          aggregateSequenceNumber: savedCuenta.version,
+          payload: {
+            cuentaId,
+            itemId: body.id,
+            productId: body.productId,
+            quantity: body.quantity,
+            total: scaledBigIntToDecimalString(savedCuenta.totalAmount),
+          },
+        },
+      ],
+    );
 
     return reply.status(200).send(serializeCuentaToDTO(updatedCuenta));
   };
@@ -305,30 +391,29 @@ export async function createPosFastifyApp(options: FastifyAppOptions): Promise<F
       });
     }
 
-    const { cuenta, mesa } = await service.closeCuenta(
-      id,
-      body.expectedVersion,
-      body.closedStatus ?? 'PAGADA',
+    const op = options.outbox.executeWithOutbox(
+      () => service.closeCuentaSync(id, body.expectedVersion, body.closedStatus ?? 'PAGADA'),
+      (result) => [
+        {
+          organizationId: options.organizationId,
+          branchId: options.branchId,
+          aggregateType: 'CUENTA',
+          aggregateId: id,
+          action: 'CLOSE_CUENTA',
+          clientOpId: body.clientOpId,
+          aggregateSequenceNumber: result.cuenta.version,
+          payload: {
+            cuentaId: id,
+            status: result.cuenta.status,
+            totalAmount: scaledBigIntToDecimalString(result.cuenta.totalAmount),
+          },
+        },
+      ],
     );
 
-    options.outbox.enqueue({
-      organizationId: options.organizationId,
-      branchId: options.branchId,
-      aggregateType: 'CUENTA',
-      aggregateId: id,
-      action: 'CLOSE_CUENTA',
-      clientOpId: body.clientOpId,
-      aggregateSequenceNumber: cuenta.version,
-      payload: {
-        cuentaId: id,
-        status: cuenta.status,
-        totalAmount: scaledBigIntToDecimalString(cuenta.totalAmount),
-      },
-    });
-
     return reply.status(200).send({
-      cuenta: serializeCuentaToDTO(cuenta),
-      mesa,
+      cuenta: serializeCuentaToDTO(op.cuenta),
+      mesa: op.mesa ? serializeMesaToDTO(op.mesa) : undefined,
     });
   });
 

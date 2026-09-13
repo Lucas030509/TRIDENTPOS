@@ -92,7 +92,7 @@ export class SqliteDiningRoomRepository implements DiningRoomRepositoryPort, Acc
   // ==========================================
 
   public getMesaByIdSync(id: string): Mesa | null {
-    const row = this.#db.queryRow<MesaRow>(
+    const row = this.#db.queryRowSafe<MesaRow>(
       'SELECT id, room_name, table_number, status, current_account_id, version, updated_at FROM mesas WHERE id = ?;',
       id,
     );
@@ -107,7 +107,7 @@ export class SqliteDiningRoomRepository implements DiningRoomRepositoryPort, Acc
       tableNumber: row.table_number,
       status: row.status as MesaStatus,
       currentAccountId: row.current_account_id,
-      version: row.version,
+      version: Number(row.version),
       updatedAt: row.updated_at,
     };
   }
@@ -167,7 +167,7 @@ export class SqliteDiningRoomRepository implements DiningRoomRepositoryPort, Acc
   }
 
   public async listMesas(): Promise<readonly Mesa[]> {
-    const rows = this.#db.queryRows<MesaRow>(
+    const rows = this.#db.queryRowsSafe<MesaRow>(
       'SELECT id, room_name, table_number, status, current_account_id, version, updated_at FROM mesas ORDER BY table_number ASC;',
     );
 
@@ -177,7 +177,7 @@ export class SqliteDiningRoomRepository implements DiningRoomRepositoryPort, Acc
       tableNumber: row.table_number,
       status: row.status as MesaStatus,
       currentAccountId: row.current_account_id,
-      version: row.version,
+      version: Number(row.version),
       updatedAt: row.updated_at,
     }));
   }
@@ -187,7 +187,7 @@ export class SqliteDiningRoomRepository implements DiningRoomRepositoryPort, Acc
   // ==========================================
 
   public getCuentaByIdSync(id: string): Cuenta | null {
-    const row = this.#db.queryRow<CuentaRow>(
+    const row = this.#db.queryRowSafe<CuentaRow>(
       `SELECT id, folio_number, epoch_id, mesa_id, account_type, status,
               subtotal, tax_total, discounts_total, tips_total, total_amount,
               opened_by_user_id, opened_at, closed_at, version, updated_at
@@ -199,7 +199,7 @@ export class SqliteDiningRoomRepository implements DiningRoomRepositoryPort, Acc
       return null;
     }
 
-    const itemRows = this.#db.queryRows<CuentaItemRow>(
+    const itemRows = this.#db.queryRowsSafe<CuentaItemRow>(
       `SELECT id, cuenta_id, product_id, product_name_snapshot,
               unit_price_applied, quantity, tax_rate_applied, tax_amount_applied,
               discount_amount_applied, subtotal, total, status, created_at
@@ -209,7 +209,7 @@ export class SqliteDiningRoomRepository implements DiningRoomRepositoryPort, Acc
 
     const items: CuentaItem[] = [];
     for (const itemRow of itemRows) {
-      const modRows = this.#db.queryRows<CuentaItemModificadorRow>(
+      const modRows = this.#db.queryRowsSafe<CuentaItemModificadorRow>(
         `SELECT id, cuenta_item_id, modifier_id, modifier_name_snapshot, modifier_price_applied
          FROM cuenta_item_modificadores WHERE cuenta_item_id = ?;`,
         itemRow.id,
@@ -243,7 +243,10 @@ export class SqliteDiningRoomRepository implements DiningRoomRepositoryPort, Acc
 
     return {
       id: row.id,
-      folioNumber: row.folio_number,
+      folioNumber:
+        row.folio_number !== null && row.folio_number !== undefined
+          ? Number(row.folio_number)
+          : null,
       epochId: row.epoch_id,
       mesaId: row.mesa_id,
       accountType: row.account_type as AccountType,
@@ -256,7 +259,7 @@ export class SqliteDiningRoomRepository implements DiningRoomRepositoryPort, Acc
       openedByUserId: row.opened_by_user_id,
       openedAt: row.opened_at,
       closedAt: row.closed_at,
-      version: row.version,
+      version: Number(row.version),
       updatedAt: row.updated_at,
       items,
     };
@@ -286,11 +289,11 @@ export class SqliteDiningRoomRepository implements DiningRoomRepositoryPort, Acc
         cuenta.mesaId,
         cuenta.accountType,
         cuenta.status,
-        Number(cuenta.subtotal),
-        Number(cuenta.taxTotal),
-        Number(cuenta.discountsTotal),
-        Number(cuenta.tipsTotal),
-        Number(cuenta.totalAmount),
+        cuenta.subtotal,
+        cuenta.taxTotal,
+        cuenta.discountsTotal,
+        cuenta.tipsTotal,
+        cuenta.totalAmount,
         cuenta.openedByUserId,
         cuenta.openedAt,
         cuenta.closedAt,
@@ -314,11 +317,11 @@ export class SqliteDiningRoomRepository implements DiningRoomRepositoryPort, Acc
       cuenta.mesaId,
       cuenta.accountType,
       cuenta.status,
-      Number(cuenta.subtotal),
-      Number(cuenta.taxTotal),
-      Number(cuenta.discountsTotal),
-      Number(cuenta.tipsTotal),
-      Number(cuenta.totalAmount),
+      cuenta.subtotal,
+      cuenta.taxTotal,
+      cuenta.discountsTotal,
+      cuenta.tipsTotal,
+      cuenta.totalAmount,
       cuenta.closedAt,
       cuenta.version,
       cuenta.updatedAt,
@@ -365,13 +368,13 @@ export class SqliteDiningRoomRepository implements DiningRoomRepositoryPort, Acc
         item.cuentaId,
         item.productId,
         item.productNameSnapshot,
-        Number(item.unitPriceApplied),
-        Number(item.quantity),
-        Number(item.taxRateApplied),
-        Number(item.taxAmountApplied),
-        Number(item.discountAmountApplied),
-        Number(item.subtotal),
-        Number(item.total),
+        item.unitPriceApplied,
+        item.quantity,
+        item.taxRateApplied,
+        item.taxAmountApplied,
+        item.discountAmountApplied,
+        item.subtotal,
+        item.total,
         item.status,
         item.createdAt,
       );
@@ -388,14 +391,14 @@ export class SqliteDiningRoomRepository implements DiningRoomRepositoryPort, Acc
           mod.cuentaItemId,
           mod.modifierId,
           mod.modifierNameSnapshot,
-          Number(mod.modifierPriceApplied),
+          mod.modifierPriceApplied,
         );
       }
     }
   }
 
   public async listOpenCuentas(): Promise<readonly Cuenta[]> {
-    const rows = this.#db.queryRows<CuentaRow>(
+    const rows = this.#db.queryRowsSafe<CuentaRow>(
       `SELECT id FROM cuentas WHERE status = 'ABIERTA' ORDER BY opened_at ASC;`,
     );
 

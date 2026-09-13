@@ -135,9 +135,43 @@ export class DiningDomainService {
   }
 
   /**
+   * Creates a new Mesa aggregate synchronously.
+   */
+  public createMesaSync(input: CreateMesaInput): Mesa {
+    if (!this.#diningRepo.getMesaByIdSync || !this.#diningRepo.saveMesaSync) {
+      throw new DomainError(
+        'Dining repository does not support synchronous operations',
+        'SYNC_UNSUPPORTED',
+        500,
+      );
+    }
+    const existing = this.#diningRepo.getMesaByIdSync(input.id);
+    if (existing) {
+      throw new DomainError(`Mesa with id '${input.id}' already exists`, 'DUPLICATE_MESA', 409);
+    }
+
+    const now = new Date().toISOString();
+    const mesa: Mesa = {
+      id: input.id,
+      roomName: input.roomName,
+      tableNumber: input.tableNumber,
+      status: 'DISPONIBLE',
+      currentAccountId: null,
+      version: 1,
+      updatedAt: now,
+    };
+
+    return this.#diningRepo.saveMesaSync(mesa, 0);
+  }
+
+  /**
    * Creates a new Mesa aggregate.
    */
   public async createMesa(input: CreateMesaInput): Promise<Mesa> {
+    if (this.#diningRepo.getMesaByIdSync && this.#diningRepo.saveMesaSync) {
+      return this.createMesaSync(input);
+    }
+
     const existing = await this.#diningRepo.getMesaById(input.id);
     if (existing) {
       throw new DomainError(`Mesa with id '${input.id}' already exists`, 'DUPLICATE_MESA', 409);
@@ -154,13 +188,91 @@ export class DiningDomainService {
       updatedAt: now,
     };
 
-    return this.#diningRepo.saveMesa(mesa, 0); // 0 indicates initial insert
+    return this.#diningRepo.saveMesa(mesa, 0);
+  }
+
+  /**
+   * Opens a new Cuenta synchronously, optionally linking and occupying a Mesa with OCC.
+   */
+  public openCuentaSync(input: OpenCuentaInput): { cuenta: Cuenta; mesa?: Mesa } {
+    if (!this.#accountRepo.getCuentaByIdSync || !this.#accountRepo.saveCuentaSync) {
+      throw new DomainError(
+        'Account repository does not support synchronous operations',
+        'SYNC_UNSUPPORTED',
+        500,
+      );
+    }
+
+    const existingCuenta = this.#accountRepo.getCuentaByIdSync(input.id);
+    if (existingCuenta) {
+      throw new DomainError(`Cuenta with id '${input.id}' already exists`, 'DUPLICATE_CUENTA', 409);
+    }
+
+    let updatedMesa: Mesa | undefined;
+    if (input.mesaId) {
+      if (!this.#diningRepo.getMesaByIdSync || !this.#diningRepo.saveMesaSync) {
+        throw new DomainError(
+          'Dining repository does not support synchronous operations',
+          'SYNC_UNSUPPORTED',
+          500,
+        );
+      }
+      const mesa = this.#diningRepo.getMesaByIdSync(input.mesaId);
+      if (!mesa) {
+        throw new DomainError(`Mesa '${input.mesaId}' not found`, 'MESA_NOT_FOUND', 404);
+      }
+      if (mesa.status !== 'DISPONIBLE') {
+        throw new DomainError(
+          `Mesa '${input.mesaId}' is not available (current status: ${mesa.status})`,
+          'MESA_NOT_AVAILABLE',
+          409,
+        );
+      }
+
+      const occupiedMesa: Mesa = {
+        ...mesa,
+        status: 'OCUPADA',
+        currentAccountId: input.id,
+        version: mesa.version + 1,
+        updatedAt: new Date().toISOString(),
+      };
+
+      updatedMesa = this.#diningRepo.saveMesaSync(occupiedMesa, mesa.version);
+    }
+
+    const now = new Date().toISOString();
+    const cuenta: Cuenta = {
+      id: input.id,
+      folioNumber: null,
+      epochId: input.epochId,
+      mesaId: input.mesaId ?? null,
+      accountType: input.accountType,
+      status: 'ABIERTA',
+      subtotal: 0n,
+      taxTotal: 0n,
+      discountsTotal: 0n,
+      tipsTotal: 0n,
+      totalAmount: 0n,
+      openedByUserId: input.openedByUserId,
+      openedAt: now,
+      closedAt: null,
+      version: 1,
+      updatedAt: now,
+      items: [],
+    };
+
+    const savedCuenta = this.#accountRepo.saveCuentaSync(cuenta, 0);
+    return { cuenta: savedCuenta, mesa: updatedMesa };
   }
 
   /**
    * Opens a new Cuenta, optionally linking and occupying a Mesa with OCC.
    */
   public async openCuenta(input: OpenCuentaInput): Promise<{ cuenta: Cuenta; mesa?: Mesa }> {
+    if (this.#accountRepo.getCuentaByIdSync && this.#accountRepo.saveCuentaSync) {
+      return this.openCuentaSync(input);
+    }
+
     const existingCuenta = await this.#accountRepo.getCuentaById(input.id);
     if (existingCuenta) {
       throw new DomainError(`Cuenta with id '${input.id}' already exists`, 'DUPLICATE_CUENTA', 409);
@@ -217,6 +329,90 @@ export class DiningDomainService {
   }
 
   /**
+   * Synchronously adds an item with optional modifiers to an open Cuenta under OCC.
+   */
+  public addItemToCuentaSync(
+    cuentaId: string,
+    expectedVersion: number,
+    itemInput: AddItemInput,
+  ): Cuenta {
+    if (!this.#accountRepo.getCuentaByIdSync || !this.#accountRepo.saveCuentaSync) {
+      throw new DomainError(
+        'Account repository does not support synchronous operations',
+        'SYNC_UNSUPPORTED',
+        500,
+      );
+    }
+
+    const cuenta = this.#accountRepo.getCuentaByIdSync(cuentaId);
+    if (!cuenta) {
+      throw new DomainError(`Cuenta '${cuentaId}' not found`, 'CUENTA_NOT_FOUND', 404);
+    }
+
+    if (cuenta.status !== 'ABIERTA') {
+      throw new DomainError(
+        `Cannot add items to cuenta in status '${cuenta.status}'`,
+        'INVALID_ACCOUNT_STATUS',
+        400,
+      );
+    }
+
+    if (cuenta.version !== expectedVersion) {
+      throw new OCCConflictError(cuentaId, expectedVersion, cuenta.version, cuenta);
+    }
+
+    const discount = itemInput.discountAmountApplied ?? 0n;
+    const { subtotal, taxAmount, total } = DiningDomainService.calculateItemFinancials(
+      itemInput.unitPriceApplied,
+      itemInput.quantity,
+      itemInput.taxRateApplied,
+      discount,
+    );
+
+    const now = new Date().toISOString();
+    const modifiers: CuentaItemModificador[] = (itemInput.modifiers ?? []).map((mod) => ({
+      id: mod.id,
+      cuentaItemId: itemInput.id,
+      modifierId: mod.modifierId,
+      modifierNameSnapshot: mod.modifierNameSnapshot,
+      modifierPriceApplied: mod.modifierPriceApplied,
+    }));
+
+    const newItem: CuentaItem = {
+      id: itemInput.id,
+      cuentaId,
+      productId: itemInput.productId,
+      productNameSnapshot: itemInput.productNameSnapshot,
+      unitPriceApplied: itemInput.unitPriceApplied,
+      quantity: itemInput.quantity,
+      taxRateApplied: itemInput.taxRateApplied,
+      taxAmountApplied: taxAmount,
+      discountAmountApplied: discount,
+      subtotal,
+      total,
+      status: 'ORDENADO',
+      createdAt: now,
+      modifiers,
+    };
+
+    const updatedItems = [...cuenta.items, newItem];
+    const totals = DiningDomainService.recalculateCuentaTotals(updatedItems, cuenta.tipsTotal);
+
+    const updatedCuenta: Cuenta = {
+      ...cuenta,
+      subtotal: totals.subtotal,
+      taxTotal: totals.taxTotal,
+      discountsTotal: totals.discountsTotal,
+      totalAmount: totals.totalAmount,
+      version: cuenta.version + 1,
+      updatedAt: now,
+      items: updatedItems,
+    };
+
+    return this.#accountRepo.saveCuentaSync(updatedCuenta, expectedVersion);
+  }
+
+  /**
    * Adds an item with optional modifiers to an open Cuenta under OCC.
    */
   public async addItemToCuenta(
@@ -224,6 +420,10 @@ export class DiningDomainService {
     expectedVersion: number,
     itemInput: AddItemInput,
   ): Promise<Cuenta> {
+    if (this.#accountRepo.getCuentaByIdSync && this.#accountRepo.saveCuentaSync) {
+      return this.addItemToCuentaSync(cuentaId, expectedVersion, itemInput);
+    }
+
     const cuenta = await this.#accountRepo.getCuentaById(cuentaId);
     if (!cuenta) {
       throw new DomainError(`Cuenta '${cuentaId}' not found`, 'CUENTA_NOT_FOUND', 404);
@@ -293,6 +493,75 @@ export class DiningDomainService {
   }
 
   /**
+   * Synchronously closes a Cuenta under OCC, transitioning its associated table to DISPONIBLE.
+   */
+  public closeCuentaSync(
+    cuentaId: string,
+    expectedVersion: number,
+    closedStatus: 'PAGADA' | 'ANULADA' = 'PAGADA',
+  ): { cuenta: Cuenta; mesa?: Mesa } {
+    if (!this.#accountRepo.getCuentaByIdSync || !this.#accountRepo.saveCuentaSync) {
+      throw new DomainError(
+        'Account repository does not support synchronous operations',
+        'SYNC_UNSUPPORTED',
+        500,
+      );
+    }
+
+    const cuenta = this.#accountRepo.getCuentaByIdSync(cuentaId);
+    if (!cuenta) {
+      throw new DomainError(`Cuenta '${cuentaId}' not found`, 'CUENTA_NOT_FOUND', 404);
+    }
+
+    if (cuenta.status !== 'ABIERTA' && cuenta.status !== 'IMPRESA') {
+      throw new DomainError(
+        `Cannot close cuenta in status '${cuenta.status}'`,
+        'INVALID_ACCOUNT_STATUS',
+        400,
+      );
+    }
+
+    if (cuenta.version !== expectedVersion) {
+      throw new OCCConflictError(cuentaId, expectedVersion, cuenta.version, cuenta);
+    }
+
+    const now = new Date().toISOString();
+    const updatedCuenta: Cuenta = {
+      ...cuenta,
+      status: closedStatus,
+      closedAt: now,
+      version: cuenta.version + 1,
+      updatedAt: now,
+    };
+
+    const savedCuenta = this.#accountRepo.saveCuentaSync(updatedCuenta, expectedVersion);
+
+    let updatedMesa: Mesa | undefined;
+    if (savedCuenta.mesaId) {
+      if (!this.#diningRepo.getMesaByIdSync || !this.#diningRepo.saveMesaSync) {
+        throw new DomainError(
+          'Dining repository does not support synchronous operations',
+          'SYNC_UNSUPPORTED',
+          500,
+        );
+      }
+      const mesa = this.#diningRepo.getMesaByIdSync(savedCuenta.mesaId);
+      if (mesa && mesa.currentAccountId === cuentaId) {
+        const freedMesa: Mesa = {
+          ...mesa,
+          status: 'DISPONIBLE',
+          currentAccountId: null,
+          version: mesa.version + 1,
+          updatedAt: now,
+        };
+        updatedMesa = this.#diningRepo.saveMesaSync(freedMesa, mesa.version);
+      }
+    }
+
+    return { cuenta: savedCuenta, mesa: updatedMesa };
+  }
+
+  /**
    * Closes a Cuenta under OCC, transitioning its associated table to DISPONIBLE.
    */
   public async closeCuenta(
@@ -300,6 +569,10 @@ export class DiningDomainService {
     expectedVersion: number,
     closedStatus: 'PAGADA' | 'ANULADA' = 'PAGADA',
   ): Promise<{ cuenta: Cuenta; mesa?: Mesa }> {
+    if (this.#accountRepo.getCuentaByIdSync && this.#accountRepo.saveCuentaSync) {
+      return this.closeCuentaSync(cuentaId, expectedVersion, closedStatus);
+    }
+
     const cuenta = await this.#accountRepo.getCuentaById(cuentaId);
     if (!cuenta) {
       throw new DomainError(`Cuenta '${cuentaId}' not found`, 'CUENTA_NOT_FOUND', 404);
@@ -347,7 +620,10 @@ export class DiningDomainService {
   }
 
   /**
-   * Cancels a line item, evaluating CancellationPolicy hook (OQ-SSOT-01) if present.
+   * Cancels a line item, evaluating CancellationPolicy hook (OQ-SSOT-01).
+   * GOVERNED INVARIANT:
+   * If cancellation requires the policy and none is configured, it MUST FAIL CLOSED.
+   * Throws PROTECTED_POLICY_NOT_CONFIGURED. Account MUST NOT be mutated.
    */
   public async cancelItem(
     cuentaId: string,
@@ -355,6 +631,14 @@ export class DiningDomainService {
     expectedVersion: number,
     context: CancellationContext,
   ): Promise<Cuenta> {
+    if (!this.#cancellationPolicy) {
+      throw new DomainError(
+        'Cancellation policy not configured (OQ-SSOT-01 PENDING PO DECISION)',
+        'PROTECTED_POLICY_NOT_CONFIGURED',
+        501,
+      );
+    }
+
     const cuenta = await this.#accountRepo.getCuentaById(cuentaId);
     if (!cuenta) {
       throw new DomainError(`Cuenta '${cuentaId}' not found`, 'CUENTA_NOT_FOUND', 404);
@@ -373,15 +657,14 @@ export class DiningDomainService {
     if (!item) {
       throw new DomainError(`Item '${itemId}' not found in cuenta`, 'ITEM_NOT_FOUND', 404);
     }
-    if (this.#cancellationPolicy) {
-      const check = this.#cancellationPolicy.canCancelItem(item, context);
-      if (!check.allowed) {
-        throw new DomainError(
-          check.reason ?? 'Cancellation disallowed by cancellation policy',
-          'CANCELLATION_DISALLOWED',
-          403,
-        );
-      }
+
+    const check = this.#cancellationPolicy.canCancelItem(item, context);
+    if (!check.allowed) {
+      throw new DomainError(
+        check.reason ?? 'Cancellation disallowed by cancellation policy',
+        'CANCELLATION_DISALLOWED',
+        403,
+      );
     }
 
     const updatedItem: CuentaItem = {
@@ -411,6 +694,8 @@ export class DiningDomainService {
 
   /**
    * Splits a bill, delegating to BillSplitProrationStrategy (OQ-SSOT-06) if present.
+   * GOVERNED INVARIANT:
+   * If bill split strategy is not configured, it MUST FAIL CLOSED.
    */
   public splitCuenta(cuenta: Cuenta, partitions: readonly SplitPartitionPlan[]): readonly Cuenta[] {
     if (!this.#splitStrategy) {
@@ -425,6 +710,9 @@ export class DiningDomainService {
 
   /**
    * Validates and transfers account between tables, delegating to TransferValidationRule (OQ-SSOT-02).
+   * GOVERNED INVARIANT:
+   * If transfer rule is not configured, it MUST FAIL CLOSED.
+   * Throws PROTECTED_POLICY_NOT_CONFIGURED. Does NOT return true or allowed by default.
    */
   public validateTransfer(
     sourceMesa: Mesa,
@@ -432,9 +720,20 @@ export class DiningDomainService {
     cuenta: Cuenta,
     context: TransferValidationContext,
   ): boolean {
-    if (this.#transferRule) {
-      const result = this.#transferRule.validateTransfer(sourceMesa, targetMesa, cuenta, context);
-      return result.allowed;
+    if (!this.#transferRule) {
+      throw new DomainError(
+        'Transfer validation rule not configured (OQ-SSOT-02 PENDING PO DECISION)',
+        'PROTECTED_POLICY_NOT_CONFIGURED',
+        501,
+      );
+    }
+    const result = this.#transferRule.validateTransfer(sourceMesa, targetMesa, cuenta, context);
+    if (!result.allowed) {
+      throw new DomainError(
+        result.reason ?? 'Transfer disallowed by transfer validation rule',
+        'TRANSFER_DISALLOWED',
+        403,
+      );
     }
     return true;
   }

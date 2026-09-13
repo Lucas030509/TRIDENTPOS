@@ -172,9 +172,14 @@ export class EdgeOutboxPersistence {
    * Atomically executes a domain mutation function alongside outbox enqueues.
    * If either fails, the entire transaction rolls back cleanly.
    */
-  public executeWithOutbox<T>(mutationFn: () => T, events: EnqueueOutboxInput[]): T {
+  public executeWithOutbox<T>(
+    mutationFn: () => T,
+    eventsOrFactory: EnqueueOutboxInput[] | ((result: T) => EnqueueOutboxInput[]),
+  ): T {
     return this.#edgeDb.runInTransaction(() => {
       const result = mutationFn();
+      const events =
+        typeof eventsOrFactory === 'function' ? eventsOrFactory(result) : eventsOrFactory;
       for (const event of events) {
         this.enqueue(event);
       }

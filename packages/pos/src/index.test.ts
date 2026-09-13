@@ -382,4 +382,97 @@ describe('TRIDENTPOS Dining Domain & OCC Unit Suite', () => {
     assert.equal(cancelledCuenta.items[0]?.status, 'CANCELADO');
     assert.equal(cancelledCuenta.totalAmount, 0n); // cancelled item not included in total
   });
+
+  it('QI-014-01: Protected PO policies FAIL CLOSED when unconfigured', async () => {
+    const diningRepo = new InMemoryDiningRepo();
+    const accountRepo = new InMemoryAccountRepo();
+    const bareService = new DiningDomainService({
+      diningRepo,
+      accountRepo,
+      // No cancellationPolicy, transferRule, or splitStrategy configured
+    });
+
+    await bareService.openCuenta({
+      id: 'cta_fail_closed',
+      epochId: 'ep_1',
+      accountType: 'COMEDOR',
+      openedByUserId: 'usr_1',
+    });
+
+    await bareService.addItemToCuenta('cta_fail_closed', 1, {
+      id: 'itm_fc',
+      productId: 'p1',
+      productNameSnapshot: 'Burger',
+      unitPriceApplied: 1500000n,
+      quantity: 10000n,
+      taxRateApplied: 1600n,
+    });
+
+    // 1. CancellationPolicy absent -> MUST FAIL CLOSED with PROTECTED_POLICY_NOT_CONFIGURED
+    await assert.rejects(
+      () =>
+        bareService.cancelItem('cta_fail_closed', 'itm_fc', 2, {
+          operatorUserId: 'usr_mgr',
+          operatorRole: 'MANAGER',
+          kitchenStatus: 'PREPARING',
+          hasSupervisorAuthorization: true,
+        }),
+      (err: unknown) => {
+        assert(err instanceof DomainError);
+        assert.equal(err.code, 'PROTECTED_POLICY_NOT_CONFIGURED');
+        assert.equal(err.statusCode, 501);
+        return true;
+      },
+    );
+
+    // Verify account was NOT mutated
+    const unmutatedCuenta = await accountRepo.getCuentaById('cta_fail_closed');
+    assert.equal(unmutatedCuenta?.version, 2);
+    assert.equal(unmutatedCuenta?.items[0]?.status, 'ORDENADO');
+    assert.equal(unmutatedCuenta?.totalAmount, 1740000n);
+
+    // 2. TransferValidationRule absent -> MUST FAIL CLOSED with PROTECTED_POLICY_NOT_CONFIGURED
+    const dummyMesa1: Mesa = {
+      id: 'm1',
+      roomName: 'Main',
+      tableNumber: '1',
+      status: 'OCUPADA',
+      currentAccountId: 'cta_fail_closed',
+      version: 1,
+      updatedAt: new Date().toISOString(),
+    };
+    const dummyMesa2: Mesa = {
+      id: 'm2',
+      roomName: 'Main',
+      tableNumber: '2',
+      status: 'DISPONIBLE',
+      currentAccountId: null,
+      version: 1,
+      updatedAt: new Date().toISOString(),
+    };
+
+    assert.throws(
+      () =>
+        bareService.validateTransfer(dummyMesa1, dummyMesa2, unmutatedCuenta!, {
+          operatorUserId: 'usr_1',
+        }),
+      (err: unknown) => {
+        assert(err instanceof DomainError);
+        assert.equal(err.code, 'PROTECTED_POLICY_NOT_CONFIGURED');
+        assert.equal(err.statusCode, 501);
+        return true;
+      },
+    );
+
+    // 3. BillSplitProrationStrategy absent -> MUST FAIL CLOSED with STRATEGY_NOT_CONFIGURED
+    assert.throws(
+      () => bareService.splitCuenta(unmutatedCuenta!, [{ partitionId: 'part_1' }]),
+      (err: unknown) => {
+        assert(err instanceof DomainError);
+        assert.equal(err.code, 'STRATEGY_NOT_CONFIGURED');
+        assert.equal(err.statusCode, 501);
+        return true;
+      },
+    );
+  });
 });

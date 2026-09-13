@@ -359,11 +359,31 @@ export class EdgeDatabaseService {
   }
 
   /**
+   * Queries a single row via parameterized statement with safe BigInt integer mapping.
+   * Prevents IEEE-754 precision loss on 64-bit SQLite integers per ADR-012.
+   */
+  public queryRowSafe<T = unknown>(sql: string, ...params: unknown[]): T | undefined {
+    this.assertOpen();
+    const stmt = this.#db.prepare(sql).safeIntegers(true);
+    return stmt.get(...params) as T | undefined;
+  }
+
+  /**
    * Queries multiple rows via parameterized statement.
    */
   public queryRows<T = unknown>(sql: string, ...params: unknown[]): T[] {
     this.assertOpen();
     const stmt = this.#db.prepare(sql);
+    return stmt.all(...params) as T[];
+  }
+
+  /**
+   * Queries multiple rows via parameterized statement with safe BigInt integer mapping.
+   * Prevents IEEE-754 precision loss on 64-bit SQLite integers per ADR-012.
+   */
+  public queryRowsSafe<T = unknown>(sql: string, ...params: unknown[]): T[] {
+    this.assertOpen();
+    const stmt = this.#db.prepare(sql).safeIntegers(true);
     return stmt.all(...params) as T[];
   }
 

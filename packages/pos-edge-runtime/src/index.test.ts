@@ -211,6 +211,7 @@ describe('TRIDENTPOS WP-014: Dining Orders & OCC Integration Suite', () => {
     assert.equal(res.statusCode, 409);
     const body = JSON.parse(res.body);
     assert.equal(body.error, 'OCC_CONFLICT');
+    assert.equal(body.aggregateType, 'CUENTA');
     assert.equal(body.expectedVersion, 2);
     assert.equal(body.actualVersion, 3);
     assert.ok(body.currentSnapshot);
@@ -500,6 +501,288 @@ describe('TRIDENTPOS WP-014: Dining Orders & OCC Integration Suite', () => {
     assert.ok(
       median !== undefined && median < 50,
       'Local median order latency should be under 50ms',
+    );
+  });
+
+  it('WP014-T13: QI-014-02: Exact SQLite BigInt write/read roundtrip without Number coercion (> MAX_SAFE_INTEGER)', () => {
+    // Value exceeds JavaScript Number.MAX_SAFE_INTEGER (9007199254740991)
+    // If coerced to Number, 9007199254740993n becomes 9007199254740992 (loss of precision)
+    const largeAmount = 9007199254740993n;
+    const ctaId = 'cta_exact_roundtrip';
+    const itmId = 'itm_exact_roundtrip';
+    const modId = 'mod_exact_roundtrip';
+
+    repo.saveCuentaSync(
+      {
+        id: ctaId,
+        folioNumber: 99999,
+        epochId: 'ep_exact',
+        mesaId: null,
+        accountType: 'COMEDOR',
+        status: 'ABIERTA',
+        subtotal: largeAmount,
+        taxTotal: 0n,
+        discountsTotal: 0n,
+        tipsTotal: 0n,
+        totalAmount: largeAmount,
+        openedByUserId: 'usr_exact',
+        openedAt: new Date().toISOString(),
+        closedAt: null,
+        version: 1,
+        updatedAt: new Date().toISOString(),
+        items: [
+          {
+            id: itmId,
+            cuentaId: ctaId,
+            productId: 'prod_exact',
+            productNameSnapshot: 'Exact Product',
+            unitPriceApplied: largeAmount,
+            quantity: 10000n,
+            taxRateApplied: 0n,
+            taxAmountApplied: 0n,
+            discountAmountApplied: 0n,
+            subtotal: largeAmount,
+            total: largeAmount,
+            status: 'ORDENADO',
+            createdAt: new Date().toISOString(),
+            modifiers: [
+              {
+                id: modId,
+                cuentaItemId: itmId,
+                modifierId: 'mod_exact',
+                modifierNameSnapshot: 'Exact Modifier',
+                modifierPriceApplied: largeAmount,
+              },
+            ],
+          },
+        ],
+      },
+      0,
+    );
+
+    // Read back via synchronous and asynchronous repository ports
+    const fetchedSync = repo.getCuentaByIdSync(ctaId);
+    assert.ok(fetchedSync);
+    assert.equal(fetchedSync.subtotal, largeAmount);
+    assert.equal(fetchedSync.totalAmount, largeAmount);
+    assert.equal(fetchedSync.items[0]?.unitPriceApplied, largeAmount);
+    assert.equal(fetchedSync.items[0]?.subtotal, largeAmount);
+    assert.equal(fetchedSync.items[0]?.total, largeAmount);
+    assert.equal(fetchedSync.items[0]?.modifiers[0]?.modifierPriceApplied, largeAmount);
+
+    // Prove IEEE-754 Number conversion would have drifted
+    assert.notEqual(
+      fetchedSync.subtotal,
+      BigInt(Number(largeAmount)),
+      'Authoritative BigInt must NOT match lossy Float/Number conversion',
+    );
+  });
+
+  it('WP014-T14: QI-014-03: Production transactional outbox atomicity and rollback on production endpoints', async () => {
+    // 1. POST /cuentas: forced outbox failure (invalid clientOpId) rolls back Mesa & Cuenta
+    await app.inject({
+      method: 'POST',
+      url: '/mesas',
+      payload: { id: 'mesa_tx_rollback', roomName: 'VIP', tableNumber: 'V-1' },
+    });
+
+    const openFailRes = await app.inject({
+      method: 'POST',
+      url: '/cuentas',
+      payload: {
+        id: 'cta_tx_fail',
+        mesaId: 'mesa_tx_rollback',
+        epochId: 'ep_tx',
+        accountType: 'COMEDOR',
+        openedByUserId: 'usr_tx',
+        clientOpId: 'INVALID_NOT_UUID', // Forces outbox.enqueue to throw
+      },
+    });
+
+    assert.equal(openFailRes.statusCode, 500);
+
+    // Verify atomic rollback: Cuenta must NOT exist
+    const ctaAfterFail = repo.getCuentaByIdSync('cta_tx_fail');
+    assert.equal(ctaAfterFail, null, 'Cuenta must NOT be created on outbox failure');
+
+    // Verify atomic rollback: Mesa must still be DISPONIBLE
+    const mesaAfterFail = repo.getMesaByIdSync('mesa_tx_rollback');
+    assert.equal(mesaAfterFail?.status, 'DISPONIBLE', 'Mesa must remain DISPONIBLE after rollback');
+    assert.equal(mesaAfterFail?.currentAccountId, null);
+
+    // 2. Open cuenta successfully for item add rollback test
+    const openSuccessRes = await app.inject({
+      method: 'POST',
+      url: '/cuentas',
+      payload: {
+        id: 'cta_tx_success',
+        mesaId: 'mesa_tx_rollback',
+        epochId: 'ep_tx',
+        accountType: 'COMEDOR',
+        openedByUserId: 'usr_tx',
+        clientOpId: crypto.randomUUID(),
+      },
+    });
+    assert.equal(openSuccessRes.statusCode, 201);
+
+    // 3. POST /ordenes/partidas: forced outbox failure rolls back added item and version
+    const addItemFailRes = await app.inject({
+      method: 'POST',
+      url: '/ordenes/partidas',
+      payload: {
+        id: 'itm_tx_fail',
+        cuentaId: 'cta_tx_success',
+        expectedVersion: 1,
+        clientOpId: 'INVALID_UUID_ITEM', // Forces outbox.enqueue to throw
+        productId: 'p_tx',
+        productNameSnapshot: 'TX Product',
+        unitPriceApplied: '100.0000',
+        quantity: '1.0000',
+        taxRateApplied: '0.1600',
+      },
+    });
+    assert.equal(addItemFailRes.statusCode, 500);
+
+    // Verify account version did NOT advance and item was NOT added
+    const ctaAfterItemFail = repo.getCuentaByIdSync('cta_tx_success');
+    assert.equal(ctaAfterItemFail?.version, 1, 'Cuenta version must NOT advance after rollback');
+    assert.equal(ctaAfterItemFail?.items.length, 0, 'No item must be saved on outbox failure');
+
+    // 4. PUT /cuentas/:id/cerrar: forced outbox failure rolls back account close and table free
+    const closeFailRes = await app.inject({
+      method: 'PUT',
+      url: '/cuentas/cta_tx_success/cerrar',
+      payload: {
+        expectedVersion: 1,
+        clientOpId: 'INVALID_UUID_CLOSE', // Forces outbox.enqueue to throw
+        closedStatus: 'PAGADA',
+      },
+    });
+    assert.equal(closeFailRes.statusCode, 500);
+
+    const ctaAfterCloseFail = repo.getCuentaByIdSync('cta_tx_success');
+    assert.equal(ctaAfterCloseFail?.status, 'ABIERTA', 'Cuenta must remain ABIERTA on rollback');
+    assert.equal(ctaAfterCloseFail?.version, 1);
+
+    const mesaAfterCloseFail = repo.getMesaByIdSync('mesa_tx_rollback');
+    assert.equal(mesaAfterCloseFail?.status, 'OCUPADA', 'Mesa must remain OCUPADA on rollback');
+    assert.equal(mesaAfterCloseFail?.currentAccountId, 'cta_tx_success');
+  });
+
+  it('WP014-T15: QI-014-04: Cross-aggregate atomicity between Mesa and Cuenta', () => {
+    // Open Account atomicity: failure during cuenta insert rolls back Mesa to DISPONIBLE
+    repo.saveMesaSync(
+      {
+        id: 'mesa_atomicity_1',
+        roomName: 'Salon',
+        tableNumber: 'S-1',
+        status: 'DISPONIBLE',
+        currentAccountId: null,
+        version: 1,
+        updatedAt: new Date().toISOString(),
+      },
+      0,
+    );
+
+    assert.throws(() => {
+      edgeDb.runInTransaction(() => {
+        // Step 1: occupy table
+        repo.saveMesaSync(
+          {
+            id: 'mesa_atomicity_1',
+            roomName: 'Salon',
+            tableNumber: 'S-1',
+            status: 'OCUPADA',
+            currentAccountId: 'cta_atomicity_fail',
+            version: 2,
+            updatedAt: new Date().toISOString(),
+          },
+          1,
+        );
+
+        // Step 2: simulated crash during cuenta creation
+        throw new Error('SIMULATED_CUENTA_INSERT_FAILURE');
+      });
+    });
+
+    const mesaAfter = repo.getMesaByIdSync('mesa_atomicity_1');
+    assert.equal(
+      mesaAfter?.status,
+      'DISPONIBLE',
+      'Mesa must stay DISPONIBLE when transaction fails',
+    );
+    assert.equal(mesaAfter?.version, 1);
+    assert.equal(mesaAfter?.currentAccountId, null);
+  });
+
+  it('WP014-T16: QI-014-04: Mesa OCC conflict returns HTTP 409 with valid Mesa snapshot', async () => {
+    // Create Mesa with initial version 1
+    await app.inject({
+      method: 'POST',
+      url: '/mesas',
+      payload: { id: 'mesa_occ_snapshot', roomName: 'Jardin', tableNumber: 'J-1' },
+    });
+
+    // Client A updates Mesa -> version becomes 2
+    const updateResA = await app.inject({
+      method: 'PUT',
+      url: '/mesas/mesa_occ_snapshot',
+      payload: {
+        roomName: 'Jardin Principal',
+        tableNumber: 'J-1',
+        status: 'DISPONIBLE',
+        expectedVersion: 1,
+      },
+    });
+    assert.equal(updateResA.statusCode, 200);
+
+    // Client B attempts update with stale expectedVersion 1 -> OCC conflict
+    const updateResB = await app.inject({
+      method: 'PUT',
+      url: '/mesas/mesa_occ_snapshot',
+      payload: {
+        roomName: 'Jardin Secundario',
+        tableNumber: 'J-1',
+        status: 'DISPONIBLE',
+        expectedVersion: 1, // Stale! Current is 2
+      },
+    });
+
+    assert.equal(updateResB.statusCode, 409);
+    const body = JSON.parse(updateResB.body);
+    assert.equal(body.error, 'OCC_CONFLICT');
+    assert.equal(body.aggregateType, 'MESA');
+    assert.equal(body.expectedVersion, 1);
+    assert.equal(body.actualVersion, 2);
+    assert.ok(body.currentSnapshot);
+    assert.equal(body.currentSnapshot.id, 'mesa_occ_snapshot');
+    assert.equal(body.currentSnapshot.roomName, 'Jardin Principal');
+    assert.equal(body.currentSnapshot.tableNumber, 'J-1');
+    assert.equal(body.currentSnapshot.version, 2);
+  });
+
+  it('WP014-T17: QI-014-04: Hardened Fastify error boundary returns generic 500 without leaking raw internal details', async () => {
+    // Send request causing an unexpected internal error (e.g. invalid UUID clientOpId)
+    const res = await app.inject({
+      method: 'POST',
+      url: '/cuentas',
+      payload: {
+        id: 'cta_leak_test',
+        epochId: 'ep_1',
+        accountType: 'COMEDOR',
+        openedByUserId: 'u1',
+        clientOpId: 'NOT_A_VALID_UUID',
+      },
+    });
+
+    assert.equal(res.statusCode, 500);
+    const body = JSON.parse(res.body);
+    assert.equal(body.error, 'INTERNAL_SERVER_ERROR');
+    assert.equal(body.message, 'An internal server error occurred');
+    assert.equal(
+      Object.keys(body).sort().join(','),
+      'error,message',
+      'Response must only contain generic error and message keys without raw stack or SQLite internals',
     );
   });
 });
