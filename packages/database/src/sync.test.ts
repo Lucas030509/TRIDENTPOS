@@ -28,6 +28,45 @@ describe('TRIDENTPOS WP-013 Cloud Sync Repositories & RLS Suite', () => {
   const branchB1Id = crypto.randomUUID();
 
   before(async () => {
+    // Ensure clean migration state if previous test suite dropped tables
+    const prepClient = await pool.connect();
+    try {
+      const orgCheck = await prepClient.query<{ reg: string | null }>(
+        "SELECT to_regclass('organizations') as reg;",
+      );
+      if (!orgCheck.rows[0]?.reg) {
+        await prepClient.query(`
+          DROP TABLE IF EXISTS
+            recipe_items,
+            recipes,
+            ingredients,
+            warehouses,
+            sync_telemetry,
+            sync_checkpoints,
+            wp012_test_domain_fixtures,
+            cloud_integration_dlq,
+            cloud_integration_outbox,
+            reordering_buffer_queue,
+            aggregate_sequences,
+            ingested_idempotency_log,
+            folio_leases,
+            security_telemetry_events,
+            audit_log_events,
+            stations,
+            user_branch_credentials,
+            user_roles,
+            roles,
+            users,
+            test_composite_ref,
+            branches,
+            organizations,
+            _migrations CASCADE;
+        `);
+      }
+    } finally {
+      prepClient.release();
+    }
+
     // Ensure migrations are current
     await migrateUp(pool);
 
