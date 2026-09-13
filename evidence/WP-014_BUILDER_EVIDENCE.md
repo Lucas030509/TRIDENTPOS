@@ -1,25 +1,58 @@
-# WP-014 BUILDER EVIDENCE REPORT
+# WP-014 BUILDER EVIDENCE REPORT (S14-R1)
 
 **Work Package:** WP-014 — Dining Room, Tables & Orders Domain Engine with OCC  
 **Builder Agent:** `16_Native_Edge_Developer`  
 **Role:** Implementation Builder  
 **Canonical Base:** `38062575ceed063c8f03af5a5c473d140dd264df` (M14 - ACR-2026-013 Canonical)  
 **Implementation Branch:** `feature/wp-014-dining-orders-occ-r2`  
+**Original Candidate S14:** `eb832e58963115a2c3b4dbdd4f4945941b75de6f`  
+**Remediation Candidate S14-R1:** Direct child commit of S14  
 **Clean Merge-Base:** `38062575ceed063c8f03af5a5c473d140dd264df`  
 **Governing Framework:** `EAAF v1.2.0` (Pinned SHA: `7e036f43240b3dc28ccb996e350263598275b2cd`)  
 **Status:** `IMPLEMENTED / READY FOR COORDINATOR QUICK INTEGRITY`  
 
 ---
 
-## 1. Executive Summary
+## 1. Executive Summary & S14-R1 Remediation
 
 WP-014 implements the core dining room, tables, and restaurant accounts domain engine with Optimistic Concurrency Control (OCC) for local floor operations in accordance with `ADR-012`, `ADR-013`, `DATA_MODEL.md`, and `IMPLEMENTATION_PLAN.md`.
 
 All authoritative financial arithmetic is strictly implemented using exact fixed-point scale-4 integers (`bigint`) in `@trident/core`, with zero JavaScript floating point math. Dining aggregate logic and OCC version validation are isolated in pure domain package `@trident/pos`. Local edge persistence in SQLite under WAL mode and atomic transactional outbox integration are composed inside `@trident/pos-edge-runtime`.
 
+### S14-R1 Surgical Evidence Remediation:
+1. **Changed Files Accounting:** Corrected total changed file count from 19 to 20 files, explicitly listing and accounting for `package-lock.json` as mechanical workspace dependency registration impact.
+2. **Performance Classification:** Corrected local benchmark performance classification from "Target <5ms: PASS" to "PARTIAL / INCONCLUSIVE FOR FROZEN <5ms TARGET". Local samples recorded p50=2.200ms and p95=3.973ms, but max was 6.117ms; therefore, universal compliance is not claimed and `SEC-VAL-08` remains explicitly OPEN.
+3. **Zero Implementation Mutation:** Zero changes made to production code, tests, schemas, or packages.
+
 ---
 
-## 2. Package Topology & Architectural Invariants
+## 2. Changed Files (20 Files Total)
+
+The candidate diff against canonical base `38062575ceed063c8f03af5a5c473d140dd264df` contains exactly 20 files:
+1. `evidence/WP-014_BUILDER_EVIDENCE.md`
+2. `package-lock.json` (mechanical root workspace registration for `@trident/pos-edge-runtime`)
+3. `packages/core/src/index.test.ts`
+4. `packages/core/src/index.ts`
+5. `packages/core/src/money.ts`
+6. `packages/edge/src/db/edge-database.ts`
+7. `packages/pos-edge-runtime/package.json`
+8. `packages/pos-edge-runtime/src/dining-sqlite-repository.ts`
+9. `packages/pos-edge-runtime/src/fastify-app.ts`
+10. `packages/pos-edge-runtime/src/index.test.ts`
+11. `packages/pos-edge-runtime/src/index.ts`
+12. `packages/pos-edge-runtime/src/schema.ts`
+13. `packages/pos-edge-runtime/tsconfig.json`
+14. `packages/pos/src/dining-service.ts`
+15. `packages/pos/src/errors.ts`
+16. `packages/pos/src/index.test.ts`
+17. `packages/pos/src/index.ts`
+18. `packages/pos/src/policies.ts`
+19. `packages/pos/src/ports.ts`
+20. `packages/pos/src/types.ts`
+
+---
+
+## 3. Package Topology & Architectural Invariants
 
 | Package | Role | Dependencies | Modifications in WP-014 |
 | :--- | :--- | :--- | :--- |
@@ -37,16 +70,16 @@ All authoritative financial arithmetic is strictly implemented using exact fixed
 
 ---
 
-## 3. Exact Numerics & Financial Representation (ADR-012)
+## 4. Exact Numerics & Financial Representation (ADR-012)
 
-### 3.1 Primitives in `@trident/core`
+### 4.1 Primitives in `@trident/core`
 - `Money`: Immutable value object wrapping `amountScale4: bigint` with scale factor `10000n`.
 - `roundDiv(a: bigint, b: bigint): bigint`: Commercial Half Away From Zero rounding for scale-4 integer division.
 - Range bounds: `[-999_999_999_999n, +999_999_999_999n]` conforming to PostgreSQL `DECIMAL(12,4)` limits.
 - Zero JavaScript floating-point numbers (`number`) in financial calculation or storage.
 - Strict canonical decimal string conversions (`scaledBigIntToDecimalString`, `decimalStringToScaledBigInt` matching `/^-?\d+\.\d{4}$/`).
 
-### 3.2 Mandatory Normative Rounding Vectors (ADR-012 Sec. 4.2)
+### 4.2 Mandatory Normative Rounding Vectors (ADR-012 Sec. 4.2)
 ```
 roundDiv(  5000n, 10000n) =  1n  [PASS]
 roundDiv( -5000n, 10000n) = -1n  [PASS]
@@ -56,7 +89,7 @@ roundDiv( 15000n, 10000n) =  2n  [PASS]
 roundDiv(-15000n, 10000n) = -2n  [PASS]
 ```
 
-### 3.3 Exact Line Financial Formula Sequence
+### 4.3 Exact Line Financial Formula Sequence
 - Line Subtotal: `roundDiv(unitPriceScale4 * quantityScale4, 10000n)`
 - Net Subtotal: `lineSubtotal - discountAmountScale4`
 - Tax Amount: `roundDiv(netSubtotal * taxRateScale4, 10000n)`
@@ -65,22 +98,22 @@ roundDiv(-15000n, 10000n) = -2n  [PASS]
 
 ---
 
-## 4. Dining Domain & Concurrency Control (OCC)
+## 5. Dining Domain & Concurrency Control (OCC)
 
-### 4.1 Domain Aggregates (`@trident/pos`)
+### 5.1 Domain Aggregates (`@trident/pos`)
 - `Mesa`: Table aggregate with lifecycle `DISPONIBLE` -> `OCUPADA` -> `DISPONIBLE`.
 - `Cuenta`: Dining account aggregate with lifecycle `ABIERTA` -> `PAGADA` | `ANULADA`.
 - `CuentaItem`: Order line with product snapshot, scale-4 monetary attributes, status `ACTIVO` | `CANCELADO`.
 - `CuentaItemModificador`: Product customization line item persisting modifier price at scale 4. Canonical table: `cuenta_item_modificadores`.
 
-### 4.2 Optimistic Concurrency Control (OCC)
+### 5.2 Optimistic Concurrency Control (OCC)
 - CAS on aggregate mutations: `UPDATE ... SET version = version + 1 WHERE id = ? AND version = ?`.
 - Version mismatch: Throws `OCCConflictError` mapping to HTTP 409 with the current database snapshot returned in `currentSnapshot`.
 - Concurrency verification (`WP014-T07`): Tested true concurrent race condition on the same SQLite database file between two competing clients. Exactly one client succeeds; the competing client receives HTTP 409; **0 lost updates**.
 
 ---
 
-## 5. Persistence & Transactional Outbox (WP-012 Integration)
+## 6. Persistence & Transactional Outbox (WP-012 Integration)
 
 - SQLite database running under WAL mode (`journal_mode = WAL`, `synchronous = NORMAL`, `foreign_keys = ON`).
 - Monetary and tax amounts persisted strictly as SQLite `INTEGER` (scale factor 10,000). Zero `REAL` columns.
@@ -89,7 +122,7 @@ roundDiv(-15000n, 10000n) = -2n  [PASS]
 
 ---
 
-## 6. Protected Product Owner Policies (Pending Decision)
+## 7. Protected Product Owner Policies (Pending Decision)
 
 In strict accordance with EAAF v1.2 governance, the following PO items remain **PENDING PO DECISION** with neutral interfaces/hooks only and **zero unauthorized default behavior**:
 - `OQ-SSOT-01` (Item Cancellation Semantics): `CancellationPolicy` hook interface only.
@@ -99,23 +132,37 @@ In strict accordance with EAAF v1.2 governance, the following PO items remain **
 
 ---
 
-## 7. Performance Benchmark
+## 8. Performance Benchmark
 
 Local engineering benchmark executed in `WP014-T12`:
 - **Hardware / Environment:** macOS darwin-arm64 (Apple Silicon)
 - **Operation Tested:** Sequential `addItemToCuenta` mutation + SQLite WAL persistence + transactional outbox enqueue
 - **Sample Count:** 50 sequential orders
-- **Results:**
-  - Min: 0.959 ms
-  - Median (p50): 2.200 ms
-  - p95: 3.973 ms
-  - Max: 6.117 ms
-- **Target Invariant (<5ms p95):** PASS locally.
-- **Security Debt Statement:** Local development hardware cannot conclusively establish the frozen edge production hardware target. Therefore, **`SEC-VAL-08` remains OPEN** and is not closed by this local benchmark.
+
+```
+Local Performance Signal:
+PARTIAL / INCONCLUSIVE FOR FROZEN <5ms TARGET
+
+Observed:
+p50 = 2.200 ms
+p95 = 3.973 ms
+max = 6.117 ms
+
+Interpretation:
+Median and p95 were below 5ms in the local development environment.
+At least one measured operation exceeded 5ms.
+Therefore the implementation evidence does not claim universal compliance with the <5ms frozen target.
+
+SEC-VAL-08:
+OPEN / NOT CLOSED
+
+Target-hardware benchmark:
+REQUIRED LATER
+```
 
 ---
 
-## 8. Test Matrix & Regression Results
+## 9. Test Matrix & Regression Results
 
 | Scope / Package | Tests Run | Passed | Failed | Skipped |
 | :--- | :--- | :--- | :--- | :--- |
@@ -132,7 +179,7 @@ Local engineering benchmark executed in `WP014-T12`:
 
 ---
 
-## 9. Quality & Governance Gates
+## 10. Quality & Governance Gates
 
 - `npm run format:check`: **PASS** (0 style issues)
 - `npm run lint`: **PASS** (0 errors across 7 packages)
@@ -143,7 +190,7 @@ Local engineering benchmark executed in `WP014-T12`:
 
 ---
 
-## 10. Scope Boundaries
+## 11. Scope Boundaries
 
 - **Business Scope Expansion:** NONE.
 - **WP-015 (KDS / Kitchen Engine):** NOT implemented.
