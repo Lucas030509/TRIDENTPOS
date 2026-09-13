@@ -24,6 +24,8 @@
     "clean": "rm -rf dist"
   },
   "devDependencies": {
-    "@types/ws": "^8.18.1"
+    "@trident/edge": "*",
+    "@types/ws": "^8.18.1",
+    "jose": "5.9.6"
   }
 }

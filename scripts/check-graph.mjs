@@ -6,18 +6,18 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
 const packagesDir = path.join(rootDir, 'packages');
 
-function loadWorkspaces() {
-  if (!fs.existsSync(packagesDir)) {
-    console.error('Error: packages directory does not exist:', packagesDir);
+export function loadWorkspaces(dir = packagesDir) {
+  if (!fs.existsSync(dir)) {
+    console.error('Error: packages directory does not exist:', dir);
     process.exit(1);
   }
 
-  const entries = fs.readdirSync(packagesDir, { withFileTypes: true });
+  const entries = fs.readdirSync(dir, { withFileTypes: true });
   const workspaces = new Map();
 
   for (const entry of entries) {
     if (entry.isDirectory()) {
-      const pkgJsonPath = path.join(packagesDir, entry.name, 'package.json');
+      const pkgJsonPath = path.join(dir, entry.name, 'package.json');
       if (fs.existsSync(pkgJsonPath)) {
         try {
           const pkgJson = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf8'));
@@ -36,18 +36,20 @@ function loadWorkspaces() {
   return workspaces;
 }
 
-function buildAdjacencyList(workspaces) {
+/**
+ * Builds runtime dependency adjacency from production dependencies and peerDependencies.
+ */
+export function buildRuntimeAdjacencyList(workspaces) {
   const adj = new Map();
 
   for (const [pkgName, { pkgJson }] of workspaces.entries()) {
     const deps = new Set();
-    const allDeps = {
+    const runtimeDeps = {
       ...pkgJson.dependencies,
-      ...pkgJson.devDependencies,
       ...pkgJson.peerDependencies,
     };
 
-    for (const depName of Object.keys(allDeps)) {
+    for (const depName of Object.keys(runtimeDeps)) {
       if (workspaces.has(depName)) {
         deps.add(depName);
       }
@@ -59,7 +61,36 @@ function buildAdjacencyList(workspaces) {
   return adj;
 }
 
-function detectCycles(adj) {
+/**
+ * Alias for buildRuntimeAdjacencyList to maintain compatibility.
+ */
+export const buildAdjacencyList = buildRuntimeAdjacencyList;
+
+/**
+ * Builds test/dev dependency adjacency from internal devDependencies.
+ */
+export function buildTestDevAdjacencyList(workspaces) {
+  const adj = new Map();
+
+  for (const [pkgName, { pkgJson }] of workspaces.entries()) {
+    const deps = new Set();
+    const devDeps = {
+      ...pkgJson.devDependencies,
+    };
+
+    for (const depName of Object.keys(devDeps)) {
+      if (workspaces.has(depName)) {
+        deps.add(depName);
+      }
+    }
+
+    adj.set(pkgName, Array.from(deps));
+  }
+
+  return adj;
+}
+
+export function detectCycles(adj) {
   const visited = new Map(); // 0 = unvisited, 1 = visiting, 2 = visited
   const parent = new Map();
   const cycles = [];
@@ -106,6 +137,18 @@ export const ALLOWED_INTERNAL_DEPENDENCIES = {
   '@trident/edge': ['@trident/core'],
 };
 
+export const ALLOWED_TEST_INTERNAL_DEPENDENCIES = {
+  '@trident/core': [],
+  '@trident/database': ['@trident/core'],
+  '@trident/pos': ['@trident/core'],
+  '@trident/sync': ['@trident/core', '@trident/edge'],
+  '@trident/ui': ['@trident/core'],
+  '@trident/edge': ['@trident/core'],
+};
+
+/**
+ * Validates runtime manifest dependency rules against ALLOWED_INTERNAL_DEPENDENCIES.
+ */
 export function checkArchitecturalRules(adj) {
   const violations = [];
 
@@ -122,6 +165,33 @@ export function checkArchitecturalRules(adj) {
       if (!allowed.includes(dep)) {
         violations.push(
           `Architectural boundary violation: Package '${pkgName}' is not permitted to depend on internal package '${dep}'. Permitted internal dependencies: [${allowed.map((d) => `'${d}'`).join(', ')}]`,
+        );
+      }
+    }
+  }
+
+  return violations;
+}
+
+/**
+ * Validates test/dev manifest dependency rules against ALLOWED_TEST_INTERNAL_DEPENDENCIES.
+ */
+export function checkTestArchitecturalRules(testDevAdj) {
+  const violations = [];
+
+  for (const [pkgName, deps] of testDevAdj.entries()) {
+    const allowed = ALLOWED_TEST_INTERNAL_DEPENDENCIES[pkgName];
+    if (allowed === undefined) {
+      violations.push(
+        `Architectural test violation: Unrecognized internal package '${pkgName}' has no defined test dependency policy.`,
+      );
+      continue;
+    }
+
+    for (const dep of deps) {
+      if (!allowed.includes(dep)) {
+        violations.push(
+          `Architectural test boundary violation: Package '${pkgName}' is not permitted to declare test/dev dependency on internal package '${dep}'. Permitted test internal dependencies: [${allowed.map((d) => `'${d}'`).join(', ')}]`,
         );
       }
     }
@@ -160,6 +230,11 @@ function getSourceFiles(dir) {
 
 /**
  * Scan a single source text for internal @trident/* imports and validate against allowed policy and manifest.
+ *
+ * Requirements:
+ * - PERMITTED: importedPkg must exist in allowedDeps.
+ * - DECLARED: importedPkg must exist in declaredDeps.
+ * Both conditions must pass independently.
  */
 export function checkSourceFileImports(content, relativePath, pkgName, allowedDeps, declaredDeps) {
   const violations = [];
@@ -172,7 +247,7 @@ export function checkSourceFileImports(content, relativePath, pkgName, allowedDe
       continue; // Self-import
     }
 
-    // 1. Boundary check: must be permitted by ALLOWED_INTERNAL_DEPENDENCIES
+    // 1. Boundary check: must be permitted by policy
     if (!allowedDeps.includes(importedPkg)) {
       violations.push({
         type: 'ARCHITECTURAL_BOUNDARY_VIOLATION',
@@ -198,16 +273,7 @@ export function checkSourceFileImports(content, relativePath, pkgName, allowedDe
   return violations;
 }
 
-export const ALLOWED_TEST_INTERNAL_DEPENDENCIES = {
-  '@trident/core': [],
-  '@trident/database': ['@trident/core'],
-  '@trident/pos': ['@trident/core'],
-  '@trident/sync': ['@trident/core', '@trident/edge'],
-  '@trident/ui': ['@trident/core'],
-  '@trident/edge': ['@trident/core'],
-};
-
-function isTestFile(filePath) {
+export function isTestFile(filePath) {
   const base = path.basename(filePath);
   return (
     base.includes('.test.') ||
@@ -220,7 +286,7 @@ function isTestFile(filePath) {
 /**
  * Scan all workspace packages for internal import violations in source and tests.
  */
-function scanWorkspaceSourceImports(workspaces) {
+export function scanWorkspaceSourceImports(workspaces) {
   const violations = [];
 
   for (const [pkgName, { dir, pkgJson }] of workspaces.entries()) {
@@ -233,15 +299,23 @@ function scanWorkspaceSourceImports(workspaces) {
         ? ALLOWED_TEST_INTERNAL_DEPENDENCIES[pkgName] || []
         : ALLOWED_INTERNAL_DEPENDENCIES[pkgName] || [];
 
-      // For production source, dependencies must be declared in dependencies/peerDependencies
-      // For test files, dependencies can be declared in dependencies/devDependencies/peerDependencies
-      // OR in permitted test-only cross-workspace fixtures
-      const declaredDeps = new Set([
-        ...Object.keys(pkgJson.dependencies || {}),
-        ...Object.keys(pkgJson.peerDependencies || {}),
-        ...(isTest ? Object.keys(pkgJson.devDependencies || {}) : []),
-        ...(isTest ? ALLOWED_TEST_INTERNAL_DEPENDENCIES[pkgName] || [] : []),
-      ]);
+      // For production source:
+      // - allowed dependencies: ALLOWED_INTERNAL_DEPENDENCIES[pkgName]
+      // - declared dependencies: ONLY dependencies + peerDependencies
+      // For test files:
+      // - allowed dependencies: ALLOWED_TEST_INTERNAL_DEPENDENCIES[pkgName]
+      // - declared dependencies: dependencies + peerDependencies + devDependencies
+      // CRITICAL: PERMITTED ≠ DECLARED. Allowed dependencies are NEVER injected into declaredDeps.
+      const declaredDeps = isTest
+        ? new Set([
+            ...Object.keys(pkgJson.dependencies || {}),
+            ...Object.keys(pkgJson.peerDependencies || {}),
+            ...Object.keys(pkgJson.devDependencies || {}),
+          ])
+        : new Set([
+            ...Object.keys(pkgJson.dependencies || {}),
+            ...Object.keys(pkgJson.peerDependencies || {}),
+          ]);
 
       const content = fs.readFileSync(filePath, 'utf8');
       const relativePath = path.relative(rootDir, filePath);
@@ -271,35 +345,55 @@ export function run() {
   }
   console.log('');
 
-  const adj = buildAdjacencyList(workspaces);
-  console.log('Package Dependency Adjacency:');
-  for (const [name, deps] of adj.entries()) {
+  // 1. Build and validate runtime dependency adjacency
+  const runtimeAdj = buildRuntimeAdjacencyList(workspaces);
+  console.log('Package Runtime Dependency Adjacency:');
+  for (const [name, deps] of runtimeAdj.entries()) {
     const depStr = deps.length > 0 ? deps.join(', ') : '(none)';
     console.log(`  ${name} -> ${depStr}`);
   }
   console.log('');
 
-  // 1. Check for cycles
-  const cycles = detectCycles(adj);
+  // 2. Build and validate test/dev dependency adjacency
+  const testDevAdj = buildTestDevAdjacencyList(workspaces);
+  console.log('Package Test/Dev Internal Dependency Adjacency:');
+  for (const [name, deps] of testDevAdj.entries()) {
+    const depStr = deps.length > 0 ? deps.join(', ') : '(none)';
+    console.log(`  ${name} -> ${depStr}`);
+  }
+  console.log('');
+
+  // 3. Check for cycles in runtime dependency graph
+  const cycles = detectCycles(runtimeAdj);
   if (cycles.length > 0) {
-    console.error('ERROR: Circular dependency detected in monorepo packages!');
+    console.error('ERROR: Circular dependency detected in monorepo runtime packages!');
     for (const cycle of cycles) {
       console.error(`  Cycle path: ${cycle.join(' -> ')}`);
     }
     process.exit(1);
   }
 
-  // 2. Check manifest architectural boundary rules
-  const manifestViolations = checkArchitecturalRules(adj);
+  // 4. Check runtime manifest architectural boundary rules
+  const manifestViolations = checkArchitecturalRules(runtimeAdj);
   if (manifestViolations.length > 0) {
-    console.error('ERROR: Architectural boundary rule violations detected in manifests:');
+    console.error('ERROR: Architectural boundary rule violations detected in runtime manifests:');
     for (const violation of manifestViolations) {
       console.error(`  ${violation}`);
     }
     process.exit(1);
   }
 
-  // 3. Check source and test files for hidden/undeclared internal imports
+  // 5. Check test/dev manifest architectural boundary rules
+  const testManifestViolations = checkTestArchitecturalRules(testDevAdj);
+  if (testManifestViolations.length > 0) {
+    console.error('ERROR: Architectural boundary rule violations detected in test/dev manifests:');
+    for (const violation of testManifestViolations) {
+      console.error(`  ${violation}`);
+    }
+    process.exit(1);
+  }
+
+  // 6. Check source and test files for hidden/undeclared internal imports
   console.log('Scanning package source and test files for internal imports...');
   const sourceViolations = scanWorkspaceSourceImports(workspaces);
   if (sourceViolations.length > 0) {
@@ -310,8 +404,9 @@ export function run() {
     process.exit(1);
   }
 
-  console.log('SUCCESS: No circular dependencies detected.');
-  console.log('SUCCESS: All manifest dependency boundary rules satisfied.');
+  console.log('SUCCESS: No circular dependencies detected in runtime graph.');
+  console.log('SUCCESS: All runtime manifest dependency boundary rules satisfied.');
+  console.log('SUCCESS: All test/dev manifest dependency boundary rules satisfied.');
   console.log(
     'SUCCESS: All source and test internal imports strictly conform to architectural policy.',
   );
