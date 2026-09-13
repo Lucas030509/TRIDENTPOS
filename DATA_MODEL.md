@@ -1,16 +1,21 @@
 # DATA MODEL SPECIFICATION — ERP RESTAURANTES / TRIDENTPOS
 
 > [!NOTE]
+> **ACR-2026-013 PROPOSED ARCHITECTURE CHANGE — PENDING GOVERNANCE APPROVAL**
+> 
+> Proposed amendment under `ACR-2026-013`: Harmonization of Edge SQLite monetary and numerical representation from `REAL` to exact signed 64-bit `INTEGER` (Fixed-Point Escala 4: factor $10^4 = 10,000$). Pending formal review and Product Owner approval.
+
+> [!NOTE]
 > **ACR-2026-011 APPROVED / MERGED / CANONICAL ON MAIN — G9**
 > 
 > The additions in this document relating to WP-009 (`enrollment_tokens`, `station_credentials`, `edge_security_audit`) represent governance overlays formally approved and merged into canonical main under G9 (`0e50fe12ba7a95638c8efe57d4cd9c598b56daa9`). The underlying baseline remains `APPROVED / FROZEN — 2026-09-01`.
 
 **Document ID:** `ARCH-MDL-001`  
-**Version:** `1.0 APPROVED / FROZEN` (with ACR-2026-011 Canonical Overlay — G9)  
-**Status:** `APPROVED / FROZEN — 2026-09-01` (`ACR-2026-011 APPROVED / MERGED / CANONICAL ON MAIN — G9`)  
-**Date:** 2026-09-01  
+**Version:** `1.1 PROPOSED OVERLAY — ACR-2026-013` (Underlying baseline: `1.0 APPROVED / FROZEN — 2026-09-01` with ACR-2026-011 Canonical Overlay — G9)  
+**Status:** `PROPOSED ARCHITECTURE CHANGE — PENDING GOVERNANCE APPROVAL`  
+**Date:** 2026-09-13  
 **Framework:** `EAAF v1.2.0 @ 7e036f43240b3dc28ccb996e350263598275b2cd`  
-**Author Agent:** `03_Data_Architect` (Overlay Synthesis: `01_Solution_Architect`)  
+**Author Agent:** `01_Solution_Architect` (Original author: `03_Data_Architect`)  
 **Approved Solution Baseline:** `e35205906055a8425ab875d05789652b3c3497b7` (Tag `solution-architecture-v1.3-approved`)  
 
 ---
@@ -18,9 +23,10 @@
 ## 1. Convenciones Generales de Tipos y Nomenclatura
 
 - **Identificadores:** UUIDv4 estándar en Cloud (`uuid`) y texto canónico en Edge (`TEXT`).
-- **Valores Monetarios:** `DECIMAL(12, 4)` en Cloud y `INTEGER` en centavos o `DECIMAL(12, 4)` en Edge. Prohibido punto flotante (`REAL` / `FLOAT`).
-- **Cantidades e Insumos:** `DECIMAL(12, 4)` para soportar gramajes, mililitros y fracciones de receta.
-- **Fechas y Tiempos:** `TIMESTAMPTZ` (UTC ISO 8601) en Cloud y `TEXT` (formato `YYYY-MM-DDTHH:MM:SS.SSSZ`) en SQLite.
+- **Valores Monetarios:** `DECIMAL(12, 4)` en Cloud y `INTEGER` (Fixed-Point Escala 4: factor $10^4 = 10,000$, ej. `$150.5000` = `1505000`) en Edge SQLite (`ADR-012`, `ACR-2026-013`). Prohibido punto flotante (`REAL` / `FLOAT`). La nulabilidad permanece gobernada por el ciclo de vida de cada campo individual (los precios y totales de partidas son NOT NULL; campos de arqueo como `closing_declared_cash` son NULL mientras el turno está abierto).
+- **Tasas Impositivas:** `DECIMAL(6, 4)` en Cloud y `INTEGER` (Fixed-Point Escala 4: factor $10^4 = 10,000$, ej. 16% IVA = `1600`) en Edge SQLite.
+- **Cantidades e Insumos:** `DECIMAL(12, 4)` en Cloud y `INTEGER` (Fixed-Point Escala 4: factor $10^4 = 10,000$, ej. `0.2500` kg = `2500`) en Edge SQLite para soportar gramajes, mililitros y fracciones de receta sin deriva numérica (`ADR-012`).
+- **Fechas y Tiempos:** `TIMESTAMPTZ` (UTC ISO 8601) en Cloud y `TEXT` (formato `YYYY-MM-DDTHH:MM:SS.SSSZ`) o `INTEGER` (Unix Epoch Seconds según subsistema gobernado) en SQLite.
 - **Nomenclatura:** `snake_case` para tablas y columnas.
 
 ---
@@ -287,7 +293,8 @@ CREATE TABLE products (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     deleted_at TIMESTAMPTZ NULL,
-    CONSTRAINT uq_products_org_code UNIQUE (organization_id, code)
+    CONSTRAINT uq_products_org_code UNIQUE (organization_id, code),
+    CONSTRAINT uq_products_org_id UNIQUE (organization_id, id)
 );
 
 -- Overrides de Producto por Sucursal (Branch Overrides)
@@ -385,19 +392,23 @@ CREATE TABLE synced_cortes_z (
 ### 2.3 Bounded Context 3 & 4: Inventory & Procurement
 
 ```sql
--- Almacenes y Centros de Consumo
+-- Almacenes y Centros de Consumo (WP-017)
 CREATE TABLE warehouses (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     organization_id UUID NOT NULL REFERENCES organizations(id),
-    branch_id UUID NOT NULL REFERENCES branches(id),
+    branch_id UUID NOT NULL,
     code VARCHAR(50) NOT NULL,
     name VARCHAR(100) NOT NULL,
     warehouse_type VARCHAR(50) NOT NULL, -- PRINCIPAL, PRODUCCION, BARRA, COCINA
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
-    CONSTRAINT uq_warehouses_org_branch_code UNIQUE (organization_id, branch_id, code)
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_warehouses_org_branch_code UNIQUE (organization_id, branch_id, code),
+    CONSTRAINT uq_warehouses_org_id UNIQUE (organization_id, id),
+    CONSTRAINT fk_warehouses_branch FOREIGN KEY (organization_id, branch_id) REFERENCES branches(organization_id, id)
 );
 
--- Insumos e Ingredientes Base
+-- Insumos e Ingredientes Base (WP-017)
 CREATE TABLE ingredients (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     organization_id UUID NOT NULL REFERENCES organizations(id),
@@ -407,32 +418,70 @@ CREATE TABLE ingredients (
     current_average_cost DECIMAL(12, 4) NOT NULL DEFAULT 0.0000,
     last_purchase_cost DECIMAL(12, 4) NOT NULL DEFAULT 0.0000,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
-    CONSTRAINT uq_ingredients_org_code UNIQUE (organization_id, code)
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_ingredients_org_code UNIQUE (organization_id, code),
+    CONSTRAINT uq_ingredients_org_id UNIQUE (organization_id, id)
 );
 
--- Recetas Escandallo (Subrecetas y Productos Compuestos)
+-- Recetas Escandallo (Subrecetas y Productos Compuestos) (WP-017)
 CREATE TABLE recipes (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     organization_id UUID NOT NULL REFERENCES organizations(id),
-    product_id UUID NULL REFERENCES products(id), -- Null si es subreceta intermedia
+    product_id UUID NULL, -- Null si es subreceta intermedia
     code VARCHAR(50) NOT NULL,
     name VARCHAR(255) NOT NULL,
     yield_quantity DECIMAL(12, 4) NOT NULL DEFAULT 1.0000,
     yield_unit VARCHAR(20) NOT NULL,
     total_cost DECIMAL(12, 4) NOT NULL DEFAULT 0.0000,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
-    CONSTRAINT uq_recipes_org_code UNIQUE (organization_id, code)
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_recipes_org_code UNIQUE (organization_id, code),
+    CONSTRAINT uq_recipes_org_id UNIQUE (organization_id, id),
+    CONSTRAINT fk_recipes_product FOREIGN KEY (organization_id, product_id) REFERENCES products(organization_id, id)
 );
 
 CREATE TABLE recipe_items (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    recipe_id UUID NOT NULL REFERENCES recipes(id),
-    ingredient_id UUID NULL REFERENCES ingredients(id),
-    sub_recipe_id UUID NULL REFERENCES recipes(id),
+    organization_id UUID NOT NULL REFERENCES organizations(id),
+    recipe_id UUID NOT NULL,
+    ingredient_id UUID NULL,
+    sub_recipe_id UUID NULL,
     quantity DECIMAL(12, 4) NOT NULL,
     gross_quantity DECIMAL(12, 4) NOT NULL, -- Incluye factor de merma
-    unit_cost_snapshot DECIMAL(12, 4) NOT NULL
+    unit_cost_snapshot DECIMAL(12, 4) NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_recipe_items_org_id UNIQUE (organization_id, id),
+    CONSTRAINT fk_recipe_items_recipe FOREIGN KEY (organization_id, recipe_id) REFERENCES recipes(organization_id, id),
+    CONSTRAINT fk_recipe_items_ingredient FOREIGN KEY (organization_id, ingredient_id) REFERENCES ingredients(organization_id, id),
+    CONSTRAINT fk_recipe_items_sub_recipe FOREIGN KEY (organization_id, sub_recipe_id) REFERENCES recipes(organization_id, id),
+    CONSTRAINT chk_recipe_items_exclusive_source CHECK (
+        (ingredient_id IS NOT NULL AND sub_recipe_id IS NULL) OR
+        (ingredient_id IS NULL AND sub_recipe_id IS NOT NULL)
+    )
 );
+
+-- Row-Level Security (RLS) Specification for WP-017 Inventory Tables
+ALTER TABLE warehouses ENABLE ROW LEVEL SECURITY;
+ALTER TABLE warehouses FORCE ROW LEVEL SECURITY;
+CREATE POLICY warehouses_tenant_isolation_policy ON warehouses
+    FOR ALL USING (organization_id = current_app_org_id());
+
+ALTER TABLE ingredients ENABLE ROW LEVEL SECURITY;
+ALTER TABLE ingredients FORCE ROW LEVEL SECURITY;
+CREATE POLICY ingredients_tenant_isolation_policy ON ingredients
+    FOR ALL USING (organization_id = current_app_org_id());
+
+ALTER TABLE recipes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE recipes FORCE ROW LEVEL SECURITY;
+CREATE POLICY recipes_tenant_isolation_policy ON recipes
+    FOR ALL USING (organization_id = current_app_org_id());
+
+ALTER TABLE recipe_items ENABLE ROW LEVEL SECURITY;
+ALTER TABLE recipe_items FORCE ROW LEVEL SECURITY;
+CREATE POLICY recipe_items_tenant_isolation_policy ON recipe_items
+    FOR ALL USING (organization_id = current_app_org_id());
 
 -- Kárdex de Movimientos de Stock (Append-Only)
 CREATE TABLE stock_ledger (
@@ -800,9 +849,9 @@ CREATE TABLE local_products (
     code TEXT NOT NULL,
     name TEXT NOT NULL,
     product_type TEXT NOT NULL,
-    effective_price REAL NOT NULL, -- Precio base o override ya resuelto
+    effective_price INTEGER NOT NULL, -- Precio base o override ya resuelto en escala 4 (ADR-012, ej. $150.5000 = 1505000)
     tax_scheme_id TEXT NOT NULL,
-    tax_rate REAL NOT NULL,
+    tax_rate INTEGER NOT NULL, -- Tasa impositiva en escala 4 (ej. 16% = 1600)
     is_available INTEGER NOT NULL DEFAULT 1,
     delta_version INTEGER NOT NULL
 );
@@ -837,11 +886,11 @@ CREATE TABLE cuentas (
     mesa_id TEXT NULL,
     account_type TEXT NOT NULL, -- COMEDOR, MOSTRADOR, RAPPI, UBER, DOMICILIO
     status TEXT NOT NULL, -- ABIERTA, IMPRESA, PAGADA, ANULADA
-    subtotal REAL NOT NULL DEFAULT 0.0,
-    tax_total REAL NOT NULL DEFAULT 0.0,
-    discounts_total REAL NOT NULL DEFAULT 0.0,
-    tips_total REAL NOT NULL DEFAULT 0.0,
-    total_amount REAL NOT NULL DEFAULT 0.0,
+    subtotal INTEGER NOT NULL DEFAULT 0, -- Cents4 (ADR-012, escala 4: factor 10,000)
+    tax_total INTEGER NOT NULL DEFAULT 0, -- Cents4
+    discounts_total INTEGER NOT NULL DEFAULT 0, -- Cents4
+    tips_total INTEGER NOT NULL DEFAULT 0, -- Cents4
+    total_amount INTEGER NOT NULL DEFAULT 0, -- Cents4
     opened_by_user_id TEXT NOT NULL,
     opened_at TEXT NOT NULL,
     closed_at TEXT NULL,
@@ -855,13 +904,13 @@ CREATE TABLE cuenta_items (
     cuenta_id TEXT NOT NULL REFERENCES cuentas(id),
     product_id TEXT NOT NULL,
     product_name_snapshot TEXT NOT NULL,
-    unit_price_applied REAL NOT NULL,
-    quantity REAL NOT NULL,
-    tax_rate_applied REAL NOT NULL,
-    tax_amount_applied REAL NOT NULL,
-    discount_amount_applied REAL NOT NULL DEFAULT 0.0,
-    subtotal REAL NOT NULL,
-    total REAL NOT NULL,
+    unit_price_applied INTEGER NOT NULL, -- Cents4 (ADR-012)
+    quantity INTEGER NOT NULL, -- Escala 4 (ADR-012, ej. 1.0000 = 10000)
+    tax_rate_applied INTEGER NOT NULL, -- Escala 4 (ADR-012, ej. 16% = 1600)
+    tax_amount_applied INTEGER NOT NULL, -- Cents4 (ADR-012)
+    discount_amount_applied INTEGER NOT NULL DEFAULT 0, -- Cents4 (ADR-012)
+    subtotal INTEGER NOT NULL, -- Cents4 (ADR-012)
+    total INTEGER NOT NULL, -- Cents4 (ADR-012)
     status TEXT NOT NULL, -- ORDENADO, EN_COCINA, PREPARADO, ENTREGADO, CANCELADO
     created_at TEXT NOT NULL
 );
@@ -871,7 +920,7 @@ CREATE TABLE cuenta_item_modificadores (
     cuenta_item_id TEXT NOT NULL REFERENCES cuenta_items(id),
     modifier_id TEXT NOT NULL,
     modifier_name_snapshot TEXT NOT NULL,
-    modifier_price_applied REAL NOT NULL DEFAULT 0.0
+    modifier_price_applied INTEGER NOT NULL DEFAULT 0 -- Cents4 (ADR-012)
 );
 
 -- Órdenes y Comandas de KDS (Cocina / Barra)
@@ -892,10 +941,10 @@ CREATE TABLE turnos_caja (
     station_id TEXT NOT NULL,
     operator_user_id TEXT NOT NULL,
     shift_number INTEGER NOT NULL,
-    opening_cash_float REAL NOT NULL,
-    closing_declared_cash REAL NULL,
-    calculated_cash_total REAL NULL,
-    cash_difference REAL NULL,
+    opening_cash_float INTEGER NOT NULL, -- Cents4 (ADR-012)
+    closing_declared_cash INTEGER NULL, -- Cents4 (ADR-012)
+    calculated_cash_total INTEGER NULL, -- Cents4 (ADR-012)
+    cash_difference INTEGER NULL, -- Cents4 (ADR-012)
     status TEXT NOT NULL, -- ABIERTO, CERRADO_ARQUEO, CORTE_Z_EMITIDO
     opened_at TEXT NOT NULL,
     closed_at TEXT NULL,
@@ -909,8 +958,8 @@ CREATE TABLE pagos (
     cuenta_id TEXT NOT NULL REFERENCES cuentas(id),
     turno_caja_id TEXT NOT NULL REFERENCES turnos_caja(id),
     payment_method TEXT NOT NULL, -- EFECTIVO, TARJETA, TRANSFERENCIA, RESTCARD, CXC
-    amount REAL NOT NULL,
-    tip_amount REAL NOT NULL DEFAULT 0.0,
+    amount INTEGER NOT NULL, -- Cents4 (ADR-012)
+    tip_amount INTEGER NOT NULL DEFAULT 0, -- Cents4 (ADR-012)
     reference_auth_code TEXT NULL,
     created_at TEXT NOT NULL
 );

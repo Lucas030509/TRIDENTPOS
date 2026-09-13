@@ -1,11 +1,16 @@
 # DATA ARCHITECTURE — ERP RESTAURANTES / TRIDENTPOS
 
+> [!NOTE]
+> **ACR-2026-013 PROPOSED ARCHITECTURE CHANGE — PENDING GOVERNANCE APPROVAL**
+> 
+> Proposed amendment under `ACR-2026-013`: Harmonization of Edge SQLite monetary representation from floating point to exact signed 64-bit `INTEGER` (Fixed-Point Escala 4: factor $10^4 = 10,000$, `ADR-012`) and specification of the 4-layer monorepo package composition model (`ADR-013`). Pending formal review and Product Owner approval.
+
 **Document ID:** `ARCH-DAT-001`  
-**Version:** `1.0 APPROVED / FROZEN`  
-**Status:** `APPROVED / FROZEN — 2026-09-01`  
-**Date:** 2026-09-01  
+**Version:** `1.1 PROPOSED OVERLAY — ACR-2026-013` (Underlying baseline: `1.0 APPROVED / FROZEN — 2026-09-01`)  
+**Status:** `PROPOSED ARCHITECTURE CHANGE — PENDING GOVERNANCE APPROVAL`  
+**Date:** 2026-09-13  
 **Framework:** `EAAF v1.2.0 @ 7e036f43240b3dc28ccb996e350263598275b2cd`  
-**Author Agent:** `03_Data_Architect`  
+**Author Agent:** `01_Solution_Architect` (Original author: `03_Data_Architect`)  
 **Approved Solution Baseline:** `e35205906055a8425ab875d05789652b3c3497b7` (Tag `solution-architecture-v1.3-approved`)  
 **Target Gate:** `DATA_ARCHITECTURE_GATE (PASS)`  
 
@@ -76,6 +81,14 @@ El sistema implementa una **Arquitectura de Persistencia Híbrida Cloud-Edge**:
    - Base de datos local embebida de alta velocidad y cero administración.
    - Actúa como `Primary Write Authority` de las transacciones operativas en salón, cocina y caja (`mesas`, `cuentas`, `kds_ordenes`, `turnos_caja`, `pagos`, `cortes_z`).
    - Mantiene tablas de outbox local (`outbox_queue`) y registro de idempotencia (`ingested_idempotency_log`) para sincronización asíncrona bidireccional tolerante a desconexión.
+
+### 2.1 Estándar de Representación Numérica y Monetaria Exacta (`ADR-012`, `ACR-2026-013`)
+- **Taxonomía de Precisión Cloud:** PostgreSQL `DECIMAL(12,4)` para valores monetarios, precios unitarios, costos y cantidades; PostgreSQL `DECIMAL(6,4)` para tasas impositivas (`tax_rate_applied`).
+- **Persistencia Edge:** SQLite `INTEGER` (signed 64-bit) con **Escala Fija 4** ($S = 10,000$, ej. `$150.5000` = `1505000`, 16% IVA = `1600`).
+- **Prohibición Estricta de Punto Flotante:** Queda terminantemente prohibido el uso de `REAL`, `FLOAT` o IEEE 754 en esquemas, consultas o entidades de base de datos en Edge.
+- **Rango Común Interoperable:** Delimitado por el tipo Cloud más estricto `DECIMAL(12,4)` a $[-99,999,999.9999, +99,999,999.9999]$ (en Edge escala 4: $[-999999999999, +999999999999]$).
+- **Aritmética y Redondeo:** Modo de redondeo canónico del proyecto *Half Away From Zero* mediante la primitiva sign-safe `roundDiv(A, B)`. Cálculo por partida en `cuenta_items`; el total del agregado `cuentas` es la suma entera exacta de sus partidas hijas.
+- **Frontera de Conversión y Transporte:** Dominio en TypeScript operando con `bigint`. Cero conversión flotante (`Number()`, `parseFloat()`, `/ 10000.0`, `toFixed()`). Transporte externo en API REST y Sync como cadenas decimales fijas canónicas de 4 dígitos (`"150.5000"`).
 
 ---
 

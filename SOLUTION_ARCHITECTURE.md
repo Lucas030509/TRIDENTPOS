@@ -1,10 +1,16 @@
 # SOLUTION ARCHITECTURE & COMPONENT MODEL — ERP RESTAURANTES
 
+> [!NOTE]
+> **ACR-2026-013 PROPOSED ARCHITECTURE CHANGE — PENDING GOVERNANCE APPROVAL**
+> 
+> Proposed amendment under `ACR-2026-013`: Formalization of the 4-layer monorepo package composition model (`ADR-013`) and Edge exact fixed-point signed integer storage (`INTEGER` scale 4, `ADR-012`). Pending formal review and Product Owner approval.
+
 **Document ID:** `ARCH-SOL-001`  
-**Version:** `1.3 NORMALIZED / REMEDIATED`  
-**Status:** `APPROVED / FROZEN`  
-**Date:** 2026-09-01  
+**Version:** `1.4 PROPOSED OVERLAY — ACR-2026-013` (Underlying baseline: `1.3 NORMALIZED / REMEDIATED — 2026-09-01`)  
+**Status:** `PROPOSED ARCHITECTURE CHANGE — PENDING GOVERNANCE APPROVAL`  
+**Date:** 2026-09-13  
 **Baseline:** `EAAF v1.2.0 @ 7e036f43240b3dc28ccb996e350263598275b2cd`  
+**Author Agent:** `01_Solution_Architect`  
 **Supersedes:** `SOLUTION_ARCHITECTURE.md v1.1`  
 
 ---
@@ -144,4 +150,30 @@ Dentro del Monolito Modular en Cloud se implementa una separación estricta:
 
 ---
 
-DOCUMENT STATUS: APPROVED / FROZEN — 2026-09-01
+## 6. Topología de Monorepo y Modelo de Composición en Capas (`ADR-013`, `ACR-2026-013`)
+
+Para preservar el principio **Modular by Design — Integrated by Contract**, el monorepo implementa una arquitectura hexagonal en cuatro capas:
+
+1. **Capa 1 — Kernel de Plataforma y Bounded Context Platform Core (`@trident/core`):**
+   - Representa tanto el Bounded Context Platform Core como la superficie pública de kernel compartido. Aloja contratos de capabilities, Value Objects (`Money`, `ADR-012`), y posee lógica de dominio propia para: Organización, Sucursal, Identidad de Estación, Usuarios/RBAC, Module Entitlements, Catálogo Maestro de Productos, Modificadores, Overrides de Sucursal, primitivas de Auditoría y Criptografía. Dependencias internas: ninguna.
+2. **Capa 2 — Paquetes de Dominio de Negocio (10 Bounded Contexts):**
+   - `@trident/pos`: Lógica pura de restaurante y operaciones de piso: Salones, Mesas, Cuentas, Partidas (`cuenta_items`), Modificadores, Comandas de Piso, KDS LAN, Turnos de Caja (`turnos_caja`), Movimientos de Efectivo, Cobro POS (`pagos`), Arqueos de Turno, Cortes X y Cortes Z. Motor OCC con snapshot conflictivo. Contratos de políticas (`CancellationPolicy`, `BillSplitProrationStrategy`).
+   - `@trident/inventory`: Catálogo de insumos, multialmacén, motor de explosión de recetas/subrecetas y kárdex.
+   - `@trident/finance`: Finanzas corporativas y contabilidad central: CxP, CxC (crédito a clientes), Gastos, Liquidación de Propinas, Comisiones, Conciliación Bancaria e Interfaz Contable. (Los turnos de caja, arqueos y cobros POS pertenecen exclusivamente a TRIDENTPOS).
+   - `@trident/procurement`, `@trident/billing`, `@trident/crm`, `@trident/delivery`, `@trident/loyalty`, `@trident/analytics`, `@trident/integrations`.
+   - **Invariante de Dominio:** Dependen única y exclusivamente de `@trident/core`. Cero importaciones entre dominios. Cero importaciones hacia paquetes de infraestructura.
+3. **Capa 3 — Adaptadores de Infraestructura Técnica:**
+   - `@trident/database`: Conexión PostgreSQL 16, migraciones y RLS.
+   - `@trident/edge`: Runtime Electron, seguridad IPC, SQLite WAL (`EdgeDatabaseService`) y outbox local (`EdgeOutboxPersistence`).
+   - `@trident/sync`: Protocolo de sincronización y WebSocket Gateway.
+   - `@trident/ui`: Componentes visuales transversales.
+   - Dependencias internas: `@trident/core`.
+4. **Capa 4 — Raíces de Composición (Composition Roots):**
+   - `@trident/pos-edge-runtime`: Ensambla `@trident/pos` con `@trident/edge`, implementa repositorios sobre SQLite WAL, expone la API REST Fastify local (`POST /cuentas`, etc.) y aloja las pruebas de integración con persistencia real.
+   - `@trident/cloud-server`: Ensambla dominios Cloud con `@trident/database`, exponiendo el API Gateway corporativo.
+
+---
+
+DOCUMENT STATUS:
+- Canonical Baseline v1.3: APPROVED / FROZEN — 2026-09-01
+- ACR-2026-013 (ADR-012, ADR-013) Proposed Amendment: PROPOSED ARCHITECTURE CHANGE — PENDING GOVERNANCE APPROVAL
