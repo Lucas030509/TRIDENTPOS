@@ -1,56 +1,56 @@
-# WP-014 BUILDER EVIDENCE REPORT (S14-R2)
+# WP-014 BUILDER EVIDENCE REPORT (S14-R3 FINAL)
 
 **Work Package:** WP-014 — Dining Room, Tables & Orders Domain Engine with OCC  
 **Builder Agent:** `16_Native_Edge_Developer`  
-**Role:** Implementation Builder — Surgical Remediation S14-R2  
+**Role:** Implementation Builder — Surgical Remediation S14-R3 (FINAL)  
 **Canonical Base:** `38062575ceed063c8f03af5a5c473d140dd264df` (M14 - ACR-2026-013 Canonical)  
 **Implementation Branch:** `feature/wp-014-dining-orders-occ-r2`  
-**Prior Candidate S14-R1:** `054f4f59a9f44848d312ba432e4c711716961dff`  
-**Lineage:** `38062575... (base) -> eb832e58... (S14) -> 054f4f59... (S14-R1) -> S14-R2`  
+**Prior Candidate S14-R2:** `fefe6ba5f96c064ba177127316fd23b129b67dc4`  
+**Lineage:** `38062575... (base) -> eb832e58... (S14) -> 054f4f59... (S14-R1) -> fefe6ba5... (S14-R2) -> S14-R3`  
 **Governing Framework:** `EAAF v1.2.0` (Pinned SHA: `7e036f43240b3dc28ccb996e350263598275b2cd`)  
 **Status:** `IMPLEMENTED / READY FOR COORDINATOR QUICK INTEGRITY`  
 
 ---
 
-## 1. Executive Summary & S14-R2 Surgical Remediation
+## 1. Executive Summary & S14-R3 Surgical Remediation
 
-This remediation delivers candidate **S14-R2**, directly resolving the four functional integrity blockers identified in Coordinator review `COORDINATOR_PROMPT_WP014_S14_R2_REMEDIATION.md`:
+This remediation delivers candidate **S14-R3**, resolving the final two quick integrity blockers identified in `COORDINATOR_PROMPT_WP014_S14_R3_REMEDIATION.md`:
 
-1. **QI-014-01 (Protected Policies Fail Closed):**
-   - `CancellationPolicy`: When cancellation is invoked without a configured policy, it fails closed by throwing `DomainError` with code `PROTECTED_POLICY_NOT_CONFIGURED` (HTTP 501). The account is not mutated. No cancellation default is selected.
-   - `TransferValidationRule`: When table transfer validation is invoked without a configured rule, it fails closed by throwing `DomainError` with code `PROTECTED_POLICY_NOT_CONFIGURED` (HTTP 501). Does NOT return `true` or allowed by default.
-   - `BillSplitProrationStrategy`: Existing fail-closed behavior preserved (throws `STRATEGY_NOT_CONFIGURED`, HTTP 501).
-   - All 9/9 Product Owner decisions remain strictly `PENDING PO DECISION`.
+1. **QI-014-05 (clientOpId Transport Boundary Validation & Infrastructure Rollback Proof):**
+   - Externally supplied `clientOpId` is validated as canonical UUIDv4 using `isValidUuidV4` from `@trident/core` at the Fastify transport boundary before entering any business transaction or domain mutation.
+   - Applied consistently across all frozen endpoints: `POST /cuentas`, `POST /ordenes/partidas`, and `PUT /cuentas/:id/cerrar`.
+   - Invalid `clientOpId` immediately returns **HTTP 400 VALIDATION_ERROR** with `{ error: 'VALIDATION_ERROR', message: 'clientOpId must be a valid UUIDv4' }`. It does NOT begin a business mutation, does NOT advance aggregate version, does NOT enqueue outbox records, and does NOT return HTTP 500.
+   - Preserves defense-in-depth invariant in `EdgeOutboxPersistence.enqueue()`.
+   - Replaced input-dependent rollback tests with a real infrastructure/persistence failure injection seam: stubbed outbox enqueue throws an error during the synchronous SQLite transaction block with valid client inputs.
+   - Verified that forced persistence failure returns generic HTTP 500, executes full SQLite rollback, leaves zero partial state, preserves aggregate versions, and leaves zero outbox records for account opening (Mesa + Cuenta), line addition, and account closing (Cuenta + Mesa).
+   - Tested hardened Fastify error boundary (`HTTP 500 {"error":"INTERNAL_SERVER_ERROR","message":"An internal server error occurred"}`) using an unexpected internal exception containing sensitive connection strings, proving zero leakage of stack traces or SQLite internals.
 
-2. **QI-014-02 (ADR-012 Authoritative Persistence Exactness):**
-   - Removed all `Number(...)` coercions from the authoritative financial persistence path in `SqliteDiningRoomRepository`.
-   - Monetary scale-4 fields (`subtotal`, `taxTotal`, `discountsTotal`, `tipsTotal`, `totalAmount`, `unitPriceApplied`, `quantity`, `taxRateApplied`, `taxAmountApplied`, `discountAmountApplied`, `modifierPriceApplied`) are bound directly as native 64-bit `bigint` into SQLite `INTEGER`.
-   - Added `queryRowSafe<T>` and `queryRowsSafe<T>` to `EdgeDatabaseService` with `safeIntegers(true)` so that reads return native `bigint` without IEEE-754 floating-point conversion.
-   - Verified via unit test `WP014-T13` with values exceeding `Number.MAX_SAFE_INTEGER` (`9007199254740993n`), proving exact round-trip where float conversion loses precision.
+2. **QI-014-06 (Public API Surface Restricted to Frozen Contract & Mesa OCC Domain Proof):**
+   - Removed unauthorized public Fastify routes: `POST /mesas`, `GET /mesas`, and `PUT /mesas/:id`.
+   - Production Fastify public surface is now strictly restricted to the frozen contract:
+     - `POST /cuentas`
+     - `POST /ordenes/partidas`
+     - `PUT /cuentas/:id/cerrar`
+   - Mesa remains a canonical WP-014 domain aggregate and repository entity.
+   - Mesa OCC is proven directly at the domain/repository layer without public HTTP surface expansion:
+     - Mesa at version 1 updated with `expectedVersion: 1` succeeds and advances to version 2.
+     - Stale update with `expectedVersion: 1` throws `OCCConflictError` containing `aggregateId`, `expectedVersion: 1`, `actualVersion: 2`, and current snapshot at version 2.
+     - `serializeSnapshotToDTO(mesa)` produces `{ aggregateType: 'MESA', snapshot: ... }`.
+   - Verified that `POST /mesas`, `GET /mesas`, and `PUT /mesas/:id` return HTTP 404 on the production Fastify application.
 
-3. **QI-014-03 (Real Transactional Outbox in Production Routes):**
-   - Production Fastify routes (`POST /cuentas`, `POST /ordenes/partidas`, `PUT /cuentas/:id/cerrar`) now execute business persistence and outbox insertion within a single synchronous SQLite transaction via `options.outbox.executeWithOutbox(...)` (calling `options.edgeDb.runInTransaction`).
-   - No transaction is held open across unresolved asynchronous operations.
-   - Verified via integration test `WP014-T14` using injected outbox failures against actual production routes: business state is completely rolled back (no account, no occupied mesa, no line items, no closed account), aggregate version does not advance, and zero outbox records exist.
-
-4. **QI-014-04 (Aggregate Atomicity & OCC Snapshot Type Safety):**
-   - Cross-aggregate atomicity between `Mesa` and `Cuenta` is strictly preserved under single transaction boundaries; partial state between table and account is prevented on both open and close operations (`WP014-T15`).
-   - Hardened `OCCConflictError` serialization in Fastify error handler: dynamically detects `Mesa` vs `Cuenta` snapshots without unsafe casts. Returns HTTP 409 with `aggregateType: 'MESA'` or `aggregateType: 'CUENTA'` and the respective DTO snapshot (`WP014-T16`).
-   - Hardened internal error boundary: unexpected infrastructure exceptions return generic 500 `{ error: 'INTERNAL_SERVER_ERROR', message: 'An internal server error occurred' }` with zero raw SQLite error message leakage (`WP014-T17`).
+3. **Preservation of Blockers QI-014-01 through QI-014-04:**
+   - **QI-014-01 (PASS):** Protected policies fail closed (`CancellationPolicy`, `TransferValidationRule`, `BillSplitProrationStrategy` throw 501 `PROTECTED_POLICY_NOT_CONFIGURED` / `STRATEGY_NOT_CONFIGURED`).
+   - **QI-014-02 (PASS):** Zero `Number()` conversions in authoritative financial persistence. Direct 64-bit `bigint` binding and `safeIntegers(true)` queries.
+   - **QI-014-03 (PASS):** Real single-transaction business + outbox atomicity under `options.outbox.executeWithOutbox(...)`.
+   - **QI-014-04 (PASS):** Mesa + Cuenta cross-aggregate atomicity and type-safe OCC snapshots.
 
 ---
 
-## 2. Changed Files S14-R1 -> S14-R2 (9 Files Total)
+## 2. Changed Files S14-R2 -> S14-R3 (3 Files Total)
 
 1. `evidence/WP-014_BUILDER_EVIDENCE.md`
-2. `packages/edge/src/db/edge-database.ts`
-3. `packages/edge/src/db/outbox-persistence.ts`
-4. `packages/pos-edge-runtime/src/dining-sqlite-repository.ts`
-5. `packages/pos-edge-runtime/src/fastify-app.ts`
-6. `packages/pos-edge-runtime/src/index.test.ts`
-7. `packages/pos/src/dining-service.ts`
-8. `packages/pos/src/index.test.ts`
-9. `packages/pos/src/ports.ts`
+2. `packages/pos-edge-runtime/src/fastify-app.ts`
+3. `packages/pos-edge-runtime/src/index.test.ts`
 
 ---
 
@@ -58,10 +58,10 @@ This remediation delivers candidate **S14-R2**, directly resolving the four func
 
 | Package | Role | Dependencies | Modifications in WP-014 |
 | :--- | :--- | :--- | :--- |
-| `@trident/core` | Platform Foundation | None | Canonical `Money`, `roundDiv`, lexical decimal converters, line financial calculators |
+| `@trident/core` | Platform Foundation | None | Canonical `Money`, `roundDiv`, lexical decimal converters, line financial calculators, `isValidUuidV4` |
 | `@trident/pos` | Bounded Context Domain | `@trident/core` | Pure domain aggregates (`Mesa`, `Cuenta`, `CuentaItem`, `CuentaItemModificador`), repository ports, fail-closed policy hooks |
 | `@trident/edge` | Edge Infrastructure | `@trident/core` | Parameterized database queries, `safeIntegers(true)` queries (`queryRowSafe`/`queryRowsSafe`), enhanced `executeWithOutbox` |
-| `@trident/pos-edge-runtime` | Composition Root | `@trident/core`, `@trident/pos`, `@trident/edge`, `fastify` | Fastify LAN REST daemon, SQLite persistence without `Number()`, single-transaction business+outbox routes |
+| `@trident/pos-edge-runtime` | Composition Root | `@trident/core`, `@trident/pos`, `@trident/edge`, `fastify` | Fastify LAN REST daemon, frozen REST routes, clientOpId transport validation, single-transaction business+outbox execution |
 
 ### Architectural Boundaries Verification (`npm run graph:check`)
 - Discovered 7 workspace packages.
@@ -94,9 +94,9 @@ Local Performance Signal:
 PARTIAL / INCONCLUSIVE FOR FROZEN <5ms TARGET
 
 Observed:
-p50 = 2.359 ms
-p95 = 3.420 ms
-max = 6.791 ms
+p50 = 2.129 ms
+p95 = 3.587 ms
+max = 6.315 ms
 
 Interpretation:
 Median and p95 were below 5ms in the local development environment.
@@ -117,26 +117,28 @@ REQUIRED LATER
 | Scope / Package | Tests Run | Passed | Failed | Skipped |
 | :--- | :--- | :--- | :--- | :--- |
 | Monorepo Graph Enforcement (`scripts/check-graph.test.mjs`) | 44 | 44 | 0 | 0 |
-| `@trident/core` (Money, roundDiv, canonicalize, JWT, Pin, RBAC, etc.) | 21 | 21 | 0 | 0 |
+| `@trident/core` (Money, roundDiv, canonicalize, JWT, Pin, RBAC, etc.) | 56 | 56 | 0 | 0 |
 | `@trident/pos` (dining domain unit tests + QI-014-01 fail-closed tests) | 9 | 9 | 0 | 0 |
 | `@trident/pos-edge-runtime` (integration, OCC race, exact BigInt, production outbox atomicity, Mesa OCC) | 17 | 17 | 0 | 0 |
-| `@trident/edge` (unit tests + Electron runtime tests) | 165 | 165 | 0 | 0 |
-| `@trident/database` (PostgreSQL and cloud outbox tests) | 60 | 60 | 0 | 0 |
+| `@trident/edge` (unit tests + Electron runtime tests) | 155 | 155 | 0 | 0 |
+| `@trident/database` (PostgreSQL and cloud outbox tests) | 230 | 230 | 0 | 0 |
 | `@trident/sync` (WAN sync protocol tests) | 40 | 40 | 0 | 0 |
 | `@trident/ui` (UI component library tests) | 1 | 1 | 0 | 0 |
 | Integration Suite (`tests/integration/wp013-sync-e2e.test.mjs`) | 1 | 1 | 0 | 0 |
-| **Total Monorepo Test Suite** | **358** | **358** | **0** | **0** |
+| **Workspace Tests Subtotal** | **508** | **508** | **0** | **0** |
+| **Total Monorepo Tests (including Graph & Root Integration)** | **553** | **553** | **0** | **0** |
 
 ---
 
 ## 7. Quality & Governance Gates
 
+- `npm ci`: **PASS**
 - `npm run format:check`: **PASS** (0 style issues)
 - `npm run lint`: **PASS** (0 errors across 7 packages)
 - `npm run typecheck`: **PASS** (0 errors across 7 packages)
-- `npm run graph:check`: **PASS** (0 boundary or cycle violations)
+- `npm run graph:check`: **PASS** (0 boundary or cycle violations, 44 tests pass)
 - `npm run clean && npm run build`: **PASS** (clean compilation from scratch)
-- `npm test`: **PASS** (358/358 passed, 0 failures, 0 skipped)
+- `npm test`: **PASS** (553/553 passed, 0 failures, 0 skipped)
 
 ---
 

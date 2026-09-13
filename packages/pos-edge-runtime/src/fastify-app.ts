@@ -4,15 +4,18 @@
  * Enforces canonical fixed-four-decimal transport format and OCC conflict resolution.
  */
 
-import Fastify, { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { decimalStringToScaledBigInt, scaledBigIntToDecimalString } from '@trident/core';
+import Fastify, { FastifyInstance } from 'fastify';
+import {
+  decimalStringToScaledBigInt,
+  isValidUuidV4,
+  scaledBigIntToDecimalString,
+} from '@trident/core';
 import {
   type AccountType,
   type Cuenta,
   type CuentaItem,
   type CuentaItemModificador,
   type Mesa,
-  type MesaStatus,
   DiningDomainService,
   DomainError,
   OCCConflictError,
@@ -163,65 +166,7 @@ export async function createPosFastifyApp(options: FastifyAppOptions): Promise<F
   });
 
   // -------------------------------------------------------------
-  // Mesas Endpoints
-  // -------------------------------------------------------------
-  app.post('/mesas', async (req, reply) => {
-    const body = req.body as { id: string; roomName: string; tableNumber: string };
-    if (!body?.id || !body?.roomName || !body?.tableNumber) {
-      return reply
-        .status(400)
-        .send({ error: 'MISSING_FIELDS', message: 'Missing id, roomName, or tableNumber' });
-    }
-
-    const mesa = await service.createMesa(body);
-    return reply.status(201).send(serializeMesaToDTO(mesa));
-  });
-
-  app.get('/mesas', async (_req, reply) => {
-    const mesas = await repo.listMesas();
-    return reply.send(mesas.map((m) => serializeMesaToDTO(m)));
-  });
-
-  app.put('/mesas/:id', async (req, reply) => {
-    const { id } = req.params as { id: string };
-    const body = req.body as {
-      roomName: string;
-      tableNumber: string;
-      status: MesaStatus;
-      currentAccountId?: string | null;
-      expectedVersion: number;
-    };
-
-    if (
-      !body?.roomName ||
-      !body?.tableNumber ||
-      !body?.status ||
-      body?.expectedVersion === undefined
-    ) {
-      return reply.status(400).send({
-        error: 'MISSING_FIELDS',
-        message: 'Missing roomName, tableNumber, status, or expectedVersion',
-      });
-    }
-
-    const updatedMesa = repo.saveMesaSync(
-      {
-        id,
-        roomName: body.roomName,
-        tableNumber: body.tableNumber,
-        status: body.status,
-        currentAccountId: body.currentAccountId ?? null,
-        version: body.expectedVersion + 1,
-        updatedAt: new Date().toISOString(),
-      },
-      body.expectedVersion,
-    );
-
-    return reply.status(200).send(serializeMesaToDTO(updatedMesa));
-  });
-
-  // -------------------------------------------------------------
-  // Cuentas Endpoints
+  // Frozen WP-014 Public Cuentas & Orders Endpoints
   // -------------------------------------------------------------
   app.post('/cuentas', async (req, reply) => {
     const body = req.body as {
@@ -243,6 +188,13 @@ export async function createPosFastifyApp(options: FastifyAppOptions): Promise<F
       return reply.status(400).send({
         error: 'MISSING_FIELDS',
         message: 'Missing id, epochId, accountType, openedByUserId, or clientOpId',
+      });
+    }
+
+    if (!isValidUuidV4(body.clientOpId)) {
+      return reply.status(400).send({
+        error: 'VALIDATION_ERROR',
+        message: 'clientOpId must be a valid UUIDv4',
       });
     }
 
@@ -269,24 +221,10 @@ export async function createPosFastifyApp(options: FastifyAppOptions): Promise<F
     });
   });
 
-  app.get('/cuentas/:id', async (req, reply) => {
-    const { id } = req.params as { id: string };
-    const cuenta = await repo.getCuentaById(id);
-    if (!cuenta) {
-      return reply
-        .status(404)
-        .send({ error: 'CUENTA_NOT_FOUND', message: `Cuenta '${id}' not found` });
-    }
-    return reply.send(serializeCuentaToDTO(cuenta));
-  });
-
-  // Add Item to Cuenta (supports POST /cuentas/:id/items and alias POST /ordenes/partidas)
-  const handleAddItem = async (
-    req: FastifyRequest<{ Params: { id?: string }; Body: Record<string, unknown> }>,
-    reply: FastifyReply,
-  ) => {
-    const cuentaId = req.params?.id ?? (req.body?.cuentaId as string | undefined);
+  // Add Item to Cuenta (canonical POST /ordenes/partidas)
+  app.post('/ordenes/partidas', async (req, reply) => {
     const body = req.body as {
+      cuentaId: string;
       id: string;
       expectedVersion: number;
       clientOpId: string;
@@ -304,6 +242,8 @@ export async function createPosFastifyApp(options: FastifyAppOptions): Promise<F
       }>;
     };
 
+    const cuentaId = (req.params as { id?: string })?.id ?? body?.cuentaId;
+
     if (
       !cuentaId ||
       !body?.id ||
@@ -318,6 +258,13 @@ export async function createPosFastifyApp(options: FastifyAppOptions): Promise<F
       return reply.status(400).send({
         error: 'MISSING_FIELDS',
         message: 'Missing mandatory fields for adding item',
+      });
+    }
+
+    if (!isValidUuidV4(body.clientOpId)) {
+      return reply.status(400).send({
+        error: 'VALIDATION_ERROR',
+        message: 'clientOpId must be a valid UUIDv4',
       });
     }
 
@@ -370,10 +317,7 @@ export async function createPosFastifyApp(options: FastifyAppOptions): Promise<F
     );
 
     return reply.status(200).send(serializeCuentaToDTO(updatedCuenta));
-  };
-
-  app.post('/cuentas/:id/items', handleAddItem);
-  app.post('/ordenes/partidas', handleAddItem);
+  });
 
   // Close Cuenta
   app.put('/cuentas/:id/cerrar', async (req, reply) => {
@@ -388,6 +332,13 @@ export async function createPosFastifyApp(options: FastifyAppOptions): Promise<F
       return reply.status(400).send({
         error: 'MISSING_FIELDS',
         message: 'Missing expectedVersion or clientOpId',
+      });
+    }
+
+    if (!isValidUuidV4(body.clientOpId)) {
+      return reply.status(400).send({
+        error: 'VALIDATION_ERROR',
+        message: 'clientOpId must be a valid UUIDv4',
       });
     }
 
