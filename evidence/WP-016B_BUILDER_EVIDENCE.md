@@ -11,12 +11,13 @@
 ## Changed Files
 
 ```
+A  evidence/WP-016B_BUILDER_EVIDENCE.md
 A  packages/database/migrations/20260904223000_platform_core_master_catalog.sql
 M  packages/database/src/index.test.ts
 M  packages/database/src/outbox.test.ts
 ```
 
-3 files changed, 803 insertions(+), 12 deletions(-).
+4 files changed.
 
 No other packages, domains, or files were touched. Specifically NOT touched: Inventory, Billing, POS, cloud-server, tax_schemes, warehouses/ingredients/recipes, modifiers, branch_product_overrides.
 
@@ -71,7 +72,9 @@ Both tables: `ENABLE ROW LEVEL SECURITY`, `FORCE ROW LEVEL SECURITY`, and a `ten
 
 ## Test Suite
 
-Added `describe('TRIDENTPOS WP-016B Platform Core Master Catalog Foundation (Categories & Products) Suite', ...)` to `packages/database/src/index.test.ts` (appended after the WP-011 suite — the last suite in that file), with 30 tests (`WP016B-T01` … `WP016B-T30`), following the exact `before`/`after`/`asTestRole`/isolated-suite-dir conventions already used by the WP-003/WP-004/WP-011 suites in the same file. Moved the single `closePool(pool)` call from WP-011's `after()` to WP-016B's `after()`, since WP-016B is now the last suite in the file.
+Added `describe('TRIDENTPOS WP-016B Platform Core Master Catalog Foundation (Categories & Products) Suite', ...)` to `packages/database/src/index.test.ts` (appended after the WP-011 suite — the last suite in that file), with **30 tests total** (`WP016B-T01` … `WP016B-T30`, confirmed by direct count of `it(...)` blocks in the suite and by the passing test-runner output), following the exact `before`/`after`/`asTestRole`/isolated-suite-dir conventions already used by the WP-003/WP-004/WP-011 suites in the same file. Moved the single `closePool(pool)` call from WP-011's `after()` to WP-016B's `after()`, since WP-016B is now the last suite in the file.
+
+**WP-016B test count: 30/30 PASS.** (The requirements-coverage table below has 19 rows because several requirements are each satisfied by more than one test — the row count is not the test count.)
 
 Coverage against Section 16 requirements:
 
@@ -111,15 +114,55 @@ Coverage against Section 16 requirements:
 | `npm run db:migrate` (real PostgreSQL 16, `tridentpos_test`) | PASS — applied `20260904223000_platform_core_master_catalog` cleanly on top of the full existing chain |
 | `npm run db:migrate:down` (`ALLOW_DESTRUCTIVE_DOWN=true`) | PASS — reverted cleanly |
 | `npm run db:test` (`@trident/database`, real PostgreSQL) | PASS — **260/260**, 0 fail, run 3 consecutive times back-to-back with zero state leakage between runs |
-| `npm test` (full monorepo, `turbo run test`) | 538/538 unit tests pass across `@trident/pos` (9), `@trident/ui` (1), `@trident/sync` (40), `@trident/pos-edge-runtime` (17), `@trident/core` (56), `@trident/database` (260), `@trident/edge` `test:unit` (155). `@trident/edge`'s separate `test:electron` step fails in this sandboxed environment (`SyntaxError: The requested module 'electron' does not provide an export named 'BrowserWindow'`) — **confirmed pre-existing on canonical baseline `d102f52` via `git stash`** (identical command, identical failure mode, unrelated to WP-016B; @trident/edge is untouched by this change) |
-| `npm run test:integration` (root) | PASS — 1/1 |
+| `npm test` (full monorepo, `turbo run test && npm run test:integration`) | **FAIL — BASELINE-REPRODUCED ENVIRONMENTAL EXCEPTION** (see full accounting below) |
+| `npm run test:integration` (root) | PASS — 1/1 — **executed separately**, as a standalone invocation, not as the completed second half of the root `npm test` chain (the `&&` in `npm test` never reaches `test:integration` because the preceding `turbo run test` fails) |
 
-npm test count and graph:check count are reported separately, per Section 21 — they are never combined.
+### `npm test` exact status — do not report as PASS
+
+```text
+npm test:
+FAIL / BASELINE-REPRODUCED ENVIRONMENTAL EXCEPTION
+
+Successful unit sub-suites before/around failure:
+538 tests PASS
+  @trident/pos                9
+  @trident/ui                 1
+  @trident/sync               40
+  @trident/pos-edge-runtime   17
+  @trident/core               56
+  @trident/database           260
+  @trident/edge (test:unit)   155
+
+Blocking command component:
+@trident/edge test:electron
+
+Failure:
+SyntaxError: The requested module 'electron' does not provide an export named 'BrowserWindow'
+
+Attributable to WP-016B:
+NO
+
+Reproduced on untouched canonical baseline d102f5296c9175c485aeb1a4bf7b5af3a93173b5:
+YES (verified via `git stash` to remove all WP-016B changes, rebuild, and re-run
+the identical `npm run test --workspace=@trident/edge` command — same failure
+class reproduces on the untouched baseline)
+
+npm run test:integration:
+PASS — 1/1
+EXECUTED SEPARATELY (root `npm test`'s `&&` chain never reaches this step
+because the preceding `turbo run test` exits non-zero)
+```
+
+**Baseline exception classification:** `PRE-EXISTING / ENVIRONMENT-SPECIFIC / OUT-OF-SCOPE / NON-REGRESSION`. This classification documents the failure; it does not convert the failed `npm test` command to PASS. Whether this baseline exception is non-blocking for freeze is a Coordinator determination, not a Builder one.
+
+npm test count, graph:check count, and db:test count are reported separately, per Section 21 — they are never combined, and `npm test` overall is reported as FAIL, not PASS, per the accounting above.
 
 ## Failures / Skips
 
-- None attributable to WP-016B.
-- Pre-existing, out-of-scope, environment-caused: `@trident/edge`'s `test:electron` step (real Electron binary GUI harness incompatibility inside this sandbox), reproduced identically on the untouched canonical baseline.
+- `npm test` (root): **FAIL**, due to `@trident/edge`'s `test:electron` step (real Electron binary GUI harness incompatibility inside this sandbox: `SyntaxError: The requested module 'electron' does not provide an export named 'BrowserWindow'`).
+- Classification: `PRE-EXISTING / ENVIRONMENT-SPECIFIC / OUT-OF-SCOPE / NON-REGRESSION`.
+- Attributable to WP-016B: **NO**. Reproduced identically on the untouched canonical baseline `d102f5296c9175c485aeb1a4bf7b5af3a93173b5` via `git stash`. `@trident/edge` was not modified by this Work Package.
+- No other failures or skips anywhere in the candidate (database suite, graph check, integration test).
 
 ## Protected PO Decisions
 
