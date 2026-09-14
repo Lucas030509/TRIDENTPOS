@@ -965,4 +965,91 @@ describe('TRIDENTPOS WP-012 Idempotency Identity & Trust Provider Boundary Suite
     assert.equal((core as Record<string, unknown>)['TestCloudReceiptIssuer'], undefined);
     assert.equal((core as Record<string, unknown>)['TestCloudReceiptVerifier'], undefined);
   });
+
+  describe('ADR-012: Canonical Exact Fixed-Point Money & roundDiv', () => {
+    it('WP014-MONEY-01: verifies the 6 mandatory normative test vectors for roundDiv', () => {
+      assert.equal(core.roundDiv(5000n, 10000n), 1n);
+      assert.equal(core.roundDiv(-5000n, 10000n), -1n);
+      assert.equal(core.roundDiv(14999n, 10000n), 1n);
+      assert.equal(core.roundDiv(-14999n, 10000n), -1n);
+      assert.equal(core.roundDiv(15000n, 10000n), 2n);
+      assert.equal(core.roundDiv(-15000n, 10000n), -2n);
+    });
+
+    it('WP014-MONEY-02: roundDiv division by zero throws RangeError', () => {
+      assert.throws(() => core.roundDiv(100n, 0n), RangeError);
+    });
+
+    it('WP014-MONEY-03: scaledBigIntToDecimalString formats correctly without floats', () => {
+      assert.equal(core.scaledBigIntToDecimalString(1505000n), '150.5000');
+      assert.equal(core.scaledBigIntToDecimalString(1n), '0.0001');
+      assert.equal(core.scaledBigIntToDecimalString(-1n), '-0.0001');
+      assert.equal(core.scaledBigIntToDecimalString(-1505000n), '-150.5000');
+      assert.equal(core.scaledBigIntToDecimalString(0n), '0.0000');
+    });
+
+    it('WP014-MONEY-04: decimalStringToScaledBigInt parses strictly without floats', () => {
+      assert.equal(core.decimalStringToScaledBigInt('150.5000'), 1505000n);
+      assert.equal(core.decimalStringToScaledBigInt('0.0001'), 1n);
+      assert.equal(core.decimalStringToScaledBigInt('-0.0001'), -1n);
+      assert.equal(core.decimalStringToScaledBigInt('-150.5000'), -1505000n);
+      assert.equal(core.decimalStringToScaledBigInt('0.0000'), 0n);
+
+      assert.throws(() => core.decimalStringToScaledBigInt('150.5'), TypeError);
+      assert.throws(() => core.decimalStringToScaledBigInt('150'), TypeError);
+      assert.throws(() => core.decimalStringToScaledBigInt('150.50000'), TypeError);
+      assert.throws(() => core.decimalStringToScaledBigInt('abc'), TypeError);
+      assert.throws(() => core.decimalStringToScaledBigInt('150.500a'), TypeError);
+    });
+
+    it('WP014-MONEY-05: enforces Cloud DECIMAL(12,4) boundary limits', () => {
+      assert.equal(core.isValidScale4Range(core.MIN_SCALE4_BIGINT), true);
+      assert.equal(core.isValidScale4Range(core.MAX_SCALE4_BIGINT), true);
+      assert.equal(core.isValidScale4Range(core.MIN_SCALE4_BIGINT - 1n), false);
+      assert.equal(core.isValidScale4Range(core.MAX_SCALE4_BIGINT + 1n), false);
+
+      assert.throws(() => core.decimalStringToScaledBigInt('100000000.0000'), RangeError);
+      assert.throws(() => core.decimalStringToScaledBigInt('-100000000.0000'), RangeError);
+    });
+
+    it('WP014-MONEY-06: Money value object supports immutable operations', () => {
+      const m1 = core.Money.fromDecimalString('45.0000');
+      const m2 = core.Money.fromDecimalString('5.5000');
+      assert.equal(m1.plus(m2).toDecimalString(), '50.5000');
+      assert.equal(m1.minus(m2).toDecimalString(), '39.5000');
+      assert.equal(m1.toDecimalString(), '45.0000'); // immutable
+
+      // Multiplication by quantity scale 4 (e.g. 2.0000 = 20000n)
+      assert.equal(m1.times(20000n).toDecimalString(), '90.0000');
+
+      // Zero and comparison
+      const zero = core.Money.zero();
+      assert.equal(zero.isZero(), true);
+      assert.equal(m1.isPositive(), true);
+      assert.equal(core.Money.fromScale4(-100n).isNegative(), true);
+      assert.equal(m1.compare(m2), 1);
+      assert.equal(m2.compare(m1), -1);
+      assert.equal(m1.compare(core.Money.fromScale4(450000n)), 0);
+      assert.equal(JSON.stringify({ price: m1 }), '{"price":"45.0000"}');
+    });
+
+    it('WP014-MONEY-07: line calculation functions follow ADR-012 sequence exactly', () => {
+      // Unit price 45.0000, quantity 2.5000 (25000n)
+      // subtotal = roundDiv(450000 * 25000, 10000) = roundDiv(11250000000, 10000) = 1125000n (112.5000)
+      const subtotal = core.calculateLineSubtotal(450000n, 25000n);
+      assert.equal(subtotal, 1125000n);
+
+      // Discount 10.0000 (100000n) -> net = 1025000n (102.5000)
+      const net = core.calculateNetSubtotal(subtotal, 100000n);
+      assert.equal(net, 1025000n);
+
+      // Tax rate 16% (1600n) -> taxAmount = roundDiv(1025000 * 1600, 10000) = roundDiv(1640000000, 10000) = 164000n (16.4000)
+      const tax = core.calculateTaxAmount(net, 1600n);
+      assert.equal(tax, 164000n);
+
+      // Total = net + tax = 1025000 + 164000 = 1189000n (118.9000)
+      const total = core.calculateLineTotal(net, tax);
+      assert.equal(total, 1189000n);
+    });
+  });
 });

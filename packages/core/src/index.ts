@@ -41,3 +41,4 @@ export * from './redaction.js';
 export * from './hash-chain.js';
 export * from './folio-contracts.js';
 export * from './sync-contracts.js';
+export * from './money.js';
