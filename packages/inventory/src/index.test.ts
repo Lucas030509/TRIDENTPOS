@@ -55,6 +55,39 @@ describe('@trident/inventory - Numerics', () => {
     // Division by zero throws
     assert.throws(() => divideScale4(10000n, 0n), RangeError);
   });
+
+  it('enforces fail-closed regex ^-?\\d+\\.\\d{4}$ rejecting non-4-decimal strings', () => {
+    // Non-canonical scale inputs strictly rejected
+    assert.throws(() => parseDecimal12x4('1'), RangeError);
+    assert.throws(() => parseDecimal12x4('1.2'), RangeError);
+    assert.throws(() => parseDecimal12x4('1.23'), RangeError);
+    assert.throws(() => parseDecimal12x4('1.234'), RangeError);
+    assert.throws(() => parseDecimal12x4('1.23456'), RangeError);
+    assert.throws(() => parseDecimal12x4(''), RangeError);
+    assert.throws(() => parseDecimal12x4('   '), RangeError);
+    assert.throws(() => parseDecimal12x4('abc'), RangeError);
+    assert.throws(() => parseDecimal12x4('.1234'), RangeError);
+    assert.throws(() => parseDecimal12x4('1234.'), RangeError);
+    assert.throws(() => parseDecimal12x4('NaN'), RangeError);
+  });
+
+  it('enforces DECIMAL(12,4) exact boundary limits [-99999999.9999, +99999999.9999]', () => {
+    // Maximum valid values
+    assert.equal(parseDecimal12x4('99999999.9999'), 999999999999n);
+    assert.equal(formatDecimal12x4(999999999999n), '99999999.9999');
+
+    // Minimum valid values
+    assert.equal(parseDecimal12x4('-99999999.9999'), -999999999999n);
+    assert.equal(formatDecimal12x4(-999999999999n), '-99999999.9999');
+
+    // Values exceeding DECIMAL(12,4) upper bound throw RangeError
+    assert.throws(() => parseDecimal12x4('100000000.0000'), RangeError);
+    assert.throws(() => formatDecimal12x4(1000000000000n), RangeError);
+
+    // Values exceeding DECIMAL(12,4) lower bound throw RangeError
+    assert.throws(() => parseDecimal12x4('-100000000.0000'), RangeError);
+    assert.throws(() => formatDecimal12x4(-1000000000000n), RangeError);
+  });
 });
 
 describe('@trident/inventory - RecipeEngine.explodeIngredients', () => {
@@ -864,6 +897,89 @@ describe('@trident/inventory - RecipeEngine.calculateRecipeCost', () => {
       },
       (err: unknown) => {
         assert(err instanceof CycleDetectedError);
+        return true;
+      },
+    );
+  });
+
+  it('throws InvalidRecipeItemError when ingredient cost is missing or undefined (no silent defaulting to 0.0000)', async () => {
+    const recipeWithMissingCost: Recipe = {
+      id: 'rec-missing-cost',
+      organizationId: orgId,
+      productId: null,
+      code: 'REC-MISS-COST',
+      name: 'Missing Cost Recipe',
+      yieldQuantity: '1.0000',
+      yieldUnit: 'PZ',
+      totalCost: '0.0000',
+      isActive: true,
+      items: [
+        {
+          id: 'item-mc-1',
+          organizationId: orgId,
+          recipeId: 'rec-missing-cost',
+          ingredientId: 'ing-no-cost',
+          subRecipeId: null,
+          quantity: '1.0000',
+          grossQuantity: '1.0000',
+          unitCostSnapshot: '0.0000',
+          createdAt: new Date().toISOString(),
+        },
+      ],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    await assert.rejects(
+      async () => {
+        await RecipeEngine.calculateRecipeCost(recipeWithMissingCost, {
+          getIngredientCost: () => '' as unknown as string, // Empty / missing cost
+          getSubRecipe: () => null,
+        });
+      },
+      (err: unknown) => {
+        assert(err instanceof InvalidRecipeItemError);
+        assert.match(err.message, /Missing cost for ingredient 'ing-no-cost'/);
+        return true;
+      },
+    );
+  });
+
+  it('throws ZeroDivisorError when recipe yieldQuantity is missing or empty (no silent defaulting to 1.0000)', async () => {
+    const recipeEmptyYield: Recipe = {
+      id: 'rec-empty-yield',
+      organizationId: orgId,
+      productId: null,
+      code: 'REC-EMPTY-YIELD',
+      name: 'Empty Yield Recipe',
+      yieldQuantity: '' as unknown as string,
+      yieldUnit: 'PZ',
+      totalCost: '0.0000',
+      isActive: true,
+      items: [],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    await assert.rejects(
+      async () => {
+        await RecipeEngine.calculateRecipeCost(recipeEmptyYield, {
+          getIngredientCost: () => '1.0000',
+          getSubRecipe: () => null,
+        });
+      },
+      (err: unknown) => {
+        assert(err instanceof ZeroDivisorError);
+        return true;
+      },
+    );
+
+    await assert.rejects(
+      async () => {
+        await RecipeEngine.explodeIngredients(recipeEmptyYield, () => null);
+      },
+      (err: unknown) => {
+        assert(err instanceof ZeroDivisorError);
         return true;
       },
     );

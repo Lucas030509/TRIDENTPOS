@@ -1,94 +1,80 @@
-# WP-017 BUILDER EVIDENCE REPORT (S17)
+# WP-017 BUILDER EVIDENCE REPORT (S17-R1)
 
 **Work Package:** WP-017 Inventory Catalog, Multi-Warehouse & Recipe Explosion Engine  
 **Bounded Context:** Inventory / Operations  
-**Candidate Subject:** Candidate S17 — exact immutable SHA recorded below upon commit creation  
+**Candidate Subject:** Candidate S17-R1 — exact immutable SHA recorded upon commit creation  
 **Canonical Base M14:** `38062575ceed063c8f03af5a5c473d140dd264df` (ACR-2026-013 canonical base)  
+**Parent Candidate Commit:** `b32e1fb4abc6d4bce5b39aa0eee4baf97ee509eb` (S17 candidate)  
 **Implementation Branch:** `feature/wp-017-inventory-recipes`  
 **Date:** 2026-09-13  
 **Author / Builder Agent:** `13_Backend_Developer`  
 **Governing Framework:** `EAAF v1.2.0` (Pinned Framework SHA: `7e036f43240b3dc28ccb996e350263598275b2cd`)  
-**Governance Authority:** `COORDINATOR_PROMPT_WP017_START.md`, `DATA_MODEL.md` Sec 2.3, `ADR-012`, `ADR-013`, `MODULE_CATALOG.md`  
+**Governance Authority:** `COORDINATOR_PROMPT_WP017_START.md`, `DATA_MODEL.md` Sec 2.2 & 2.3, `SECURITY_ARCHITECTURE.md` Sec 6.2, `ADR-012`, `ADR-013`, `MODULE_CATALOG.md`  
 
 ---
 
-## 1. Executive Summary
+## 1. Executive Summary & Remediation Actions (S17-R1)
 
-Work Package WP-017 implements the core domain and physical database foundation for TRIDENTPOS inventory cataloging, multi-warehouse management, and recursive recipe explosion.
+Candidate S17-R1 addresses all four blockers (`QI-017-01` through `QI-017-04`) identified during coordinator inspection of WP-017:
 
-All requirements outlined in the architectural specifications and coordinator directives were implemented cleanly:
-1. **Physical PostgreSQL Schema:** Authored migration `20260904230000_inventory_catalog_and_recipes.sql` defining canonical tables `warehouses`, `ingredients`, `recipes`, and `recipe_items`. Confirmed that NO duplicate Spanish tables (`almacenes`, `insumos`, `recetas`, `subrecetas`) exist.
-2. **Tenant-Safe Integrity:** All tables use composite candidate keys `(organization_id, id)` and composite foreign keys enforcing that child entities cannot reference resources in different tenant organizations fail-closed.
-3. **Mutual Exclusivity Constraint:** `recipe_items` implements check constraint `chk_recipe_items_exclusive_source`, strictly requiring `((ingredient_id IS NOT NULL AND sub_recipe_id IS NULL) OR (ingredient_id IS NULL AND sub_recipe_id IS NOT NULL))`.
-4. **Row-Level Security (RLS) & FORCE RLS:** Full PostgreSQL RLS and FORCE RLS enabled across all 4 tables with default-deny policies parameterized through `current_app_org_id()`. Tested and proven against an unprivileged database role (`NOSUPERUSER NOBYPASSRLS`).
-5. **Pure Domain Package `@trident/inventory`:** Scoped strictly to `@trident/inventory -> [@trident/core]`. Zero imports of `@trident/pos` or `@trident/edge`. Zero circular dependencies. Verified by `scripts/check-graph.mjs`.
-6. **Scale-4 Fixed-Point Arithmetic:** Scoped scale-4 arithmetic engine (`DECIMAL(12,4)` via bigint operations with commercial Half Away From Zero rounding). Zero floating-point arithmetic drift; zero competing project-wide `Money` class.
-7. **Recursive Recipe Explosion:** Implemented `RecipeEngine.explodeIngredients()` with proportional subrecipe yield scaling, deterministic duplicate ingredient aggregation, and cycle detection.
-8. **Cycle Detection:** Built-in cycle detection guarding both direct (`A -> A`) and indirect (`A -> B -> C -> A`) recursive subrecipe graphs, throwing explicit `CycleDetectedError`.
-9. **Theoretical Costing:** Implemented `RecipeEngine.calculateRecipeCost()` calculating batch cost and unit cost using current average ingredient cost and recursive subrecipe costing, with zero-divisor protection (`ZeroDivisorError`) and zero-cost ingredient support.
-10. **Neutral Modifier Hook:** Implemented `ModifierRecipeResolver` contract under OQ-SSOT-07 pending PO decision, containing zero hardcoded heuristics or default deductions.
+1. **QI-017-01 — Data Model Conformance & Integrity:**
+   - Authored canonical `products` table per `DATA_MODEL.md` Sec 2.2 with `(organization_id, id)` candidate key and PostgreSQL RLS.
+   - Restored composite foreign key `CONSTRAINT fk_recipes_product FOREIGN KEY (organization_id, product_id) REFERENCES products(organization_id, id)`.
+   - Removed unauthorized `CASCADE` on `fk_recipe_items_recipe` (restoring strict standard RESTRICT behavior per `DATA_MODEL.md` line 456).
+   - Removed unauthorized `DEFAULT 0.0000` on `unit_cost_snapshot` (`DECIMAL(12,4) NOT NULL` per `DATA_MODEL.md` line 453).
+   - Added tests `WP017-DB-06`, `WP017-DB-07`, and `WP017-DB-08` verifying composite FK cross-tenant isolation, not-null snapshot constraint, and delete restrict.
+
+2. **QI-017-02 — Canonical Composition Root (`packages/cloud-server/`):**
+   - Created workspace package `@trident/cloud-server` with production dependencies `@trident/core`, `@trident/database`, `@trident/inventory`. Zero dependency on `@trident/pos`.
+   - Implemented `PostgresCloudInventoryService` wiring pure `RecipeEngine` with PostgreSQL database queries under strict tenant context.
+   - Included required documentation header: `// HTTP route naming: NOT FROZEN / NOT INVENTED BY BUILDER`.
+   - Added 4 integration tests in `packages/cloud-server/src/index.test.ts` testing subrecipe explosion, costing, cross-tenant RLS isolation, and architectural dependency rules.
+
+3. **QI-017-03 — Fail-Closed Numerics & Elimination of Silent Defaults:**
+   - Changed regex in `numerics.ts` to strict fail-closed `/^-?\d+\.\d{4}$/`.
+   - Enforced `DECIMAL(12,4)` exact boundary limits `[-99999999.9999, +99999999.9999]`.
+   - Eliminated silent defaults `|| '1.0000'` and `|| '0.0000'` in `RecipeEngine`. Throws `ZeroDivisorError` on missing/empty yield, and throws `InvalidRecipeItemError` on missing/undefined cost while allowing valid exact `'0.0000'` ingredients.
+   - Added unit tests in `packages/inventory/src/index.test.ts` verifying rejection of non-4-decimal strings, boundary checks, and fail-closed behavior on missing costs/yields.
+
+4. **QI-017-04 — Test Count Arithmetic & Monorepo Cleanliness:**
+   - Executed `npm ci` cleanly linking `@trident/cloud-server`.
+   - Reconciled exact package test counts across all workspace packages and integration test suites.
 
 ---
 
 ## 2. Git Lineage & Boundary Compliance
 
 - **Canonical Base M14:** `38062575ceed063c8f03af5a5c473d140dd264df`
-- **Merge-Base:** `git merge-base feature/wp-017-inventory-recipes 38062575ceed063c8f03af5a5c473d140dd264df` -> `38062575ceed063c8f03af5a5c473d140dd264df` (clean direct child branch)
+- **S17 Candidate Commit:** `b32e1fb4abc6d4bce5b39aa0eee4baf97ee509eb`
+- **Merge-Base with Canonical Base:** `38062575ceed063c8f03af5a5c473d140dd264df`
 - **Branch:** `feature/wp-017-inventory-recipes`
 - **History Invariants:** Zero force-push, zero rebase, linear commit history.
 
 ---
 
-## 3. Inventory of Changed Files
+## 3. Inventory of Changed Files in S17-R1
 
-Total changed files: 17
-
-1. `packages/database/migrations/20260904230000_inventory_catalog_and_recipes.sql`:
-   - Canonical DDL creating `warehouses`, `ingredients`, `recipes`, `recipe_items`.
-   - Composite keys, composite foreign keys, XOR check constraint on `recipe_items`.
-   - `ENABLE ROW LEVEL SECURITY` and `FORCE ROW LEVEL SECURITY` on all 4 tables.
-   - Default-deny tenant isolation policies using `current_app_org_id()`.
-2. `packages/database/package.json`:
-   - Added `dist/inventory.test.js` to test script.
-3. `packages/database/src/inventory.test.ts`:
-   - Comprehensive integration test suite verifying physical existence, constraint validation, composite FK cross-tenant rejection, and RLS default-deny with unprivileged role.
-4. `packages/database/src/index.test.ts`:
-   - Added teardown drop statements for the 4 inventory tables in migration integration test suite.
-5. `packages/database/src/outbox.test.ts`:
-   - Added teardown drop statements for the 4 inventory tables in `outbox.test.ts`.
-6. `packages/database/src/sync.test.ts`:
-   - Added `prepClient` organization check to ensure clean migration state before suite execution.
-7. `packages/inventory/package.json`:
-   - Package manifest for `@trident/inventory`, depending only on `@trident/core`.
-8. `packages/inventory/tsconfig.json`:
-   - TypeScript project configuration referencing `tsconfig.base.json`.
-9. `packages/inventory/src/index.ts`:
-   - Public package entry point exporting domain types, errors, resolver contract, numerics, and `RecipeEngine`.
-10. `packages/inventory/src/types.ts`:
-    - Domain types: `Warehouse`, `Ingredient`, `Recipe`, `RecipeItem`, `ExplodedIngredient`, `RecipeCostCalculationResult`.
-11. `packages/inventory/src/errors.ts`:
-    - Domain errors: `InventoryDomainError`, `CycleDetectedError`, `InvalidRecipeItemError`, `ZeroDivisorError`, `RecipeNotFoundError`.
-12. `packages/inventory/src/modifier-resolver.ts`:
-    - Neutral `ModifierRecipeResolver` contract under OQ-SSOT-07.
-13. `packages/inventory/src/numerics.ts`:
-    - Scale-4 fixed-point arithmetic (`DECIMAL(12,4)` via bigint operations with Half Away From Zero rounding).
-14. `packages/inventory/src/recipe-engine.ts`:
-    - Recursive recipe explosion (`explodeIngredients`) and theoretical costing (`calculateRecipeCost`).
-15. `packages/inventory/src/index.test.ts`:
-    - Comprehensive unit test suite (16 tests) covering fixed-point math, single-level explosion, nested subrecipes, duplicate aggregation, cycle detection, yield scaling, and costing.
-16. `package-lock.json`:
-    - Linked `@trident/inventory` into workspace dependency graph.
-17. `evidence/WP-017_BUILDER_EVIDENCE.md`:
-    - This evidence document.
+Total changed files: 8
+1. `packages/database/migrations/20260904230000_inventory_catalog_and_recipes.sql` (added `products` table with RLS, restored `fk_recipes_product`, removed `CASCADE`, removed `DEFAULT 0.0000`)
+2. `packages/database/src/index.test.ts` (added `products` to migration teardown drop list)
+3. `packages/database/src/inventory.test.ts` (added `products` teardown, explicit `unit_cost_snapshot`, and tests `WP017-DB-06`, `WP017-DB-07`, `WP017-DB-08`)
+4. `packages/inventory/src/numerics.ts` (strict regex `^-?\d+\.\d{4}$`, DECIMAL(12,4) bounds)
+5. `packages/inventory/src/recipe-engine.ts` (eliminated silent defaults `|| '1.0000'` and `|| '0.0000'`)
+6. `packages/inventory/src/index.test.ts` (added strict numeric tests and fail-closed tests)
+7. `packages/cloud-server/` (created workspace package: `package.json`, `tsconfig.json`, `src/index.ts`, `src/index.test.ts`)
+8. `package-lock.json` (linked `@trident/cloud-server` in lockfile)
 
 ---
 
 ## 4. Architectural & Security Validation
 
 ### 4.1 Dependency Graph Enforcement
-`npm run graph:check` results:
+`npm run graph:check` output:
 ```
-Discovered 7 workspace packages:
+=== TRIDENTPOS Monorepo Dependency Graph Validation ===
+
+Discovered 8 workspace packages:
+  - @trident/cloud-server (packages/cloud-server)
   - @trident/core (packages/core)
   - @trident/database (packages/database)
   - @trident/edge (packages/edge)
@@ -98,6 +84,7 @@ Discovered 7 workspace packages:
   - @trident/ui (packages/ui)
 
 Package Runtime Dependency Adjacency:
+  @trident/cloud-server -> @trident/core, @trident/database, @trident/inventory
   @trident/core -> (none)
   @trident/database -> @trident/core
   @trident/edge -> @trident/core
@@ -114,31 +101,20 @@ Dependency graph check PASSED. (44 tests, 0 failures)
 ```
 
 ### 4.2 Row-Level Security & XOR Constraint Verification (`packages/database/src/inventory.test.ts`)
-- **WP017-DB-01:** Proves canonical tables `warehouses`, `ingredients`, `recipes`, `recipe_items` exist in `information_schema.tables`, and proves that `almacenes`, `insumos`, `recetas`, `subrecetas` do NOT exist.
-- **WP017-DB-02:** Queries `pg_class` and proves `relrowsecurity = true` AND `relforcerowsecurity = true` on all 4 tables.
-- **WP017-DB-03:** Verifies XOR mutual exclusivity check `chk_recipe_items_exclusive_source`:
-  - Setting both `ingredient_id` and `sub_recipe_id` non-null -> REJECTED.
-  - Setting both NULL -> REJECTED.
-  - Setting only `ingredient_id` -> ACCEPTED.
-  - Setting only `sub_recipe_id` -> ACCEPTED.
-- **WP017-DB-04:** Verifies composite foreign key cross-tenant isolation:
-  - Tenant A attempting to reference Tenant B's ingredient -> REJECTED by `fk_recipe_items_ingredient`.
-  - Tenant A attempting to reference Tenant B's subrecipe -> REJECTED by `fk_recipe_items_sub_recipe`.
-- **WP017-DB-05:** Verifies real RLS under unprivileged role `trident_wp017_test_role` (`NOSUPERUSER NOBYPASSRLS`):
-  - Without tenant context: SELECT on all 4 tables returns 0 rows (default-deny).
-  - With Tenant A context: Tenant A queries return Tenant A rows; Tenant B rows are invisible.
-  - Context switch to Tenant B: Tenant A rows return 0 rows.
+- **WP017-DB-01:** Proves canonical tables `warehouses`, `ingredients`, `recipes`, `recipe_items`, `products` exist in `information_schema.tables`, and proves duplicate Spanish tables do NOT exist.
+- **WP017-DB-02:** Queries `pg_class` and proves `relrowsecurity = true` AND `relforcerowsecurity = true` on all canonical tables.
+- **WP017-DB-03:** Verifies XOR mutual exclusivity check `chk_recipe_items_exclusive_source`.
+- **WP017-DB-04:** Verifies composite foreign key cross-tenant isolation fail-closed.
+- **WP017-DB-05:** Verifies real RLS under unprivileged role `trident_wp017_test_role` (`NOSUPERUSER NOBYPASSRLS`).
+- **WP017-DB-06:** Verifies composite foreign key `fk_recipes_product` enforcing same-tenant products, allowing null `product_id` for subrecipes, and rejecting cross-tenant and nonexistent products fail-closed.
+- **WP017-DB-07:** Verifies `unit_cost_snapshot` cannot be omitted or null (no unauthorized defaults).
+- **WP017-DB-08:** Verifies `fk_recipe_items_recipe` restricts recipe deletion when child recipe_items exist (no unauthorized CASCADE).
 
-### 4.3 Recursive Explosion & Costing Engine (`packages/inventory/src/index.test.ts`)
-- Fixed-point scale-4 arithmetic with Half Away From Zero rounding.
-- Single-level and nested subrecipe explosion with proportional yield multiplier.
-- Deterministic duplicate ingredient aggregation across multi-level branches.
-- Direct recursion detection (`A -> A`) throwing `CycleDetectedError`.
-- Indirect recursion detection (`A -> B -> C -> A`) throwing `CycleDetectedError`.
-- Zero-divisor protection on recipe yield (`ZeroDivisorError`).
-- Theoretical batch and unit cost calculations with current average costs and recursive subrecipes.
-- Zero-cost ingredient handling (`'0.0000'`).
-- Neutral `ModifierRecipeResolver` contract validation.
+### 4.3 Cloud Server Composition Root (`packages/cloud-server/src/index.test.ts`)
+- **WP017-CLOUD-01:** Architectural assertion proving zero dependency on `@trident/pos` in manifests and source code.
+- **WP017-CLOUD-02:** Proves recursive subrecipe explosion against real PostgreSQL tables with proportional yield scaling.
+- **WP017-CLOUD-03:** Proves theoretical costing using live PostgreSQL `current_average_cost` queries.
+- **WP017-CLOUD-04:** Proves cross-tenant RLS isolation fails closed against unauthorized tenant access.
 
 ---
 
@@ -146,29 +122,31 @@ Dependency graph check PASSED. (44 tests, 0 failures)
 
 | Step | Command | Result |
 |---|---|---|
+| Clean Install | `npm ci` | PASS (0 vulnerabilities) |
 | Prettier Format Check | `npm run format:check` | PASS (All matched files use Prettier style) |
-| ESLint Check | `npm run lint` | PASS (0 errors across 7 workspaces) |
-| TypeScript Typecheck | `npm run typecheck` | PASS (0 errors across 7 workspaces) |
+| ESLint Check | `npm run lint` | PASS (0 errors across 8 workspaces) |
+| TypeScript Typecheck | `npm run typecheck` | PASS (0 errors across 8 workspaces) |
 | Architectural Graph | `npm run graph:check` | PASS (44 tests, 0 failures, 0 cycles) |
-| Clean & Build | `npm run clean && npm run build` | PASS (All 7 packages built cleanly from scratch) |
-| Complete Test Suite | `npx turbo run test --force && npm run test:integration` | PASS (602 tests passed, 0 failed, 0 cancelled, 0 skipped) |
+| Clean & Build | `npm run clean && npm run build` | PASS (All 8 packages built cleanly from scratch) |
+| Complete Test Suite | `npm test` | PASS (518 workspace tests + 1 integration test = 519 tests, 0 failures, 0 skipped) |
 
-Monorepo test breakdown:
-- `@trident/core`: 52 tests PASS
+### Reconciled Monorepo Test Breakdown:
+- `@trident/core`: 49 tests PASS
 - `@trident/pos`: 1 test PASS
 - `@trident/ui`: 1 test PASS
-- `@trident/inventory`: 16 tests PASS
-- `@trident/database`: 235 tests PASS
-- `@trident/edge`: 165 tests PASS (155 Node tests + 10 real Electron runtime tests)
-- `@trident/sync`: 88 tests PASS
-- `scripts/check-graph`: 44 tests PASS
+- `@trident/inventory`: 20 tests PASS
+- `@trident/database`: 238 tests PASS
+- `@trident/edge`: 165 tests PASS (155 Node unit + 10 real Electron runtime tests)
+- `@trident/sync`: 40 tests PASS
+- `@trident/cloud-server`: 4 tests PASS
 - `tests/integration`: 1 test PASS
-- **Total: 602 tests passing, 0 failures, 0 regressions.**
+- `scripts/check-graph`: 44 tests PASS
+- **Total: 563 tests passing (518 workspace + 1 E2E + 44 graph), 0 failures, 0 skipped.**
 
 ---
 
 ## 6. Conclusion & Status
 
-Work Package WP-017 is fully implemented, strictly tested against both pure domain unit requirements and real PostgreSQL database engine constraints, and completely verified against the monorepo test harness.
+Work Package WP-017 Candidate S17-R1 successfully remediates all findings `QI-017-01`, `QI-017-02`, `QI-017-03`, and `QI-017-04`. All database constraints, RLS policies, numeric engine boundaries, composition root services, and dependency graphs pass with zero errors.
 
-**Status:** `IMPLEMENTED / READY FOR COORDINATOR QUICK INTEGRITY`
+**Status:** `REMEDIATED / READY FOR COORDINATOR QUICK INTEGRITY REVIEW`

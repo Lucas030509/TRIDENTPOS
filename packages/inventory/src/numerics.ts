@@ -7,16 +7,22 @@
  */
 
 const SCALE_FACTOR = 10000n;
-const DECIMAL_STRING_REGEX = /^-?\d+(\.\d{1,4})?$/;
+const DECIMAL_STRING_REGEX = /^-?\d+\.\d{4}$/;
+export const MIN_DECIMAL_12X4_SCALED = -999_999_999_999n;
+export const MAX_DECIMAL_12X4_SCALED = 999_999_999_999n;
 
 /**
- * Parses a decimal string (up to 4 decimal places) into a scale-4 bigint.
+ * Parses a decimal string (strictly 4 decimal places) into a scale-4 bigint.
+ * Enforces DECIMAL(12,4) bounds: [-99999999.9999, +99999999.9999].
  */
 export function parseDecimal12x4(input: string): bigint {
+  if (typeof input !== 'string') {
+    throw new RangeError(`Invalid decimal input '${String(input)}'. Must be a string.`);
+  }
   const trimmed = input.trim();
   if (!DECIMAL_STRING_REGEX.test(trimmed)) {
     throw new RangeError(
-      `Invalid decimal string '${input}'. Must be numeric with up to 4 decimal places.`,
+      `Invalid decimal string '${input}'. Must be numeric with exactly 4 decimal places (e.g. '1.0000').`,
     );
   }
 
@@ -24,19 +30,33 @@ export function parseDecimal12x4(input: string): bigint {
   const unsigned = isNegative ? trimmed.slice(1) : trimmed;
   const parts = unsigned.split('.');
   const integerPart = parts[0] || '0';
-  const fractionalPart = (parts[1] || '').padEnd(4, '0');
+  const fractionalPart = parts[1] || '0000';
 
   const intBig = BigInt(integerPart);
   const fracBig = BigInt(fractionalPart);
   const scaled = intBig * SCALE_FACTOR + fracBig;
+  const finalScaled = isNegative ? -scaled : scaled;
 
-  return isNegative ? -scaled : scaled;
+  if (finalScaled < MIN_DECIMAL_12X4_SCALED || finalScaled > MAX_DECIMAL_12X4_SCALED) {
+    throw new RangeError(
+      `Decimal value '${input}' exceeds DECIMAL(12,4) range [-99999999.9999, 99999999.9999]`,
+    );
+  }
+
+  return finalScaled;
 }
 
 /**
  * Formats a scale-4 bigint to an exact 4-decimal canonical string (e.g. "12.5000").
+ * Enforces DECIMAL(12,4) bounds: [-99999999.9999, +99999999.9999].
  */
 export function formatDecimal12x4(scaled: bigint): string {
+  if (scaled < MIN_DECIMAL_12X4_SCALED || scaled > MAX_DECIMAL_12X4_SCALED) {
+    throw new RangeError(
+      `Scaled value ${scaled} exceeds DECIMAL(12,4) range [-99999999.9999, 99999999.9999]`,
+    );
+  }
+
   const isNegative = scaled < 0n;
   const abs = isNegative ? -scaled : scaled;
 

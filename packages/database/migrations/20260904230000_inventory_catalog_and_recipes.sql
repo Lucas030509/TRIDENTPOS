@@ -1,8 +1,28 @@
 -- Up
 -- ============================================================================
 -- TRIDENTPOS — WP-017: Inventory Catalog, Multi-Warehouse & Recipe Explosion
--- Architecture Baselines: DATA_MODEL.md Sec 2.3, SECURITY_ARCHITECTURE.md Sec 6.2, ADR-013
+-- Architecture Baselines: DATA_MODEL.md Sec 2.2 & 2.3, SECURITY_ARCHITECTURE.md Sec 6.2, ADR-013
 -- ============================================================================
+
+-- 0. Catálogo Maestro: Productos (DATA_MODEL.md Sec 2.2)
+CREATE TABLE IF NOT EXISTS products (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    organization_id UUID NOT NULL REFERENCES organizations(id),
+    category_id UUID NULL,
+    code VARCHAR(50) NOT NULL,
+    name VARCHAR(255) NOT NULL,
+    description TEXT NULL,
+    product_type VARCHAR(50) NOT NULL DEFAULT 'COMPOSITE',
+    base_price DECIMAL(12, 4) NOT NULL DEFAULT 0.0000,
+    tax_scheme_id UUID NULL,
+    is_inventoriable BOOLEAN NOT NULL DEFAULT TRUE,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at TIMESTAMPTZ NULL,
+    CONSTRAINT uq_products_org_code UNIQUE (organization_id, code),
+    CONSTRAINT uq_products_org_id UNIQUE (organization_id, id)
+);
 
 -- 1. Almacenes y Centros de Consumo
 CREATE TABLE warehouses (
@@ -50,7 +70,8 @@ CREATE TABLE recipes (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT uq_recipes_org_code UNIQUE (organization_id, code),
-    CONSTRAINT uq_recipes_org_id UNIQUE (organization_id, id)
+    CONSTRAINT uq_recipes_org_id UNIQUE (organization_id, id),
+    CONSTRAINT fk_recipes_product FOREIGN KEY (organization_id, product_id) REFERENCES products(organization_id, id)
 );
 
 -- 4. Partidas de Receta (Exclusividad Ingrediente XOR Subreceta)
@@ -62,10 +83,10 @@ CREATE TABLE recipe_items (
     sub_recipe_id UUID NULL,
     quantity DECIMAL(12, 4) NOT NULL,
     gross_quantity DECIMAL(12, 4) NOT NULL, -- Incluye factor de merma
-    unit_cost_snapshot DECIMAL(12, 4) NOT NULL DEFAULT 0.0000,
+    unit_cost_snapshot DECIMAL(12, 4) NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT uq_recipe_items_org_id UNIQUE (organization_id, id),
-    CONSTRAINT fk_recipe_items_recipe FOREIGN KEY (organization_id, recipe_id) REFERENCES recipes(organization_id, id) ON DELETE CASCADE,
+    CONSTRAINT fk_recipe_items_recipe FOREIGN KEY (organization_id, recipe_id) REFERENCES recipes(organization_id, id),
     CONSTRAINT fk_recipe_items_ingredient FOREIGN KEY (organization_id, ingredient_id) REFERENCES ingredients(organization_id, id),
     CONSTRAINT fk_recipe_items_sub_recipe FOREIGN KEY (organization_id, sub_recipe_id) REFERENCES recipes(organization_id, id),
     CONSTRAINT chk_recipe_items_exclusive_source CHECK (
@@ -74,7 +95,22 @@ CREATE TABLE recipe_items (
     )
 );
 
--- 5. Row-Level Security (RLS) & Isolation Policies: warehouses
+-- 5. Row-Level Security (RLS) & Isolation Policies: products
+ALTER TABLE products ENABLE ROW LEVEL SECURITY;
+ALTER TABLE products FORCE ROW LEVEL SECURITY;
+
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies WHERE tablename = 'products' AND policyname = 'products_tenant_isolation_policy'
+    ) THEN
+        CREATE POLICY products_tenant_isolation_policy ON products
+            FOR ALL
+            USING (organization_id = current_app_org_id())
+            WITH CHECK (organization_id = current_app_org_id());
+    END IF;
+END $$;
+
+-- 6. Row-Level Security (RLS) & Isolation Policies: warehouses
 ALTER TABLE warehouses ENABLE ROW LEVEL SECURITY;
 ALTER TABLE warehouses FORCE ROW LEVEL SECURITY;
 
@@ -83,7 +119,7 @@ CREATE POLICY warehouses_tenant_isolation_policy ON warehouses
     USING (organization_id = current_app_org_id())
     WITH CHECK (organization_id = current_app_org_id());
 
--- 6. Row-Level Security (RLS) & Isolation Policies: ingredients
+-- 7. Row-Level Security (RLS) & Isolation Policies: ingredients
 ALTER TABLE ingredients ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ingredients FORCE ROW LEVEL SECURITY;
 
@@ -92,7 +128,7 @@ CREATE POLICY ingredients_tenant_isolation_policy ON ingredients
     USING (organization_id = current_app_org_id())
     WITH CHECK (organization_id = current_app_org_id());
 
--- 7. Row-Level Security (RLS) & Isolation Policies: recipes
+-- 8. Row-Level Security (RLS) & Isolation Policies: recipes
 ALTER TABLE recipes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE recipes FORCE ROW LEVEL SECURITY;
 
@@ -101,7 +137,7 @@ CREATE POLICY recipes_tenant_isolation_policy ON recipes
     USING (organization_id = current_app_org_id())
     WITH CHECK (organization_id = current_app_org_id());
 
--- 8. Row-Level Security (RLS) & Isolation Policies: recipe_items
+-- 9. Row-Level Security (RLS) & Isolation Policies: recipe_items
 ALTER TABLE recipe_items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE recipe_items FORCE ROW LEVEL SECURITY;
 
@@ -127,7 +163,12 @@ DROP POLICY IF EXISTS warehouses_tenant_isolation_policy ON warehouses;
 ALTER TABLE IF EXISTS warehouses NO FORCE ROW LEVEL SECURITY;
 ALTER TABLE IF EXISTS warehouses DISABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS products_tenant_isolation_policy ON products;
+ALTER TABLE IF EXISTS products NO FORCE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS products DISABLE ROW LEVEL SECURITY;
+
 DROP TABLE IF EXISTS recipe_items CASCADE;
 DROP TABLE IF EXISTS recipes CASCADE;
 DROP TABLE IF EXISTS ingredients CASCADE;
 DROP TABLE IF EXISTS warehouses CASCADE;
+DROP TABLE IF EXISTS products CASCADE;

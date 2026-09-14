@@ -65,6 +65,7 @@ describe('TRIDENTPOS WP-003 PostgreSQL Migration Engine Integration Suite', () =
           recipes,
           ingredients,
           warehouses,
+          products,
           sync_telemetry,
           sync_checkpoints,
           wp012_test_domain_fixtures,

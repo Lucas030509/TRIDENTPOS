@@ -78,6 +78,7 @@ describe('TRIDENTPOS WP-017 Inventory & Recipes Database Suite', () => {
             recipes,
             ingredients,
             warehouses,
+            products,
             sync_telemetry,
             sync_checkpoints,
             wp012_test_domain_fixtures,
@@ -146,6 +147,7 @@ describe('TRIDENTPOS WP-017 Inventory & Recipes Database Suite', () => {
       await client.query(`
         DELETE FROM recipe_items WHERE organization_id IN ('${tenantAId}', '${tenantBId}');
         DELETE FROM recipes WHERE organization_id IN ('${tenantAId}', '${tenantBId}');
+        DELETE FROM products WHERE organization_id IN ('${tenantAId}', '${tenantBId}');
         DELETE FROM ingredients WHERE organization_id IN ('${tenantAId}', '${tenantBId}');
         DELETE FROM warehouses WHERE organization_id IN ('${tenantAId}', '${tenantBId}');
         DELETE FROM branches WHERE organization_id IN ('${tenantAId}', '${tenantBId}');
@@ -169,10 +171,11 @@ describe('TRIDENTPOS WP-017 Inventory & Recipes Database Suite', () => {
     const res = await pool.query<{ table_name: string }>(`
       SELECT table_name FROM information_schema.tables
       WHERE table_schema = 'public'
-        AND table_name IN ('warehouses', 'ingredients', 'recipes', 'recipe_items', 'almacenes', 'insumos', 'recetas', 'subrecetas');
+        AND table_name IN ('warehouses', 'ingredients', 'recipes', 'recipe_items', 'products', 'almacenes', 'insumos', 'recetas', 'subrecetas');
     `);
 
     const tableNames = res.rows.map((r) => r.table_name);
+    assert.ok(tableNames.includes('products'), 'products table must exist');
     assert.ok(tableNames.includes('warehouses'), 'warehouses table must exist');
     assert.ok(tableNames.includes('ingredients'), 'ingredients table must exist');
     assert.ok(tableNames.includes('recipes'), 'recipes table must exist');
@@ -190,17 +193,17 @@ describe('TRIDENTPOS WP-017 Inventory & Recipes Database Suite', () => {
     );
   });
 
-  it('WP017-DB-02: RLS and FORCE RLS are enabled on all four canonical tables', async () => {
+  it('WP017-DB-02: RLS and FORCE RLS are enabled on all canonical tables', async () => {
     const res = await pool.query<{
       relname: string;
       relrowsecurity: boolean;
       relforcerowsecurity: boolean;
     }>(`
       SELECT relname, relrowsecurity, relforcerowsecurity FROM pg_class
-      WHERE relname IN ('warehouses', 'ingredients', 'recipes', 'recipe_items');
+      WHERE relname IN ('warehouses', 'ingredients', 'recipes', 'recipe_items', 'products');
     `);
 
-    assert.equal(res.rows.length, 4);
+    assert.equal(res.rows.length, 5);
     for (const row of res.rows) {
       assert.equal(row.relrowsecurity, true, `RLS must be enabled on ${row.relname}`);
       assert.equal(row.relforcerowsecurity, true, `FORCE RLS must be enabled on ${row.relname}`);
@@ -235,8 +238,8 @@ describe('TRIDENTPOS WP-017 Inventory & Recipes Database Suite', () => {
       await assertQueryRejects(
         client,
         `
-          INSERT INTO recipe_items (id, organization_id, recipe_id, ingredient_id, sub_recipe_id, quantity, gross_quantity)
-          VALUES ($1, $2, $3, $4, $5, 1.0000, 1.0000);
+          INSERT INTO recipe_items (id, organization_id, recipe_id, ingredient_id, sub_recipe_id, quantity, gross_quantity, unit_cost_snapshot)
+          VALUES ($1, $2, $3, $4, $5, 1.0000, 1.0000, 10.0000);
         `,
         [crypto.randomUUID(), tenantAId, recipeId, ingredientId, subRecipeId],
         /chk_recipe_items_exclusive_source/,
@@ -246,8 +249,8 @@ describe('TRIDENTPOS WP-017 Inventory & Recipes Database Suite', () => {
       await assertQueryRejects(
         client,
         `
-          INSERT INTO recipe_items (id, organization_id, recipe_id, ingredient_id, sub_recipe_id, quantity, gross_quantity)
-          VALUES ($1, $2, $3, NULL, NULL, 1.0000, 1.0000);
+          INSERT INTO recipe_items (id, organization_id, recipe_id, ingredient_id, sub_recipe_id, quantity, gross_quantity, unit_cost_snapshot)
+          VALUES ($1, $2, $3, NULL, NULL, 1.0000, 1.0000, 10.0000);
         `,
         [crypto.randomUUID(), tenantAId, recipeId],
         /chk_recipe_items_exclusive_source/,
@@ -257,8 +260,8 @@ describe('TRIDENTPOS WP-017 Inventory & Recipes Database Suite', () => {
       const ingItemId = crypto.randomUUID();
       const ingRes = await client.query(
         `
-        INSERT INTO recipe_items (id, organization_id, recipe_id, ingredient_id, sub_recipe_id, quantity, gross_quantity)
-        VALUES ($1, $2, $3, $4, NULL, 0.5000, 0.5500)
+        INSERT INTO recipe_items (id, organization_id, recipe_id, ingredient_id, sub_recipe_id, quantity, gross_quantity, unit_cost_snapshot)
+        VALUES ($1, $2, $3, $4, NULL, 0.5000, 0.5500, 10.0000)
         RETURNING id;
       `,
         [ingItemId, tenantAId, recipeId, ingredientId],
@@ -269,8 +272,8 @@ describe('TRIDENTPOS WP-017 Inventory & Recipes Database Suite', () => {
       const subItemId = crypto.randomUUID();
       const subRes = await client.query(
         `
-        INSERT INTO recipe_items (id, organization_id, recipe_id, ingredient_id, sub_recipe_id, quantity, gross_quantity)
-        VALUES ($1, $2, $3, NULL, $4, 0.2000, 0.2000)
+        INSERT INTO recipe_items (id, organization_id, recipe_id, ingredient_id, sub_recipe_id, quantity, gross_quantity, unit_cost_snapshot)
+        VALUES ($1, $2, $3, NULL, $4, 0.2000, 0.2000, 5.0000)
         RETURNING id;
       `,
         [subItemId, tenantAId, recipeId, subRecipeId],
@@ -319,8 +322,8 @@ describe('TRIDENTPOS WP-017 Inventory & Recipes Database Suite', () => {
       await assertQueryRejects(
         client,
         `
-          INSERT INTO recipe_items (id, organization_id, recipe_id, ingredient_id, sub_recipe_id, quantity, gross_quantity)
-          VALUES ($1, $2, $3, $4, NULL, 1.0000, 1.0000);
+          INSERT INTO recipe_items (id, organization_id, recipe_id, ingredient_id, sub_recipe_id, quantity, gross_quantity, unit_cost_snapshot)
+          VALUES ($1, $2, $3, $4, NULL, 1.0000, 1.0000, 25.0000);
         `,
         [crypto.randomUUID(), tenantAId, recAId, ingBId],
         /fk_recipe_items_ingredient|violates foreign key constraint/,
@@ -330,8 +333,8 @@ describe('TRIDENTPOS WP-017 Inventory & Recipes Database Suite', () => {
       await assertQueryRejects(
         client,
         `
-          INSERT INTO recipe_items (id, organization_id, recipe_id, ingredient_id, sub_recipe_id, quantity, gross_quantity)
-          VALUES ($1, $2, $3, NULL, $4, 1.0000, 1.0000);
+          INSERT INTO recipe_items (id, organization_id, recipe_id, ingredient_id, sub_recipe_id, quantity, gross_quantity, unit_cost_snapshot)
+          VALUES ($1, $2, $3, NULL, $4, 1.0000, 1.0000, 10.0000);
         `,
         [crypto.randomUUID(), tenantAId, recAId, recBId],
         /fk_recipe_items_sub_recipe|violates foreign key constraint/,
@@ -346,6 +349,9 @@ describe('TRIDENTPOS WP-017 Inventory & Recipes Database Suite', () => {
   it('WP017-DB-05: Real RLS default-deny and cross-tenant isolation with unprivileged role', async () => {
     // 1. Under unprivileged role without tenant context: all queries return 0 rows (default-deny)
     await asTestRole(async (client) => {
+      const p = await client.query('SELECT * FROM products;');
+      assert.equal(p.rows.length, 0);
+
       const w = await client.query('SELECT * FROM warehouses;');
       assert.equal(w.rows.length, 0);
 
@@ -364,9 +370,15 @@ describe('TRIDENTPOS WP-017 Inventory & Recipes Database Suite', () => {
       await client.query('BEGIN;');
       await setTenantContext(client, tenantAId);
 
+      const prodAId = crypto.randomUUID();
       const whAId = crypto.randomUUID();
       const ingAId = crypto.randomUUID();
       const recAId = crypto.randomUUID();
+
+      await client.query(
+        `INSERT INTO products (id, organization_id, code, name, base_price) VALUES ($1, $2, 'PROD-A1', 'Product A1', 100.0000);`,
+        [prodAId, tenantAId],
+      );
 
       await client.query(
         `INSERT INTO warehouses (id, organization_id, branch_id, code, name, warehouse_type) VALUES ($1, $2, $3, 'WH-A1', 'Warehouse A1', 'PRINCIPAL');`,
@@ -379,16 +391,22 @@ describe('TRIDENTPOS WP-017 Inventory & Recipes Database Suite', () => {
       );
 
       await client.query(
-        `INSERT INTO recipes (id, organization_id, code, name, yield_quantity, yield_unit) VALUES ($1, $2, 'REC-A1', 'Recipe A1', 1.0000, 'PZ');`,
-        [recAId, tenantAId],
+        `INSERT INTO recipes (id, organization_id, product_id, code, name, yield_quantity, yield_unit) VALUES ($1, $2, $3, 'REC-A1', 'Recipe A1', 1.0000, 'PZ');`,
+        [recAId, tenantAId, prodAId],
       );
 
       await client.query(
-        `INSERT INTO recipe_items (id, organization_id, recipe_id, ingredient_id, sub_recipe_id, quantity, gross_quantity) VALUES ($1, $2, $3, $4, NULL, 1.0000, 1.0000);`,
+        `INSERT INTO recipe_items (id, organization_id, recipe_id, ingredient_id, sub_recipe_id, quantity, gross_quantity, unit_cost_snapshot) VALUES ($1, $2, $3, $4, NULL, 1.0000, 1.0000, 15.0000);`,
         [crypto.randomUUID(), tenantAId, recAId, ingAId],
       );
 
       // Tenant A can query its own records
+      const prodA = await client.query('SELECT * FROM products WHERE organization_id = $1;', [
+        tenantAId,
+      ]);
+      assert.ok(prodA.rows.length >= 1);
+      assert.equal(prodA.rows[0].organization_id, tenantAId);
+
       const whA = await client.query('SELECT * FROM warehouses WHERE organization_id = $1;', [
         tenantAId,
       ]);
@@ -405,6 +423,9 @@ describe('TRIDENTPOS WP-017 Inventory & Recipes Database Suite', () => {
       await setTenantContext(client, tenantBId);
 
       // Tenant A's records MUST NOT be visible to Tenant B
+      const prodB = await client.query('SELECT * FROM products WHERE id = $1;', [prodAId]);
+      assert.equal(prodB.rows.length, 0, 'Tenant B must not see Tenant A product');
+
       const whB = await client.query('SELECT * FROM warehouses WHERE id = $1;', [whAId]);
       assert.equal(whB.rows.length, 0, 'Tenant B must not see Tenant A warehouse');
 
@@ -416,5 +437,152 @@ describe('TRIDENTPOS WP-017 Inventory & Recipes Database Suite', () => {
 
       await client.query('ROLLBACK;');
     });
+  });
+
+  it('WP017-DB-06: Tenant-safe composite FK fk_recipes_product enforces same-tenant product matrix', async () => {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN;');
+
+      const prodAId = crypto.randomUUID();
+      const prodBId = crypto.randomUUID();
+
+      // Seed Product in Org A
+      await setTenantContext(client, tenantAId);
+      await client.query(
+        `INSERT INTO products (id, organization_id, code, name, base_price) VALUES ($1, $2, 'PROD-A2', 'Product A2', 50.0000);`,
+        [prodAId, tenantAId],
+      );
+
+      // Seed Product in Org B
+      await setTenantContext(client, tenantBId);
+      await client.query(
+        `INSERT INTO products (id, organization_id, code, name, base_price) VALUES ($1, $2, 'PROD-B2', 'Product B2', 75.0000);`,
+        [prodBId, tenantBId],
+      );
+
+      // Back to Org A
+      await setTenantContext(client, tenantAId);
+
+      // 1. Same-tenant product_id: PASS
+      const recSameTenantId = crypto.randomUUID();
+      await client.query(
+        `INSERT INTO recipes (id, organization_id, product_id, code, name, yield_quantity, yield_unit) VALUES ($1, $2, $3, 'REC-SAME', 'Same Tenant Recipe', 1.0000, 'PZ');`,
+        [recSameTenantId, tenantAId, prodAId],
+      );
+      const insertedRec = await client.query('SELECT id, product_id FROM recipes WHERE id = $1;', [
+        recSameTenantId,
+      ]);
+      assert.equal(insertedRec.rows[0].product_id, prodAId);
+
+      // 2. NULL product_id (subrecipe): PASS
+      const recNullProductId = crypto.randomUUID();
+      await client.query(
+        `INSERT INTO recipes (id, organization_id, product_id, code, name, yield_quantity, yield_unit) VALUES ($1, $2, NULL, 'REC-NULL-PROD', 'Subrecipe without product', 1.0000, 'PZ');`,
+        [recNullProductId, tenantAId],
+      );
+      const insertedNullRec = await client.query(
+        'SELECT id, product_id FROM recipes WHERE id = $1;',
+        [recNullProductId],
+      );
+      assert.equal(insertedNullRec.rows[0].product_id, null);
+
+      // 3. Cross-tenant product_id: REJECT
+      await assertQueryRejects(
+        client,
+        `INSERT INTO recipes (id, organization_id, product_id, code, name, yield_quantity, yield_unit) VALUES ($1, $2, $3, 'REC-CROSS', 'Cross Tenant Recipe', 1.0000, 'PZ');`,
+        [crypto.randomUUID(), tenantAId, prodBId],
+        /fk_recipes_product|violates foreign key constraint/,
+      );
+
+      // 4. Non-existent product_id: REJECT
+      const nonexistentProdId = crypto.randomUUID();
+      await assertQueryRejects(
+        client,
+        `INSERT INTO recipes (id, organization_id, product_id, code, name, yield_quantity, yield_unit) VALUES ($1, $2, $3, 'REC-NONEXIST', 'Nonexistent Product Recipe', 1.0000, 'PZ');`,
+        [crypto.randomUUID(), tenantAId, nonexistentProdId],
+        /fk_recipes_product|violates foreign key constraint/,
+      );
+
+      await client.query('ROLLBACK;');
+    } finally {
+      client.release();
+    }
+  });
+
+  it('WP017-DB-07: unit_cost_snapshot rejects omission or NULL (no unauthorized default)', async () => {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN;');
+      await setTenantContext(client, tenantAId);
+
+      const recipeId = crypto.randomUUID();
+      const ingredientId = crypto.randomUUID();
+
+      await client.query(
+        `INSERT INTO recipes (id, organization_id, code, name, yield_quantity, yield_unit) VALUES ($1, $2, 'REC-COST-TEST', 'Cost Test Recipe', 1.0000, 'PZ');`,
+        [recipeId, tenantAId],
+      );
+      await client.query(
+        `INSERT INTO ingredients (id, organization_id, code, name, unit_of_measure, current_average_cost) VALUES ($1, $2, 'ING-COST-TEST', 'Cost Test Ingredient', 'KG', 12.0000);`,
+        [ingredientId, tenantAId],
+      );
+
+      // 1. Omission of unit_cost_snapshot fails NOT NULL constraint
+      await assertQueryRejects(
+        client,
+        `INSERT INTO recipe_items (id, organization_id, recipe_id, ingredient_id, sub_recipe_id, quantity, gross_quantity) VALUES ($1, $2, $3, $4, NULL, 1.0000, 1.0000);`,
+        [crypto.randomUUID(), tenantAId, recipeId, ingredientId],
+        /null value in column "unit_cost_snapshot".*violates not-null constraint/,
+      );
+
+      // 2. Explicit NULL fails NOT NULL constraint
+      await assertQueryRejects(
+        client,
+        `INSERT INTO recipe_items (id, organization_id, recipe_id, ingredient_id, sub_recipe_id, quantity, gross_quantity, unit_cost_snapshot) VALUES ($1, $2, $3, $4, NULL, 1.0000, 1.0000, NULL);`,
+        [crypto.randomUUID(), tenantAId, recipeId, ingredientId],
+        /null value in column "unit_cost_snapshot".*violates not-null constraint/,
+      );
+
+      await client.query('ROLLBACK;');
+    } finally {
+      client.release();
+    }
+  });
+
+  it('WP017-DB-08: fk_recipe_items_recipe restricts deletion of recipes when recipe_items exist', async () => {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN;');
+      await setTenantContext(client, tenantAId);
+
+      const recipeId = crypto.randomUUID();
+      const ingredientId = crypto.randomUUID();
+
+      await client.query(
+        `INSERT INTO recipes (id, organization_id, code, name, yield_quantity, yield_unit) VALUES ($1, $2, 'REC-NO-CASCADE', 'No Cascade Recipe', 1.0000, 'PZ');`,
+        [recipeId, tenantAId],
+      );
+      await client.query(
+        `INSERT INTO ingredients (id, organization_id, code, name, unit_of_measure, current_average_cost) VALUES ($1, $2, 'ING-NO-CASCADE', 'No Cascade Ingredient', 'KG', 12.0000);`,
+        [ingredientId, tenantAId],
+      );
+      await client.query(
+        `INSERT INTO recipe_items (id, organization_id, recipe_id, ingredient_id, sub_recipe_id, quantity, gross_quantity, unit_cost_snapshot) VALUES ($1, $2, $3, $4, NULL, 1.0000, 1.0000, 12.0000);`,
+        [crypto.randomUUID(), tenantAId, recipeId, ingredientId],
+      );
+
+      // Attempting to DELETE recipe without deleting recipe_items must FAIL (RESTRICT per DATA_MODEL.md)
+      await assertQueryRejects(
+        client,
+        `DELETE FROM recipes WHERE id = $1;`,
+        [recipeId],
+        /fk_recipe_items_recipe|violates foreign key constraint/,
+      );
+
+      await client.query('ROLLBACK;');
+    } finally {
+      client.release();
+    }
   });
 });

@@ -72,7 +72,12 @@ export class RecipeEngine {
     visitedStack: string[],
     acc: Map<string, { netScaled: bigint; grossScaled: bigint }>,
   ): Promise<void> {
-    const recipeYieldScaled = parseDecimal12x4(currentRecipe.yieldQuantity || '1.0000');
+    if (!currentRecipe.yieldQuantity) {
+      throw new ZeroDivisorError(
+        `Recipe '${currentRecipe.id}' has invalid or missing yieldQuantity '${currentRecipe.yieldQuantity}'`,
+      );
+    }
+    const recipeYieldScaled = parseDecimal12x4(currentRecipe.yieldQuantity);
     if (recipeYieldScaled <= 0n) {
       throw new ZeroDivisorError(
         `Recipe '${currentRecipe.id}' has invalid or non-positive yieldQuantity '${currentRecipe.yieldQuantity}'`,
@@ -148,7 +153,12 @@ export class RecipeEngine {
     resolver: RecipeCostResolver,
     visitedStack: string[],
   ): Promise<RecipeCostCalculationResult> {
-    const yieldScaled = parseDecimal12x4(currentRecipe.yieldQuantity || '1.0000');
+    if (!currentRecipe.yieldQuantity) {
+      throw new ZeroDivisorError(
+        `Cannot calculate recipe cost: Recipe '${currentRecipe.id}' has missing yieldQuantity`,
+      );
+    }
+    const yieldScaled = parseDecimal12x4(currentRecipe.yieldQuantity);
     if (yieldScaled <= 0n) {
       throw new ZeroDivisorError(
         `Cannot calculate recipe cost: Recipe '${currentRecipe.id}' has non-positive yieldQuantity '${currentRecipe.yieldQuantity}'`,
@@ -170,7 +180,12 @@ export class RecipeEngine {
 
       if (item.ingredientId) {
         const costStr = await resolver.getIngredientCost(item.ingredientId);
-        const unitCostScaled = parseDecimal12x4(costStr || '0.0000');
+        if (costStr === undefined || costStr === null || costStr === '') {
+          throw new InvalidRecipeItemError(
+            `Missing cost for ingredient '${item.ingredientId}' in recipe '${currentRecipe.id}'`,
+          );
+        }
+        const unitCostScaled = parseDecimal12x4(costStr);
         if (unitCostScaled < 0n) {
           throw new InvalidRecipeItemError(`Ingredient cost cannot be negative: '${costStr}'`);
         }
