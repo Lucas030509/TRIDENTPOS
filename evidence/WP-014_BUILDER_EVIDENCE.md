@@ -1,14 +1,14 @@
-# WP-014 BUILDER EVIDENCE REPORT (S14-R3 FINAL)
+# WP-014 BUILDER EVIDENCE REPORT (S14-R4 FINAL)
 
 **Work Package:** WP-014 — Dining Room, Tables & Orders Domain Engine with OCC  
 **Builder Agent:** `16_Native_Edge_Developer`  
-**Role:** Implementation Builder — Surgical Remediation S14-R3 (FINAL)  
+**Role:** Implementation Builder — Evidence-Only Finalization S14-R4 (FINAL)  
 **Canonical Base:** `38062575ceed063c8f03af5a5c473d140dd264df` (M14 - ACR-2026-013 Canonical)  
 **Implementation Branch:** `feature/wp-014-dining-orders-occ-r2`  
-**Prior Candidate S14-R2:** `fefe6ba5f96c064ba177127316fd23b129b67dc4`  
-**Lineage:** `38062575... (base) -> eb832e58... (S14) -> 054f4f59... (S14-R1) -> fefe6ba5... (S14-R2) -> S14-R3`  
+**Prior Candidate S14-R3:** `5b6f0644b4e901554f327dabf7139f148e3a778f`  
+**Lineage:** `38062575... (base) -> eb832e58... (S14) -> 054f4f59... (S14-R1) -> fefe6ba5... (S14-R2) -> 5b6f0644... (S14-R3) -> S14-R4`  
 **Governing Framework:** `EAAF v1.2.0` (Pinned SHA: `7e036f43240b3dc28ccb996e350263598275b2cd`)  
-**Status:** `IMPLEMENTED / READY FOR COORDINATOR QUICK INTEGRITY`  
+**Status:** `READY FOR COORDINATOR FINAL FREEZE`  
 
 ---
 
@@ -116,7 +116,7 @@ REQUIRED LATER
 
 | Scope / Package | Tests Run | Passed | Failed | Skipped |
 | :--- | :--- | :--- | :--- | :--- |
-| Monorepo Graph Enforcement (`scripts/check-graph.test.mjs`) | 44 | 44 | 0 | 0 |
+| Monorepo Graph Enforcement (`npm run graph:check`) | 44 | 44 | 0 | 0 |
 | `@trident/core` (Money, roundDiv, canonicalize, JWT, Pin, RBAC, etc.) | 56 | 56 | 0 | 0 |
 | `@trident/pos` (dining domain unit tests + QI-014-01 fail-closed tests) | 9 | 9 | 0 | 0 |
 | `@trident/pos-edge-runtime` (integration, OCC race, exact BigInt, production outbox atomicity, Mesa OCC) | 17 | 17 | 0 | 0 |
@@ -125,8 +125,11 @@ REQUIRED LATER
 | `@trident/sync` (WAN sync protocol tests) | 40 | 40 | 0 | 0 |
 | `@trident/ui` (UI component library tests) | 1 | 1 | 0 | 0 |
 | Integration Suite (`tests/integration/wp013-sync-e2e.test.mjs`) | 1 | 1 | 0 | 0 |
-| **Workspace Tests Subtotal** | **508** | **508** | **0** | **0** |
-| **Total Monorepo Tests (including Graph & Root Integration)** | **553** | **553** | **0** | **0** |
+| **Workspace / Package Tests Subtotal** | **508** | **508** | **0** | **0** |
+| **Root Integration Tests Subtotal** | **1** | **1** | **0** | **0** |
+| **npm test Total** | **509** | **509** | **0** | **0** |
+| **npm run graph:check Total** | **44** | **44** | **0** | **0** |
+| **Total Validations Executed Independently** | **553** | **553** | **0** | **0** |
 
 ---
 
@@ -136,9 +139,24 @@ REQUIRED LATER
 - `npm run format:check`: **PASS** (0 style issues)
 - `npm run lint`: **PASS** (0 errors across 7 packages)
 - `npm run typecheck`: **PASS** (0 errors across 7 packages)
-- `npm run graph:check`: **PASS** (0 boundary or cycle violations, 44 tests pass)
+- `npm run graph:check`:
+  - **PASS — 44/44** (0 boundary or cycle violations)
 - `npm run clean && npm run build`: **PASS** (clean compilation from scratch)
-- `npm test`: **PASS** (553/553 passed, 0 failures, 0 skipped)
+- `npm test`:
+  - **PASS — 509/509**
+  - Breakdown:
+    - 508 workspace/package tests
+    - 1 root integration test
+- **Total Validations Executed**:
+  - **553/553 PASS**
+  - Failures: 0
+  - Skipped: 0
+- **Performance**:
+  - **PARTIAL / INCONCLUSIVE**
+- **SEC-VAL-08**:
+  - **OPEN**
+- **Protected PO Decisions**:
+  - **9/9 PENDING PO DECISION**
 
 ---
 
