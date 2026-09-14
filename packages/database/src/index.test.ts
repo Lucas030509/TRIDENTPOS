@@ -61,6 +61,8 @@ describe('TRIDENTPOS WP-003 PostgreSQL Migration Engine Integration Suite', () =
     try {
       await client.query(`
         DROP TABLE IF EXISTS
+          products,
+          categories,
           sync_telemetry,
           sync_checkpoints,
           wp012_test_domain_fixtures,
@@ -463,7 +465,7 @@ describe('TRIDENTPOS WP-004 Organization & Branch Multi-Tenant RLS Foundation Su
     try {
       // Ensure clean state before running migrateUp on wp004SuiteDir
       await client.query(`
-        DROP TABLE IF EXISTS user_branch_credentials, user_roles, roles, users, test_composite_ref, branches, organizations CASCADE;
+        DROP TABLE IF EXISTS products, categories, user_branch_credentials, user_roles, roles, users, test_composite_ref, branches, organizations CASCADE;
         DELETE FROM _migrations WHERE id IN ('${wp004Id}', '20260904180000');
       `);
       // Ensure test role exists with NOSUPERUSER and NOBYPASSRLS
@@ -497,7 +499,7 @@ describe('TRIDENTPOS WP-004 Organization & Branch Multi-Tenant RLS Foundation Su
     const client = await pool.connect();
     try {
       await client.query(`
-        DROP TABLE IF EXISTS test_composite_ref, branches, organizations CASCADE;
+        DROP TABLE IF EXISTS products, categories, test_composite_ref, branches, organizations CASCADE;
         DELETE FROM _migrations WHERE id = '${wp004Id}';
         DROP OWNED BY ${testRole};
         DROP ROLE ${testRole};
@@ -933,7 +935,7 @@ describe('TRIDENTPOS WP-004 Organization & Branch Multi-Tenant RLS Foundation Su
     const client = await pool.connect();
     try {
       await client.query(`
-        DROP TABLE IF EXISTS user_branch_credentials, user_roles, roles, users, branches, organizations, _migrations CASCADE;
+        DROP TABLE IF EXISTS products, categories, user_branch_credentials, user_roles, roles, users, branches, organizations, _migrations CASCADE;
         DROP EXTENSION IF EXISTS pgcrypto, "uuid-ossp" CASCADE;
         DROP FUNCTION IF EXISTS current_app_org_id() CASCADE;
       `);
@@ -1330,7 +1332,7 @@ describe('TRIDENTPOS WP-005 Cloud IAM & Administrative Authentication Suite', ()
     const client = await pool.connect();
     try {
       await client.query(`
-        DROP TABLE IF EXISTS user_branch_credentials, user_roles, roles, users, test_composite_ref, branches, organizations CASCADE;
+        DROP TABLE IF EXISTS products, categories, user_branch_credentials, user_roles, roles, users, test_composite_ref, branches, organizations CASCADE;
         DELETE FROM _migrations WHERE id IN ('${wp004Id}', '${wp005Id}');
       `);
       await client.query(`
@@ -1368,7 +1370,7 @@ describe('TRIDENTPOS WP-005 Cloud IAM & Administrative Authentication Suite', ()
     const client = await pool.connect();
     try {
       await client.query(`
-        DROP TABLE IF EXISTS user_branch_credentials, user_roles, roles, users, test_composite_ref, branches, organizations CASCADE;
+        DROP TABLE IF EXISTS products, categories, user_branch_credentials, user_roles, roles, users, test_composite_ref, branches, organizations CASCADE;
         DELETE FROM _migrations WHERE id IN ('${wp004Id}', '${wp005Id}');
         DROP OWNED BY ${testRole};
         DROP ROLE ${testRole};
@@ -2131,7 +2133,7 @@ describe('TRIDENTPOS WP-005 Cloud IAM & Administrative Authentication Suite', ()
     const client = await pool.connect();
     try {
       await client.query(`
-        DROP TABLE IF EXISTS user_branch_credentials, user_roles, roles, users, test_composite_ref, branches, organizations, _migrations CASCADE;
+        DROP TABLE IF EXISTS products, categories, user_branch_credentials, user_roles, roles, users, test_composite_ref, branches, organizations, _migrations CASCADE;
         DROP EXTENSION IF EXISTS pgcrypto, "uuid-ossp" CASCADE;
         DROP FUNCTION IF EXISTS current_app_org_id() CASCADE;
       `);
@@ -2307,7 +2309,7 @@ describe('TRIDENTPOS WP-006 Tamper-Evident Security Logging & Cloud Audit Trail 
     const client = await pool.connect();
     try {
       await client.query(`
-        DROP TABLE IF EXISTS folio_leases, security_telemetry_events, audit_log_events, stations, user_branch_credentials, user_roles, roles, users, test_composite_ref, branches, organizations, _migrations CASCADE;
+        DROP TABLE IF EXISTS products, categories, folio_leases, security_telemetry_events, audit_log_events, stations, user_branch_credentials, user_roles, roles, users, test_composite_ref, branches, organizations, _migrations CASCADE;
         DROP EXTENSION IF EXISTS pgcrypto, "uuid-ossp" CASCADE;
         DROP FUNCTION IF EXISTS current_app_org_id() CASCADE;
         DROP FUNCTION IF EXISTS trg_audit_log_append_only() CASCADE;
@@ -2342,7 +2344,7 @@ describe('TRIDENTPOS WP-006 Tamper-Evident Security Logging & Cloud Audit Trail 
     const client = await pool.connect();
     try {
       await client.query(`
-        DROP TABLE IF EXISTS folio_leases, security_telemetry_events, audit_log_events, stations, user_branch_credentials, user_roles, roles, users, test_composite_ref, branches, organizations CASCADE;
+        DROP TABLE IF EXISTS products, categories, folio_leases, security_telemetry_events, audit_log_events, stations, user_branch_credentials, user_roles, roles, users, test_composite_ref, branches, organizations CASCADE;
         DELETE FROM _migrations WHERE id = '${wp006Id}';
         DROP OWNED BY ${testRole};
         DROP ROLE ${testRole};
@@ -3210,7 +3212,7 @@ describe('TRIDENTPOS WP-006 Tamper-Evident Security Logging & Cloud Audit Trail 
     const client = await pool.connect();
     try {
       await client.query(`
-        DROP TABLE IF EXISTS folio_leases, security_telemetry_events, audit_log_events, stations, user_branch_credentials, user_roles, roles, users, test_composite_ref, branches, organizations, _migrations CASCADE;
+        DROP TABLE IF EXISTS products, categories, folio_leases, security_telemetry_events, audit_log_events, stations, user_branch_credentials, user_roles, roles, users, test_composite_ref, branches, organizations, _migrations CASCADE;
         DROP EXTENSION IF EXISTS pgcrypto, "uuid-ossp" CASCADE;
         DROP FUNCTION IF EXISTS current_app_org_id() CASCADE;
         DROP FUNCTION IF EXISTS trg_audit_log_append_only() CASCADE;
@@ -3358,7 +3360,7 @@ describe('TRIDENTPOS WP-011 Cloud Folio Lease Allocation & Fencing Protocol Suit
     const client = await pool.connect();
     try {
       await client.query(`
-        DROP TABLE IF EXISTS folio_leases, security_telemetry_events, audit_log_events, stations, user_branch_credentials, user_roles, roles, users, test_composite_ref, branches, organizations, _migrations CASCADE;
+        DROP TABLE IF EXISTS products, categories, folio_leases, security_telemetry_events, audit_log_events, stations, user_branch_credentials, user_roles, roles, users, test_composite_ref, branches, organizations, _migrations CASCADE;
         DROP EXTENSION IF EXISTS pgcrypto, "uuid-ossp" CASCADE;
         DROP FUNCTION IF EXISTS current_app_org_id() CASCADE;
         DROP FUNCTION IF EXISTS trg_audit_log_append_only() CASCADE;
@@ -3408,7 +3410,7 @@ describe('TRIDENTPOS WP-011 Cloud Folio Lease Allocation & Fencing Protocol Suit
     const client = await pool.connect();
     try {
       await client.query(`
-        DROP TABLE IF EXISTS folio_leases, security_telemetry_events, audit_log_events, stations, user_branch_credentials, user_roles, roles, users, test_composite_ref, branches, organizations CASCADE;
+        DROP TABLE IF EXISTS products, categories, folio_leases, security_telemetry_events, audit_log_events, stations, user_branch_credentials, user_roles, roles, users, test_composite_ref, branches, organizations CASCADE;
         DELETE FROM _migrations WHERE id = '${wp011Id}';
         DROP OWNED BY ${testRole};
         DROP ROLE ${testRole};
@@ -3416,7 +3418,6 @@ describe('TRIDENTPOS WP-011 Cloud Folio Lease Allocation & Fencing Protocol Suit
     } finally {
       client.release();
       fs.rmSync(wp011SuiteDir, { recursive: true, force: true });
-      await closePool(pool);
     }
   });
 
@@ -4397,5 +4398,705 @@ describe('TRIDENTPOS WP-011 Cloud Folio Lease Allocation & Fencing Protocol Suit
         /violates foreign key constraint "fk_folio_leases_branch"/i,
       );
     });
+  });
+});
+
+describe('TRIDENTPOS WP-016B Platform Core Master Catalog Foundation (Categories & Products) Suite', () => {
+  const pool = getPool();
+  const testRole = 'trident_test_app';
+  const baselineId = '20260904160000';
+  const wp004Id = '20260904170000';
+  const wp016bId = '20260904223000';
+
+  const wp016bSuiteDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wp016b-suite-'));
+  fs.copyFileSync(
+    path.join(DEFAULT_MIGRATIONS_DIR, `${baselineId}_baseline_infrastructure.sql`),
+    path.join(wp016bSuiteDir, `${baselineId}_baseline_infrastructure.sql`),
+  );
+  fs.copyFileSync(
+    path.join(DEFAULT_MIGRATIONS_DIR, `${wp004Id}_tenant_rls_foundation.sql`),
+    path.join(wp016bSuiteDir, `${wp004Id}_tenant_rls_foundation.sql`),
+  );
+  fs.copyFileSync(
+    path.join(DEFAULT_MIGRATIONS_DIR, `${wp016bId}_platform_core_master_catalog.sql`),
+    path.join(wp016bSuiteDir, `${wp016bId}_platform_core_master_catalog.sql`),
+  );
+
+  const tenantAId = '11111111-1111-1111-1111-111111111111';
+  const tenantBId = '22222222-2222-2222-2222-222222222222';
+  const categoryAId = 'c1111111-1111-1111-1111-111111111111';
+  const categoryA2Id = 'c1111111-1111-1111-1111-111111111112';
+  const categoryBId = 'c2222222-2222-2222-2222-222222222222';
+  const productAId = 'd1111111-1111-1111-1111-111111111111';
+  const productBId = 'd2222222-2222-2222-2222-222222222222';
+  const taxSchemeStubId = 'e1111111-1111-1111-1111-111111111111';
+
+  async function asTestRole<T>(fn: (client: pg.PoolClient) => Promise<T>): Promise<T> {
+    const client = await pool.connect();
+    try {
+      await client.query(`SET ROLE ${testRole};`);
+      return await fn(client);
+    } finally {
+      try {
+        await client.query('ROLLBACK;');
+      } catch {
+        // Rollback safety
+      }
+      try {
+        await client.query('RESET ROLE;');
+      } catch {
+        // Reset role safety
+      }
+      client.release();
+    }
+  }
+
+  async function seedTestData(): Promise<void> {
+    const client = await pool.connect();
+    try {
+      await client.query(`
+        INSERT INTO organizations (id, legal_name, trade_name, tax_id)
+        VALUES
+          ('${tenantAId}', 'Tenant A Legal Name', 'Tenant A Trade', 'TAX-ORG-A'),
+          ('${tenantBId}', 'Tenant B Legal Name', 'Tenant B Trade', 'TAX-ORG-B')
+        ON CONFLICT (id) DO NOTHING;
+
+        INSERT INTO categories (id, organization_id, code, name, sort_order)
+        VALUES
+          ('${categoryAId}', '${tenantAId}', 'CAT-A1', 'Category A Primary', 1),
+          ('${categoryA2Id}', '${tenantAId}', 'CAT-A2', 'Category A Secondary', 2),
+          ('${categoryBId}', '${tenantBId}', 'CAT-B1', 'Category B Primary', 1)
+        ON CONFLICT (organization_id, id) DO NOTHING;
+
+        INSERT INTO products (
+          id, organization_id, category_id, code, name, product_type, base_price, tax_scheme_id
+        )
+        VALUES
+          ('${productAId}', '${tenantAId}', '${categoryAId}', 'PROD-A1', 'Product A Primary', 'SIMPLE', 100.0000, '${taxSchemeStubId}'),
+          ('${productBId}', '${tenantBId}', '${categoryBId}', 'PROD-B1', 'Product B Primary', 'SIMPLE', 200.0000, '${taxSchemeStubId}')
+        ON CONFLICT (organization_id, id) DO NOTHING;
+      `);
+    } finally {
+      client.release();
+    }
+  }
+
+  before(async () => {
+    const client = await pool.connect();
+    try {
+      await client.query(`
+        DROP TABLE IF EXISTS products, categories, folio_leases, security_telemetry_events, audit_log_events, stations, user_branch_credentials, user_roles, roles, users, test_composite_ref, branches, organizations, _migrations CASCADE;
+        DROP EXTENSION IF EXISTS pgcrypto, "uuid-ossp" CASCADE;
+        DROP FUNCTION IF EXISTS current_app_org_id() CASCADE;
+        DROP FUNCTION IF EXISTS trg_audit_log_append_only() CASCADE;
+
+        DO $$
+        BEGIN
+          IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${testRole}') THEN
+            EXECUTE 'DROP OWNED BY ${testRole}';
+            EXECUTE 'DROP ROLE ${testRole}';
+          END IF;
+        END
+        $$;
+        CREATE ROLE ${testRole} NOSUPERUSER NOBYPASSRLS NOINHERIT;
+      `);
+
+      await migrateUp(pool, { migrationsDir: wp016bSuiteDir });
+
+      await client.query(`
+        GRANT USAGE ON SCHEMA public TO ${testRole};
+        GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE organizations TO ${testRole};
+        GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE categories TO ${testRole};
+        GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE products TO ${testRole};
+        GRANT EXECUTE ON FUNCTION current_app_org_id() TO ${testRole};
+      `);
+
+      await seedTestData();
+    } finally {
+      client.release();
+    }
+  });
+
+  after(async () => {
+    const client = await pool.connect();
+    try {
+      await client.query(`
+        DROP TABLE IF EXISTS products, categories, branches, organizations CASCADE;
+        DELETE FROM _migrations WHERE id = '${wp016bId}';
+        DROP OWNED BY ${testRole};
+        DROP ROLE ${testRole};
+      `);
+    } finally {
+      client.release();
+      fs.rmSync(wp016bSuiteDir, { recursive: true, force: true });
+      await closePool(pool);
+    }
+  });
+
+  it('WP016B-T01: WP-003 -> WP-004 -> WP-016B migration chain applies', async () => {
+    const statuses = await getMigrationStatus(pool, { migrationsDir: wp016bSuiteDir });
+    const appliedIds = statuses.filter((s) => s.applied).map((s) => s.id);
+    assert.ok(appliedIds.includes(baselineId), 'WP-003 baseline must be applied');
+    assert.ok(appliedIds.includes(wp004Id), 'WP-004 tenant RLS migration must be applied');
+    assert.ok(appliedIds.includes(wp016bId), 'WP-016B master catalog migration must be applied');
+  });
+
+  interface ColumnInfo {
+    column_name: string;
+    data_type: string;
+    is_nullable: string;
+  }
+
+  it('WP016B-T02: categories schema matches canonical Platform Core model', async () => {
+    const cols = await pool.query<ColumnInfo>(`
+      SELECT column_name, data_type, is_nullable
+      FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'categories'
+      ORDER BY ordinal_position;
+    `);
+    const colMap = new Map<string, ColumnInfo>(
+      cols.rows.map((r: ColumnInfo) => [r.column_name, r]),
+    );
+
+    assert.ok(colMap.has('id'));
+    assert.equal(colMap.get('id')?.data_type, 'uuid');
+    assert.equal(colMap.get('id')?.is_nullable, 'NO');
+
+    assert.ok(colMap.has('organization_id'));
+    assert.equal(colMap.get('organization_id')?.data_type, 'uuid');
+    assert.equal(colMap.get('organization_id')?.is_nullable, 'NO');
+
+    assert.ok(colMap.has('code'));
+    assert.equal(colMap.get('code')?.is_nullable, 'NO');
+
+    assert.ok(colMap.has('name'));
+    assert.equal(colMap.get('name')?.is_nullable, 'NO');
+
+    assert.ok(colMap.has('sort_order'));
+    assert.equal(colMap.get('sort_order')?.data_type, 'integer');
+    assert.equal(colMap.get('sort_order')?.is_nullable, 'NO');
+
+    assert.ok(colMap.has('is_active'));
+    assert.equal(colMap.get('is_active')?.data_type, 'boolean');
+    assert.equal(colMap.get('is_active')?.is_nullable, 'NO');
+
+    const uqCheck = await pool.query<{ conname: string }>(`
+      SELECT conname FROM pg_constraint
+      WHERE conrelid = 'categories'::regclass AND contype = 'u';
+    `);
+    const constraints = uqCheck.rows.map((r: { conname: string }) => r.conname);
+    assert.ok(constraints.includes('uq_categories_org_code'));
+    assert.ok(constraints.includes('uq_categories_org_id'));
+  });
+
+  it('WP016B-T03: products schema matches canonical Platform Core model', async () => {
+    const cols = await pool.query<ColumnInfo>(`
+      SELECT column_name, data_type, is_nullable
+      FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'products'
+      ORDER BY ordinal_position;
+    `);
+    const colMap = new Map<string, ColumnInfo>(
+      cols.rows.map((r: ColumnInfo) => [r.column_name, r]),
+    );
+
+    assert.ok(colMap.has('id'));
+    assert.equal(colMap.get('id')?.data_type, 'uuid');
+
+    assert.ok(colMap.has('organization_id'));
+    assert.equal(colMap.get('organization_id')?.is_nullable, 'NO');
+
+    assert.ok(colMap.has('category_id'));
+    assert.equal(colMap.get('category_id')?.data_type, 'uuid');
+    assert.equal(colMap.get('category_id')?.is_nullable, 'NO');
+
+    assert.ok(colMap.has('code'));
+    assert.equal(colMap.get('code')?.is_nullable, 'NO');
+
+    assert.ok(colMap.has('name'));
+    assert.equal(colMap.get('name')?.is_nullable, 'NO');
+
+    assert.ok(colMap.has('description'));
+    assert.equal(colMap.get('description')?.is_nullable, 'YES');
+
+    assert.ok(colMap.has('product_type'));
+    assert.equal(colMap.get('product_type')?.is_nullable, 'NO');
+
+    assert.ok(colMap.has('base_price'));
+    assert.equal(colMap.get('base_price')?.data_type, 'numeric');
+    assert.equal(colMap.get('base_price')?.is_nullable, 'NO');
+
+    assert.ok(colMap.has('tax_scheme_id'));
+    assert.equal(colMap.get('tax_scheme_id')?.data_type, 'uuid');
+    assert.equal(
+      colMap.get('tax_scheme_id')?.is_nullable,
+      'NO',
+      'tax_scheme_id must remain NOT NULL with no default per ACR-2026-014',
+    );
+
+    assert.ok(colMap.has('is_inventoriable'));
+    assert.equal(colMap.get('is_inventoriable')?.data_type, 'boolean');
+
+    assert.ok(colMap.has('is_active'));
+    assert.equal(colMap.get('is_active')?.data_type, 'boolean');
+
+    assert.ok(colMap.has('created_at'));
+    assert.ok(colMap.has('updated_at'));
+    assert.ok(colMap.has('deleted_at'));
+    assert.equal(colMap.get('deleted_at')?.is_nullable, 'YES');
+
+    const conCheck = await pool.query<{ conname: string; contype: string }>(`
+      SELECT conname, contype FROM pg_constraint
+      WHERE conrelid = 'products'::regclass;
+    `);
+    const conNames = conCheck.rows.map((r: { conname: string; contype: string }) => r.conname);
+    assert.ok(conNames.includes('uq_products_org_code'));
+    assert.ok(conNames.includes('uq_products_org_id'));
+    assert.ok(conNames.includes('fk_products_category'));
+
+    const defaultCheck = await pool.query<{ column_default: string | null }>(`
+      SELECT column_default FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'products' AND column_name = 'tax_scheme_id';
+    `);
+    assert.equal(
+      defaultCheck.rows[0]?.column_default,
+      null,
+      'tax_scheme_id must not have a default value',
+    );
+  });
+
+  it('WP016B-T04: RLS enabled and forced on categories', async () => {
+    const res = await pool.query<{ relrowsecurity: boolean; relforcerowsecurity: boolean }>(
+      `SELECT relrowsecurity, relforcerowsecurity FROM pg_class WHERE relname = 'categories';`,
+    );
+    assert.equal(res.rows[0]?.relrowsecurity, true);
+    assert.equal(res.rows[0]?.relforcerowsecurity, true);
+  });
+
+  it('WP016B-T05: RLS enabled and forced on products', async () => {
+    const res = await pool.query<{ relrowsecurity: boolean; relforcerowsecurity: boolean }>(
+      `SELECT relrowsecurity, relforcerowsecurity FROM pg_class WHERE relname = 'products';`,
+    );
+    assert.equal(res.rows[0]?.relrowsecurity, true);
+    assert.equal(res.rows[0]?.relforcerowsecurity, true);
+  });
+
+  it('WP016B-T06: no tenant context = default-deny reads on categories and products', async () => {
+    await asTestRole(async (client) => {
+      const cats = await client.query('SELECT * FROM categories;');
+      assert.equal(cats.rows.length, 0);
+
+      const prods = await client.query('SELECT * FROM products;');
+      assert.equal(prods.rows.length, 0);
+    });
+  });
+
+  it('WP016B-T07: Tenant A sees only Tenant A categories', async () => {
+    await asTestRole(async (client) => {
+      await client.query('BEGIN;');
+      await setTenantContext(client, tenantAId);
+
+      const cats = await client.query<{ id: string }>('SELECT id FROM categories;');
+      assert.equal(cats.rows.length, 2);
+      assert.ok(cats.rows.every((r: { id: string }) => [categoryAId, categoryA2Id].includes(r.id)));
+
+      const targetB = await client.query('SELECT * FROM categories WHERE id = $1;', [categoryBId]);
+      assert.equal(targetB.rows.length, 0);
+
+      await client.query('COMMIT;');
+    });
+  });
+
+  it('WP016B-T08: Tenant B sees only Tenant B categories', async () => {
+    await asTestRole(async (client) => {
+      await client.query('BEGIN;');
+      await setTenantContext(client, tenantBId);
+
+      const cats = await client.query<{ id: string }>('SELECT id FROM categories;');
+      assert.equal(cats.rows.length, 1);
+      assert.equal(cats.rows[0]?.id, categoryBId);
+
+      await client.query('COMMIT;');
+    });
+  });
+
+  it('WP016B-T09: Tenant A sees only Tenant A products', async () => {
+    await asTestRole(async (client) => {
+      await client.query('BEGIN;');
+      await setTenantContext(client, tenantAId);
+
+      const prods = await client.query<{ id: string }>('SELECT id FROM products;');
+      assert.equal(prods.rows.length, 1);
+      assert.equal(prods.rows[0]?.id, productAId);
+
+      const targetB = await client.query('SELECT * FROM products WHERE id = $1;', [productBId]);
+      assert.equal(targetB.rows.length, 0);
+
+      await client.query('COMMIT;');
+    });
+  });
+
+  it('WP016B-T10: Tenant B sees only Tenant B products', async () => {
+    await asTestRole(async (client) => {
+      await client.query('BEGIN;');
+      await setTenantContext(client, tenantBId);
+
+      const prods = await client.query<{ id: string }>('SELECT id FROM products;');
+      assert.equal(prods.rows.length, 1);
+      assert.equal(prods.rows[0]?.id, productBId);
+
+      await client.query('COMMIT;');
+    });
+  });
+
+  it('WP016B-T11: Tenant A cannot INSERT category for Tenant B', async () => {
+    await asTestRole(async (client) => {
+      await client.query('BEGIN;');
+      await setTenantContext(client, tenantAId);
+
+      await assert.rejects(
+        client.query(`
+          INSERT INTO categories (id, organization_id, code, name)
+          VALUES (gen_random_uuid(), '${tenantBId}', 'CAT-ATTACK', 'Malicious Category');
+        `),
+        /row-level security policy/,
+      );
+
+      await client.query('ROLLBACK;');
+    });
+  });
+
+  it('WP016B-T12: Tenant A cannot INSERT product for Tenant B', async () => {
+    await asTestRole(async (client) => {
+      await client.query('BEGIN;');
+      await setTenantContext(client, tenantAId);
+
+      await assert.rejects(
+        client.query(`
+          INSERT INTO products (
+            id, organization_id, category_id, code, name, product_type, base_price, tax_scheme_id
+          )
+          VALUES (
+            gen_random_uuid(), '${tenantBId}', '${categoryBId}', 'PROD-ATTACK', 'Malicious Product',
+            'SIMPLE', 1.0000, '${taxSchemeStubId}'
+          );
+        `),
+        /row-level security policy/,
+      );
+
+      await client.query('ROLLBACK;');
+    });
+  });
+
+  it('WP016B-T13: Tenant A cannot UPDATE Tenant B category', async () => {
+    await asTestRole(async (client) => {
+      await client.query('BEGIN;');
+      await setTenantContext(client, tenantAId);
+      const res = await client.query(`UPDATE categories SET name = 'Attacked' WHERE id = $1;`, [
+        categoryBId,
+      ]);
+      assert.equal(res.rowCount, 0);
+      await client.query('ROLLBACK;');
+    });
+  });
+
+  it('WP016B-T14: Tenant A cannot UPDATE Tenant B product', async () => {
+    await asTestRole(async (client) => {
+      await client.query('BEGIN;');
+      await setTenantContext(client, tenantAId);
+      const res = await client.query(`UPDATE products SET name = 'Attacked' WHERE id = $1;`, [
+        productBId,
+      ]);
+      assert.equal(res.rowCount, 0);
+      await client.query('ROLLBACK;');
+    });
+  });
+
+  it('WP016B-T15: Tenant A cannot DELETE Tenant B category', async () => {
+    await asTestRole(async (client) => {
+      await client.query('BEGIN;');
+      await setTenantContext(client, tenantAId);
+      const res = await client.query(`DELETE FROM categories WHERE id = $1;`, [categoryBId]);
+      assert.equal(res.rowCount, 0);
+      await client.query('COMMIT;');
+    });
+
+    const check = await pool.query(`SELECT id FROM categories WHERE id = $1;`, [categoryBId]);
+    assert.equal(check.rows.length, 1);
+  });
+
+  it('WP016B-T16: Tenant A cannot DELETE Tenant B product', async () => {
+    await asTestRole(async (client) => {
+      await client.query('BEGIN;');
+      await setTenantContext(client, tenantAId);
+      const res = await client.query(`DELETE FROM products WHERE id = $1;`, [productBId]);
+      assert.equal(res.rowCount, 0);
+      await client.query('COMMIT;');
+    });
+
+    const check = await pool.query(`SELECT id FROM products WHERE id = $1;`, [productBId]);
+    assert.equal(check.rows.length, 1);
+  });
+
+  it('WP016B-T17: composite tenant FK rejects product referencing a different tenant category', async () => {
+    const client = await pool.connect();
+    try {
+      // Tenant A organization_id paired with Tenant B category_id must fail the composite FK
+      await assert.rejects(
+        client.query(`
+          INSERT INTO products (
+            id, organization_id, category_id, code, name, product_type, base_price, tax_scheme_id
+          )
+          VALUES (
+            gen_random_uuid(), '${tenantAId}', '${categoryBId}', 'PROD-CROSS-TENANT', 'Cross Tenant Product',
+            'SIMPLE', 1.0000, '${taxSchemeStubId}'
+          );
+        `),
+        /violates foreign key constraint "fk_products_category"/i,
+      );
+    } finally {
+      client.release();
+    }
+  });
+
+  it('WP016B-T18: same-tenant product -> category reference succeeds', async () => {
+    const client = await pool.connect();
+    try {
+      const newProductId = 'd1111111-1111-1111-1111-111111111199';
+      await client.query(`
+        INSERT INTO products (
+          id, organization_id, category_id, code, name, product_type, base_price, tax_scheme_id
+        )
+        VALUES (
+          '${newProductId}', '${tenantAId}', '${categoryA2Id}', 'PROD-A2', 'Product A Secondary',
+          'SIMPLE', 50.0000, '${taxSchemeStubId}'
+        );
+      `);
+      const check = await client.query('SELECT id FROM products WHERE id = $1;', [newProductId]);
+      assert.equal(check.rows.length, 1);
+      await client.query('DELETE FROM products WHERE id = $1;', [newProductId]);
+    } finally {
+      client.release();
+    }
+  });
+
+  it('WP016B-T19: ON DELETE RESTRICT rejects deleting a category referenced by a product', async () => {
+    const client = await pool.connect();
+    try {
+      await assert.rejects(
+        client.query(`DELETE FROM categories WHERE id = $1;`, [categoryAId]),
+        /violates foreign key constraint "fk_products_category"/i,
+      );
+      const check = await client.query('SELECT id FROM categories WHERE id = $1;', [categoryAId]);
+      assert.equal(check.rows.length, 1, 'Referenced category must remain intact');
+    } finally {
+      client.release();
+    }
+  });
+
+  it('WP016B-T20: uq_categories_org_code rejects duplicate code within same tenant', async () => {
+    const client = await pool.connect();
+    try {
+      await assert.rejects(
+        client.query(`
+          INSERT INTO categories (id, organization_id, code, name)
+          VALUES (gen_random_uuid(), '${tenantAId}', 'CAT-A1', 'Duplicate Code Category');
+        `),
+        /duplicate key value violates unique constraint "uq_categories_org_code"/i,
+      );
+    } finally {
+      client.release();
+    }
+  });
+
+  it('WP016B-T21: uq_products_org_code rejects duplicate code within same tenant', async () => {
+    const client = await pool.connect();
+    try {
+      await assert.rejects(
+        client.query(`
+          INSERT INTO products (
+            id, organization_id, category_id, code, name, product_type, base_price, tax_scheme_id
+          )
+          VALUES (
+            gen_random_uuid(), '${tenantAId}', '${categoryAId}', 'PROD-A1', 'Duplicate Code Product',
+            'SIMPLE', 1.0000, '${taxSchemeStubId}'
+          );
+        `),
+        /duplicate key value violates unique constraint "uq_products_org_code"/i,
+      );
+    } finally {
+      client.release();
+    }
+  });
+
+  it('WP016B-T22: same code is allowed across different tenants', async () => {
+    const client = await pool.connect();
+    try {
+      const newCategoryId = 'c2222222-2222-2222-2222-222222222299';
+      await client.query(`
+        INSERT INTO categories (id, organization_id, code, name)
+        VALUES ('${newCategoryId}', '${tenantBId}', 'CAT-A1', 'Tenant B Category Same Code');
+      `);
+      const check = await client.query('SELECT id FROM categories WHERE id = $1;', [newCategoryId]);
+      assert.equal(check.rows.length, 1);
+      await client.query('DELETE FROM categories WHERE id = $1;', [newCategoryId]);
+    } finally {
+      client.release();
+    }
+  });
+
+  it('WP016B-T23: tax_scheme_id is NOT NULL and rejects missing value', async () => {
+    const client = await pool.connect();
+    try {
+      await assert.rejects(
+        client.query(`
+          INSERT INTO products (
+            id, organization_id, category_id, code, name, product_type, base_price
+          )
+          VALUES (
+            gen_random_uuid(), '${tenantAId}', '${categoryAId}', 'PROD-NO-TAX', 'No Tax Scheme Product',
+            'SIMPLE', 1.0000
+          );
+        `),
+        /null value in column "tax_scheme_id"/i,
+      );
+    } finally {
+      client.release();
+    }
+  });
+
+  it('WP016B-T24: category_id is NOT NULL and rejects missing value', async () => {
+    const client = await pool.connect();
+    try {
+      await assert.rejects(
+        client.query(`
+          INSERT INTO products (
+            id, organization_id, code, name, product_type, base_price, tax_scheme_id
+          )
+          VALUES (
+            gen_random_uuid(), '${tenantAId}', 'PROD-NO-CAT', 'No Category Product',
+            'SIMPLE', 1.0000, '${taxSchemeStubId}'
+          );
+        `),
+        /null value in column "category_id"/i,
+      );
+    } finally {
+      client.release();
+    }
+  });
+
+  it('WP016B-T25: tax_schemes table does not exist (out of scope for WP-016B)', async () => {
+    const res = await pool.query(`
+      SELECT table_name FROM information_schema.tables
+      WHERE table_schema = 'public' AND table_name = 'tax_schemes';
+    `);
+    assert.equal(res.rows.length, 0, 'tax_schemes must not be created by WP-016B');
+  });
+
+  it('WP016B-T26: warehouses, ingredients, recipes DO NOT EXIST (Inventory out of scope)', async () => {
+    const res = await pool.query<{ table_name: string }>(`
+      SELECT table_name FROM information_schema.tables
+      WHERE table_schema = 'public'
+        AND table_name IN ('warehouses', 'ingredients', 'recipes', 'recipe_items', 'modifier_groups', 'modifiers');
+    `);
+    assert.equal(res.rows.length, 0, 'WP-017 Inventory tables must not be introduced by WP-016B');
+  });
+
+  it('WP016B-T27: fresh DB migrates WP-003 + WP-004 + WP-016B zero-to-latest', async () => {
+    const client = await pool.connect();
+    try {
+      await client.query(`
+        DROP TABLE IF EXISTS products, categories, branches, organizations, _migrations CASCADE;
+        DROP EXTENSION IF EXISTS pgcrypto, "uuid-ossp" CASCADE;
+        DROP FUNCTION IF EXISTS current_app_org_id() CASCADE;
+      `);
+    } finally {
+      client.release();
+    }
+
+    const res = await migrateUp(pool, { migrationsDir: wp016bSuiteDir });
+    assert.equal(res.alreadyUpToDate, false);
+    assert.ok(res.applied.includes(`${baselineId}_baseline_infrastructure`));
+    assert.ok(res.applied.includes(`${wp004Id}_tenant_rls_foundation`));
+    assert.ok(res.applied.includes(`${wp016bId}_platform_core_master_catalog`));
+
+    const status = await getMigrationStatus(pool, { migrationsDir: wp016bSuiteDir });
+    assert.equal(status.length, 3);
+    assert.ok(status.every((s) => s.applied && s.checksumMatches));
+
+    await seedTestData();
+    const grantClient = await pool.connect();
+    try {
+      await grantClient.query(`
+        GRANT USAGE ON SCHEMA public TO ${testRole};
+        GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE organizations TO ${testRole};
+        GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE categories TO ${testRole};
+        GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE products TO ${testRole};
+        GRANT EXECUTE ON FUNCTION current_app_org_id() TO ${testRole};
+      `);
+    } finally {
+      grantClient.release();
+    }
+  });
+
+  it('WP016B-T28: non-production down reverts products and categories in a single migration step', async () => {
+    const downResult = await migrateDown(pool, {
+      migrationsDir: wp016bSuiteDir,
+      allowDestructiveDown: true,
+    });
+    assert.equal(downResult.reverted, `${wp016bId}_platform_core_master_catalog`);
+
+    const tablesCheck = await pool.query<{ table_name: string }>(`
+      SELECT table_name FROM information_schema.tables
+      WHERE table_schema = 'public' AND table_name IN ('categories', 'products');
+    `);
+    assert.equal(tablesCheck.rows.length, 0);
+
+    const ledger = await pool.query<{ id: string }>(
+      `SELECT id FROM _migrations ORDER BY execution_order;`,
+    );
+    assert.deepEqual(
+      ledger.rows.map((r: { id: string }) => r.id),
+      [baselineId, wp004Id],
+    );
+  });
+
+  it('WP016B-T29: up -> down -> up works and restores tenant isolation', async () => {
+    const upRes = await migrateUp(pool, { migrationsDir: wp016bSuiteDir });
+    assert.ok(upRes.applied.includes(`${wp016bId}_platform_core_master_catalog`));
+
+    const client = await pool.connect();
+    try {
+      await client.query(`
+        GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE categories TO ${testRole};
+        GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE products TO ${testRole};
+      `);
+    } finally {
+      client.release();
+    }
+
+    await seedTestData();
+
+    await asTestRole(async (testClient) => {
+      await testClient.query('BEGIN;');
+      await setTenantContext(testClient, tenantAId);
+      const cats = await testClient.query('SELECT * FROM categories;');
+      assert.equal(cats.rows.length, 2);
+      await testClient.query('COMMIT;');
+    });
+  });
+
+  it('WP016B-T30: WP-016B migration checksum remains unchanged', async () => {
+    const ledger = await pool.query<{ checksum: string }>(
+      `SELECT checksum FROM _migrations WHERE id = $1;`,
+      [wp016bId],
+    );
+    assert.equal(ledger.rows.length, 1);
+    const migrationFile = path.join(
+      DEFAULT_MIGRATIONS_DIR,
+      `${wp016bId}_platform_core_master_catalog.sql`,
+    );
+    const expectedChecksum = computeChecksum(fs.readFileSync(migrationFile, 'utf8'));
+    assert.equal(ledger.rows[0]?.checksum, expectedChecksum);
   });
 });
