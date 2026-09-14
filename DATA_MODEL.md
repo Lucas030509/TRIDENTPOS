@@ -1,6 +1,11 @@
 # DATA MODEL SPECIFICATION — ERP RESTAURANTES / TRIDENTPOS
 
 > [!NOTE]
+> **ACR-2026-014 PROPOSED ARCHITECTURE CHANGE — PENDING GOVERNANCE APPROVAL**
+> 
+> Proposed amendment under `ACR-2026-014` / `ADR-014`: Materialization of tenant-safe relational integrity for Platform Core Master Catalog (`categories` candidate key `(organization_id, id)` and `products` composite foreign key `fk_products_category`). Pending formal independent review and Product Owner approval.
+
+> [!NOTE]
 > **ACR-2026-013 PROPOSED ARCHITECTURE CHANGE — PENDING GOVERNANCE APPROVAL**
 > 
 > Proposed amendment under `ACR-2026-013`: Harmonization of Edge SQLite monetary and numerical representation from `REAL` to exact signed 64-bit `INTEGER` (Fixed-Point Escala 4: factor $10^4 = 10,000$). Pending formal review and Product Owner approval.
@@ -250,7 +255,8 @@ CREATE TABLE categories (
     name VARCHAR(100) NOT NULL,
     sort_order INTEGER NOT NULL DEFAULT 0,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
-    CONSTRAINT uq_categories_org_code UNIQUE (organization_id, code)
+    CONSTRAINT uq_categories_org_code UNIQUE (organization_id, code),
+    CONSTRAINT uq_categories_org_id UNIQUE (organization_id, id)
 );
 
 -- Catálogo Maestro: Grupos de Modificadores
@@ -281,7 +287,7 @@ CREATE TABLE modifiers (
 CREATE TABLE products (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     organization_id UUID NOT NULL REFERENCES organizations(id),
-    category_id UUID NOT NULL REFERENCES categories(id),
+    category_id UUID NOT NULL,
     code VARCHAR(50) NOT NULL,
     name VARCHAR(255) NOT NULL,
     description TEXT NULL,
@@ -294,7 +300,8 @@ CREATE TABLE products (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     deleted_at TIMESTAMPTZ NULL,
     CONSTRAINT uq_products_org_code UNIQUE (organization_id, code),
-    CONSTRAINT uq_products_org_id UNIQUE (organization_id, id)
+    CONSTRAINT uq_products_org_id UNIQUE (organization_id, id),
+    CONSTRAINT fk_products_category FOREIGN KEY (organization_id, category_id) REFERENCES categories(organization_id, id) ON DELETE RESTRICT
 );
 
 -- Overrides de Producto por Sucursal (Branch Overrides)
