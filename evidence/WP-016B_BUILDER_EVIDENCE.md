@@ -106,7 +106,7 @@ Coverage against Section 16 requirements:
 |---|---|
 | `npm ci` | PASS |
 | `npm run format:check` | PASS (after `prettier --write` on the two modified test files) |
-| `npm run lint` | PASS — 0 errors (13 pre-existing `no-explicit-any` warnings in unrelated files: `outbox.test.ts` pre-existing lines, `ingested-idempotency-engine.ts`, `sync/stream.test.ts` — none introduced by this change) |
+| `npm run lint` | PASS — 0 errors. See exact monorepo-wide warning accounting below. |
 | `npm run typecheck` | PASS — 0 errors, 10/10 tasks successful |
 | `npm run graph:check` | PASS — 44/44 tests, 0 fail (dependency graph enforcement, kept as a separate count per Section 21) |
 | `npm run clean` | PASS |
@@ -116,6 +116,40 @@ Coverage against Section 16 requirements:
 | `npm run db:test` (`@trident/database`, real PostgreSQL) | PASS — **260/260**, 0 fail, run 3 consecutive times back-to-back with zero state leakage between runs |
 | `npm test` (full monorepo, `turbo run test && npm run test:integration`) | **FAIL — BASELINE-REPRODUCED ENVIRONMENTAL EXCEPTION** (see full accounting below) |
 | `npm run test:integration` (root) | PASS — 1/1 — **executed separately**, as a standalone invocation, not as the completed second half of the root `npm test` chain (the `&&` in `npm test` never reaches `test:integration` because the preceding `turbo run test` fails) |
+
+### `npm run lint` exact warning accounting
+
+```text
+npm run lint:
+PASS — 0 errors
+
+Pre-existing warnings:
+23 total
+
+Breakdown:
+@trident/sync: 4
+@trident/database: 13
+@trident/edge: 6
+
+Warnings introduced by WP-016B:
+0
+```
+
+By exact file:
+
+```text
+@trident/sync:
+  packages/sync/src/stream.test.ts — 4
+
+@trident/database:
+  packages/database/src/outbox.test.ts — 11
+  packages/database/src/outbox/ingested-idempotency-engine.ts — 2
+
+@trident/edge:
+  packages/edge/src/outbox.test.ts — 6
+```
+
+All 23 warnings are pre-existing `@typescript-eslint/no-explicit-any` warnings, verified independently against the canonical baseline `d102f5296c9175c485aeb1a4bf7b5af3a93173b5`'s lint output. None were introduced by WP-016B. Note: `packages/database/src/outbox.test.ts` is one of the two files WP-016B modifies (to add `products, categories` to its pre-existing schema-reset `DROP TABLE` list — see "Why `outbox.test.ts` ... were modified" above), but the 11 warning-producing lines in that file are pre-existing and unrelated to the WP-016B diff hunk; they are not introduced, moved, or altered by this change.
 
 ### `npm test` exact status — do not report as PASS
 
