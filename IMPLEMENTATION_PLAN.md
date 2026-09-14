@@ -681,7 +681,8 @@ Dining room, counter orders, kitchen display (KDS), cash drawer, Cortes X/Z, and
 * **ADRs:** `ADR-001`, `ADR-002`, `ADR-014`
 * **Data Objects:** PostgreSQL tablas físicas canónicas: `categories`, `products` con candidate keys `(organization_id, id)`, foreign key compuesta tenant-safe `fk_products_category (organization_id, category_id) REFERENCES categories(organization_id, id) ON DELETE RESTRICT`, y políticas RLS default-deny.
 * **APIs / Contracts:** `20260904223000_platform_core_master_catalog.sql`
-* **Builder Agent:** `13_Backend_Developer` (con `17_Database_Engineer` según necesidad)
+* **Builder Agent:** `17_Database_Engineer`
+* **Supporting Implementation Agent:** `13_Backend_Developer`
 * **Specialist Reviewer:** `03_Data_Architect` (instancia fresca independiente, segregada de la autoría del ACR)
 * **Code Reviewer:** `11_Code_Reviewer`
 * **Prerequisites:** `WP-004`
