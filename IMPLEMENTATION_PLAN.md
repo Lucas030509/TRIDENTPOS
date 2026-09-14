@@ -1,6 +1,11 @@
 # IMPLEMENTATION PLAN — ERP RESTAURANTES / TRIDENTPOS
 
 > [!NOTE]
+> **ACR-2026-014 PROPOSED ARCHITECTURE CHANGE — PENDING GOVERNANCE APPROVAL**
+> 
+> Proposed amendment under `ACR-2026-014` / `ADR-014`: Insertion of additive prerequisite work package `WP-016B: Platform Core Master Catalog Foundation (Categories & Products)` in Wave 4, and update of `WP-017` prerequisites to `WP-004, WP-016B` with strict prohibition on Inventory-owned products. Pending independent reviews and Product Owner approval.
+
+> [!NOTE]
 > **ACR-2026-013 PROPOSED ARCHITECTURE CHANGE — PENDING GOVERNANCE APPROVAL**
 > 
 > Proposed amendment under `ACR-2026-013`: Harmonization of Edge exact fixed-point signed integer storage (`INTEGER` scale 4, `ADR-012`) and monorepo package composition topology (`ADR-013`) for WP-014 (`@trident/pos` + `@trident/pos-edge-runtime`) and WP-017 (`@trident/inventory` + `@trident/cloud-server`). Pending formal review and Product Owner approval.
@@ -668,7 +673,37 @@ Dining room, counter orders, kitchen display (KDS), cash drawer, Cortes X/Z, and
 * **Risk:** Medium
 * **PO Dependency:** `OQ-ARCH-01` (Classification: D; PO BLOCKED AT BUSINESS-SEMANTIC COMPLETION. Generic shift and drawer ledger can be scaffolded, but concrete shift assignment behavior requires PO decision).
 * **Parallelizable:** YES (with `WP-015`)
-* **Handoff Target:** `WP-017`, `WP-018`
+* **Handoff Target:** `WP-016B`, `WP-017`, `WP-018`
+
+#### `WP-016B`: Platform Core Master Catalog Foundation (Categories & Products)
+* **Bounded Context:** Platform Core (`MOD-CORE`)
+* **Frozen Requirements:** `DATA_MODEL.md` Sec. 2.1; `MODULE_CATALOG.md` Sec. 1; `ADR-001`, `ADR-002`, `ADR-014`, `ACR-2026-014`
+* **ADRs:** `ADR-001`, `ADR-002`, `ADR-014`
+* **Data Objects:** PostgreSQL tablas físicas canónicas: `categories`, `products` con candidate keys `(organization_id, id)`, foreign key compuesta tenant-safe `fk_products_category (organization_id, category_id) REFERENCES categories(organization_id, id) ON DELETE RESTRICT`, y políticas RLS default-deny.
+* **APIs / Contracts:** `20260904223000_platform_core_master_catalog.sql`
+* **Builder Agent:** `13_Backend_Developer` (con `17_Database_Engineer` según necesidad)
+* **Specialist Reviewer:** `03_Data_Architect` (instancia fresca independiente, segregada de la autoría del ACR)
+* **Code Reviewer:** `11_Code_Reviewer`
+* **Prerequisites:** `WP-004`
+* **Dependencies:** PostgreSQL 16 in Supabase (`FROZEN ARCHITECTURE`).
+* **Inputs:** `DATA_MODEL.md` Sec. 2.1, `MODULE_CATALOG.md` Sec. 1, `ADR-014`
+* **Outputs:** SQL migration `20260904223000_platform_core_master_catalog.sql` creando `categories` y `products` con ENABLE + FORCE RLS, y suite de pruebas de integración de aislamiento multitenant y rechazo de claves foráneas cruzadas.
+* **Acceptance Criteria:**
+  1. Tabla `categories` creada con `(organization_id, id)` candidate key y `(organization_id, code)` unique.
+  2. Tabla `products` creada con `(organization_id, id)` candidate key, `(organization_id, code)` unique, `category_id UUID NOT NULL` referenciando `categories(organization_id, id)` vía `fk_products_category` con `ON DELETE RESTRICT`.
+  3. `products` preserva estrictamente `product_type VARCHAR(50) NOT NULL` y `tax_scheme_id UUID NOT NULL` sin FK física prematura a Billing.
+  4. Ambas tablas aplican `ENABLE ROW LEVEL SECURITY` y `FORCE ROW LEVEL SECURITY` con política default-deny `organization_id = current_app_org_id()`.
+  5. Pruebas negativas demuestran rechazo estricto de referencias cruzadas entre tenants y aislamiento total entre organizaciones.
+* **Tests:** Automated PostgreSQL integration tests for multi-tenant isolation, cross-tenant FK rejection, and non-production down-migration clean rollback.
+* **Security Debt:** None
+* **Evidence Required:** Clean migration run logs (`db:migrate`), multi-tenant RLS isolation test execution logs, and builder evidence `evidence/WP-016B_BUILDER_EVIDENCE.md`.
+* **Rollback:** Non-production down-step drops `products` then `categories`; production follows Expand-Transition-Contract.
+* **Feature Flag:** NO
+* **Migration Impact:** Expand
+* **Risk:** Low
+* **PO Dependency:** None (Preserves 9/9 protected PO decisions PENDING PO DECISION).
+* **Parallelizable:** YES (independent additive DDL migration)
+* **Handoff Target:** `WP-017`
 
 ---
 
@@ -677,18 +712,19 @@ Stock management, recipes, automated depletion via KDS production, purchase orde
 
 #### `WP-017`: Inventory Catalog, Multi-Warehouse & Recipe Explosion Engine
 * **Bounded Context:** Inventory
-* **Frozen Requirements:** `DATA_MODEL.md` Sec. 2.3; `FUNCTIONAL_ARCHITECTURE.md` Sec. 4; `MODULE_CATALOG.md`; `ADR-013`, `ACR-2026-013`
-* **ADRs:** `ADR-001`, `ADR-002`, `ADR-013`
+* **Frozen Requirements:** `DATA_MODEL.md` Sec. 2.3; `FUNCTIONAL_ARCHITECTURE.md` Sec. 4; `MODULE_CATALOG.md`; `ADR-013`, `ADR-014`, `ACR-2026-013`, `ACR-2026-014`
+* **ADRs:** `ADR-001`, `ADR-002`, `ADR-013`, `ADR-014`
 * **Package Placement & Topology (`ADR-013`):**
   - Dominio puro: `@trident/inventory` (conceptos de dominio: Insumo, Unidad de Medida, Almacén, Receta, Partida de Receta, Subreceta; motor de explosión recursiva y costeo promedio ponderado, interfaz `ModifierRecipeResolver`). Depende únicamente de `@trident/core`. Cero dependencia hacia `@trident/pos`.
   - Persistencia e Infraestructura: `@trident/database` (migraciones PostgreSQL 16 y políticas RLS para inventario).
-  - Ensamblado y Raíz de Composición Cloud: `@trident/cloud-server` (inyección de repositorios PostgreSQL y exposición de endpoints Backoffice).
+  - Ensamblado y Raíz de Composición Cloud: `@trident/cloud-server` (inyección de repositorios PostgreSQL y exposición de endpoints Backoffice con control de transacción de inquilino `withTenantTransaction()`).
 * **Data Objects:** PostgreSQL tablas físicas canónicas: `warehouses`, `ingredients`, `recipes`, `recipe_items` (`DECIMAL(12,4)`), con candidate keys `(organization_id, id)` y políticas RLS default-deny. Conceptos de dominio: Insumos (Raw Materials), Unidades de Medida (Unit of Measure), Almacenes (Warehouses), Recetas (Recipes), Partidas de Receta (Recipe Items) y Subrecetas.
+* **Scope Boundary & Governance Invariant:** WP-017 MUST NOT create, own, or mutate categories or products. WP-017 consumes the canonical `products` table established by `WP-016B` via `fk_recipes_product`. Candidate S17-R1 is non-canonical and remains on HOLD until WP-016B is canonical on main.
 * **APIs / Contracts:** Recipe service (`calculateRecipeCost()`, `explodeIngredients()`)
 * **Builder Agent:** `13_Backend_Developer`
 * **Specialist Reviewer:** `03_Data_Architect`
 * **Code Reviewer:** `11_Code_Reviewer`
-* **Prerequisites:** `WP-004`
+* **Prerequisites:** `WP-004`, `WP-016B`
 * **Dependencies:** PostgreSQL 16 in Supabase (`FROZEN ARCHITECTURE`).
 * **Inputs:** `DATA_MODEL.md` Sec. 2.3, `MODULE_CATALOG.md`, `ADR-013`
 * **Outputs:** Multi-warehouse inventory schema; hierarchical sub-recipe explosion engine supporting yield factors and waste percentages; defines `ModifierRecipeResolver` contract.

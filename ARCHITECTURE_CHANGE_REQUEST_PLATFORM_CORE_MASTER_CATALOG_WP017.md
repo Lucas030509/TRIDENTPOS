@@ -15,7 +15,7 @@
 **Status:** `PROPOSED — PENDING INDEPENDENT REVIEW`  
 **Canonical Base:** `38062575ceed063c8f03af5a5c473d140dd264df` (`main`)  
 **Classification:** `CORE DOMAIN ARCHITECTURAL RECTIFICATION & PREREQUISITE SEQUENCING`  
-**Referenced ADRs:** `ADR-001`, `ADR-002`, `ADR-004`, `ADR-013`  
+**Referenced ADRs:** `ADR-001`, `ADR-002`, `ADR-004`, `ADR-013`, `ADR-014`  
 
 ---
 
@@ -359,11 +359,11 @@ This architecture change strictly maintains the frozen state of all nine (9) pro
 
 ## P. Proposed Reviewers
 
-Under EAAF v1.2 governance:
-- **Solution Architecture Reviewer:** `01_Solution_Architect`
-- **Data Architecture Reviewer:** `03_Data_Architect`
+Under EAAF v1.2 governance, because this change request was authored by `01_Solution_Architect` in coordination with `03_Data_Architect`, neither authoring participant may review their own submission. The proposed independent reviewers are:
 - **Security Architecture Reviewer:** `08_Security_Architect`
+- **DevOps Platform Architecture Reviewer:** `10_DevOps_Platform_Architect`
 - **Mandatory Code Reviewer:** `11_Code_Reviewer`
+- **Data Architecture Specialist Reviewer:** A fresh, independent instance of `03_Data_Architect` that did NOT participate in candidate authoring, with complete operational segregation recorded in the review sidecar.
 
 ---
 
@@ -401,5 +401,10 @@ Upon implementation of `WP-016B`, the following verifiable evidence artifacts ar
 
 - **Disposition:** `PROPOSED — PENDING INDEPENDENT REVIEW`
 - **Review Authorization:** Pending Coordinator Quick Integrity Verification.
-- **Product Owner Approval:** Not required for physical prerequisite schema alignment that conforms 100% to frozen SSOT without semantic changes.
+- **Product Owner Approval:**
+  ```text
+  Product Owner Approval:
+  REQUIRED AFTER INDEPENDENT REVIEWS
+  ```
+  *(Rationale: ACR-2026-014 updates canonical implementation sequencing and inserts additive work package WP-016B into the frozen Implementation Plan. While it does NOT resolve any protected business-semantic questions—preserving 9/9 PENDING PO DECISION—formal Product Owner approval of the implementation plan sequence change is required prior to canonical merge).*
 - **Implementation Status:** Execution blocked until formal governance review and merge to canonical `main`.
