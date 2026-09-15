@@ -1326,12 +1326,14 @@ flowchart TD
     end
 
     subgraph Wave9 [Wave 9: Hardening & Release]
-        WP021 & WP024 & WP025 & WP026B & WP026C & WP026D --> WP027[WP-027: E2E Chaos Testing]
+        WP002 & WP006 & WP013 & WP018 & WP021 & WP022 & WP023 & WP024 & WP025 & WP026B & WP026C & WP026D --> WP027[WP-027: E2E Chaos Testing]
         WP027 --> WP028[WP-028: Hardware Benchmark & Packaging]
     end
 ```
 
 *`WP-026` itself (the non-executable umbrella) is intentionally not a DAG node — it has no independent execution edges; it is satisfied when `WP-026A`–`WP-026D` all complete. The graph above is acyclic: `WP-027`'s only outbound edge is to `WP-028`, and no edge points from `WP-028` back into any `WP-027` prerequisite (`CA-QI-015-18`/`-21`).*
+
+*Reachability (`CA-QI-015-27`): `WP-027`'s Prerequisites field ("all prior EXECUTABLE Work Packages through `WP-026D`") requires every one of the 32 executable WPs preceding it (all nodes above except `WP-027`/`WP-028`, and excluding the non-executable umbrella `WP-026`) to be a DAG ancestor of `WP-027`. The Wave 9 convergence edge above was corrected to include `WP-002`, `WP-006`, `WP-013`, `WP-018`, `WP-022`, `WP-023` — six terminal executable WPs (CI/CD, Audit Logging, Sync Service, Kárdex, CRM, Delivery) that had no prior outgoing edge toward `WP-027` and were consequently unreachable. Independently verified by script: 32/32 prior executable WPs reach `WP-027`; `WP-028` does not reach `WP-027`; `WP-027` reaches `WP-028`; the full graph remains acyclic.*
 
 ---
 
