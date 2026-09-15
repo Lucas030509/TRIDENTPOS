@@ -1,6 +1,8 @@
 # TRIDENTPOS — UI Preview: Salón / Mesas / Cuenta
 
-**Status: `PREVIEW_FIXTURE_DATA` / `PREVIEW_UI_PREFERENCE` — visual/UX prototype only.**
+**Status (V4): `PREVIEW_FIXTURE_DATA` / `PREVIEW_SESSION_STATE` /
+`PREVIEW_EVENT_LOG` / `PREVIEW_POLICY_STUBS` / `PREVIEW_UI_PREFERENCE` —
+functional interactive prototype, not a production implementation.**
 
 This is a static, dependency-free, high-fidelity interactive preview of the
 TRIDENTPOS "Salón" (dining room) module: collapsible navigation shell, table
@@ -230,6 +232,74 @@ normalized system-wide away from 700/800 toward the new type scale (mostly
 section of `?scene=design-system` for a live, rendered reference. No UX,
 navigation, layout, spacing, or business logic changed in this revision.
 
+## What's new in V4 (functional Salón operations prototype)
+
+V4 turns the Salón preview from a click-through mockup into a genuinely
+interactive operations console, per the Product Owner's functional mockup
+spec (`TRIDENTPOS | Mockup funcional - Gestión de Salón`, Septiembre 2026).
+**Same visual system as V3/V3-R1 — this is a functional expansion, not a
+redesign.** See
+[`docs/design/TRIDENTPOS_SALON_FUNCTIONAL_PREVIEW_SPEC.md`](../../../docs/design/TRIDENTPOS_SALON_FUNCTIONAL_PREVIEW_SPEC.md)
+for the full classification matrix (which features are `CANONICAL_SUPPORTED`,
+`PREVIEW_ONLY`, `PROTECTED_DECISION`, `FUTURE_MODULE`, or `NOT_IMPLEMENTED`)
+and the explicit statement that **OQ-SSOT-01, OQ-SSOT-02, OQ-SSOT-06, and
+OQ-SSOT-07 remain exactly as open as before** — nothing here resolves them.
+
+Highlights:
+
+- **Full table lifecycle**: Disponible → Abrir mesa → Ocupada → Enviar a
+  cocina → (Atención overlay, independently resolvable) → Solicitar cuenta
+  → Por cobrar → Cobrar (tarjeta/efectivo/transferencia/dividido) →
+  Cuenta cerrada → Mesa liberada → Disponible. Reservations (Reservada →
+  Sentar reservación → Ocupada) are also modeled.
+- **Architectural rule enforced**: a table's visual state is never stored
+  directly — `computeVisualState()` projects it on every render from
+  session/account/attention/reservation fields, exactly like a real
+  read-model would. "Atención" is always an overlay on top of the
+  underlying state, never a replacement for it.
+- **KPI filters + area filters, combinable**, a floor-plan view (with a
+  session-only drag-to-reposition "configuration mode"), sortable/
+  filterable table grid ("solo mis mesas", "mostrar reservaciones").
+- **Global search** (`Cmd/Ctrl+K`) across mesas/cuentas/pedidos/clientes,
+  a real notification center (individually markable as read, never
+  auto-cleared), and a branch selector (Roma Norte/Condesa/Polanco) that
+  simulates a full context reload and warns before discarding an open
+  operation.
+- **Sensitive actions gated by a fixture permission model**
+  (Gerente/Cajero/Mesero, switchable via "Cambiar turno" in the user
+  menu) — discount, cancel account, and force-release all show a real
+  "requires manager authorization" block when the active role lacks the
+  capability.
+- **Protected-decision features are UX-only by design**: Mover mesa,
+  Unir mesas, and Dividir cuenta all work as real interactions but
+  produce explicitly labeled `PREVIEW_TRANSFER_VALIDATION_RESULT` /
+  `PREVIEW_TABLE_MERGE` / `PREVIEW_SPLIT_RESULT` outcomes — none of them
+  invent the actual business rule OQ-SSOT-02/06 are waiting on.
+- **Full audit trail** (`PREVIEW_EVENT_LOG`, browser-memory only) visible
+  per-table or globally via "Ver historial".
+- **Six sidebar destinations** (Pedidos, Cocina/KDS, Caja, Inventario,
+  Clientes, Reportes, Configuración) now show a visually complete
+  "Módulo pendiente de implementación" placeholder naming that module's
+  real future purpose — Salón is the only fully operational module.
+  "Inicio" now really navigates to the (still fixture-only) Dashboard
+  concept preview from V3.
+- **A small demo/alert simulator** (bolt icon in the topbar, clearly
+  labeled "SIMULADOR — PREVIEW") lets the Product Owner trigger attention
+  causes, a check request, a stock alert, or advance a sent order through
+  Preparación/Listo/Servido — this is a manual trigger, not a real rule
+  engine.
+
+30 deterministic QA scenarios are reachable via `?qa=01` … `?qa=30`
+(matching the work order's own numbered list) plus `?qa=menu` — see the
+query-parameter table below.
+
+### A note on scope
+
+`+ Nueva mesa` was deliberately **not** added as an operator action —
+per the source PDF's own recommendation, creating a physical table is a
+Configuración concern; the primary path is clicking a Disponible table
+directly, with `+ Abrir cuenta` as a secondary shortcut.
+
 ## What you can click
 
 - **Zone tabs** (`Todos | Salón | Terraza | Barra | Privado`) filter the
@@ -254,21 +324,38 @@ navigation, layout, spacing, or business logic changed in this revision.
 
 These exist purely so evidence-capture tooling (or you) can jump straight
 to a specific state without manual clicking; none are linked from the UI
-itself:
+itself. **V4 replaced V2/V3's ad-hoc `?scene=table&id=...` /
+`?scene=pos&table=...&demo=1` style params with a single deterministic
+`?qa=NN` scenario list**, matching the functional work order's own
+numbering — the old params are no longer wired up.
 
 | Parameter | Effect |
 |---|---|
 | `?sidebar=collapsed` / `?sidebar=expanded` | Force the sidebar state on load |
-| `?scene=table&id=mesa-3` | Open the account drawer for a given table id |
-| `?scene=table&id=mesa-18&stress=20` | Same, and pad the account to N line items (stress-tests drawer scroll) |
-| `?scene=pos&table=mesa-5` | Enter the product selector for a given table |
-| `?scene=pos&table=mesa-5&demo=1` | ...with 4 sample items pre-added to the ticket |
-| `?scene=pos&table=mesa-5&demoLong=1` | ...with 9 distinct items pre-added (long-ticket scroll test) |
-| `?scene=pos&table=mesa-5&modifier=1` | ...with the Taco Rib Eye modifier modal pre-opened |
-| `?scene=pos&table=mesa-5&search=taco` | ...with the search box pre-filled and applied |
-| `?qaTooltip=disabled` | Force one collapsed-sidebar tooltip visible (headless screenshots can't simulate `:hover`) |
-| `?scene=dashboard` | (V3) Open the Dashboard concept-preview screen (KPI cards, quick insights, operational feed) |
-| `?scene=design-system` | (V3) Open the Design System component-overview screen (color, radius, buttons, badges, KPI card, gauge) |
+| `?scene=dashboard` | Open the Dashboard concept-preview screen (KPI cards, quick insights, operational feed) — now also reachable via the real "Inicio" nav item |
+| `?scene=design-system` | Open the Design System component-overview screen (color, radius, buttons, badges, KPI card, gauge, typography scale) |
+| `?qa=01` … `?qa=30` | Deterministic functional scenarios — see table below |
+| `?qa=menu` | Extra (beyond the required 30): opens the table secondary-action popover for Mesa 03, for the "Secondary menu" evidence screenshot |
+
+### `?qa=` scenario reference
+
+| qa | Scenario | qa | Scenario |
+|---|---|---|---|
+| 01 | Available table (default Salón view) | 16 | Table released (confirms §15's end state) |
+| 02 | Open-table modal (Mesa 01) | 17 | Reservation panel (Mesa 02) |
+| 03 | Newly occupied table (Mesa 02) | 18 | Seat reservation (Mesa 15 → Ocupada) |
+| 04 | Occupied account drawer (Mesa 03) | 19 | Move-table modal (Mesa 03) |
+| 05 | Add products (product selector, Mesa 05) | 20 | Split-bill modal, "Por producto" (Mesa 18) |
+| 06 | Send to kitchen (Mesa 03) | 21 | Change-waiter modal (Mesa 03) |
+| 07 | Attention — time threshold (Mesa 11, fixture) | 22 | Event history modal (global) |
+| 08 | Attention — KDS delay (Mesa 07, triggered) | 23 | Global search, prefilled "mesa 07" |
+| 09 | Resolve attention (Mesa 11) | 24 | Notification center (seeded with 2 alerts) |
+| 10 | Request check (Mesa 03 → Por cobrar) | 25 | Area filter (Terraza) |
+| 11 | To collect (Mesa 14, fixture) | 26 | Status KPI filter (Ocupadas) |
+| 12 | Payment — card (Mesa 14) | 27 | Floor plan view |
+| 13 | Payment — cash (Mesa 14) | 28 | Floor plan configuration mode |
+| 14 | Split payment — card + cash (Mesa 14) | 29 | Role without permission (Mesero) + blocked discount modal (Mesa 03) |
+| 15 | Close account → table released (Mesa 18, full cycle) | 30 | Insight banner |
 
 ## Fixture data summary
 
@@ -306,12 +393,37 @@ actual rendered element rects before fixing, not assumed). Console output
 was checked for JS errors on every scene, including the two new dev-only
 V3 scenes; there are none.
 
+**V4** added the same discipline for a much larger interaction surface: all
+30 `?qa=` scenarios plus both scene helpers were rendered and checked for
+console errors at both 1440×900 and 1024×768 (60 checks total, 0 errors),
+and several scenarios were additionally inspected visually and via direct
+DOM assertions (e.g. confirming Mesa 18 actually carries
+`status-disponible` in the rendered markup after a full open → order →
+pay → close → release cycle, not just "looks right" in a screenshot). Two
+real bugs were found and fixed this round:
+
+1. The table card's new "..." secondary-menu button was absolutely
+   positioned into the same corner as the status badge, overlapping it —
+   fixed by making it a normal flex sibling of the badge instead.
+2. A systemic bug affecting every element toggled via the `hidden`
+   property/attribute: several classes (`.attention-banner`,
+   `.insight-banner`, `.notif-badge`, `.tables-grid`) declare their own
+   `display` value, which has equal CSS specificity to the browser's
+   built-in `[hidden] { display: none }` rule — and since the author rule
+   comes later in the cascade, it silently won, so `hidden = true` had no
+   visual effect. Caught by an actual screenshot (an attention banner
+   stayed visible on a table with no attention) rather than assumed
+   correct. Fixed with a single `[hidden] { display: none !important; }`
+   rule.
+
 V2's real-browser findings (horizontal scrollbar from an `overflow-y`/
 `overflow-x` interaction, a ticket-line text-overflow collision) remain
 fixed and were re-verified as part of this round's screenshot pass.
 
 ## Screenshots
 
-See `screenshots_v3/` in this directory for captured evidence of all
-required V3 screens and breakpoints (the V1 and V2 sets remain in
-`screenshots/` and `screenshots_v2/` for reference/comparison).
+See `screenshots_v4/` in this directory for captured evidence of the
+functional Salón operations prototype (all required scenarios and both
+narrower breakpoints). Earlier rounds remain for reference/comparison:
+`screenshots/` (V1), `screenshots_v2/` (V2), `screenshots_v3/` (V3 visual
+reskin), `screenshots_v3r1/` (V3-R1 typography remediation).
