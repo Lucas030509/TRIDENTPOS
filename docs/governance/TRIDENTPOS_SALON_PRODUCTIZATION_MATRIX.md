@@ -1,10 +1,17 @@
 # TRIDENTPOS — SALÓN PRODUCTIZATION MATRIX (VERIFIED)
 
 **Status:** `PROPOSED — PENDING INDEPENDENT REVIEW / NOT CANONICAL / NOT APPROVED`
-**Companion to:** `ARCHITECTURE_CHANGE_REQUEST_SALON_PRODUCTIZATION.md` (`ACR-2026-015` candidate)
+**Companion to:** `ARCHITECTURE_CHANGE_REQUEST_SALON_PRODUCTIZATION.md` (`ACR-2026-015` candidate, **R1** — superseded subject `7117308df6db9e0a1f9fcb87aa365da541549695` was placed on HOLD by the Coordinator; see that document's Section 0-R1)
 **Derived from:** `TRIDENTPOS_SALON_PRODUCTIZATION_MATRIX_DRAFT.md` (Coordinator/PO input, non-canonical), corrected after independent verification against canonical documents on `main` @ `f655551085dea3cff887a411adec4026842aed07`.
 
 > This is supporting evidence, not an approval record. It does not itself authorize any Work Package, and its classifications are subject to the same independent review as the ACR candidate it supports.
+
+## 0. R1 Changes to This Matrix
+
+Two corrections carried over from the ACR candidate's R1 remediation (full detail in `ARCHITECTURE_CHANGE_REQUEST_SALON_PRODUCTIZATION.md` Section 0-R1):
+
+1. **WP-016 ownership ambiguity is a located, named advisory (`ARCH-ADV-013-01`), not an unlocatable claim.** Section 2 below is updated accordingly — do not read the prior version's "could not be located" framing as current.
+2. **Package placement for `WP-014A`/`WP-016C` is resolved by `ADR-013` §4.2, not deferred to implementation.** Rows below referencing "WP-014A"/"WP-016C" as backend owner now implicitly mean "inside the existing `@trident/pos` domain package," per the ACR candidate's Sections G.6/H.6 — this matrix does not repeat the full package-topology argument, it defers to the ACR candidate as authoritative on that point.
 
 ## 1. Correction Log vs. the Original Draft
 
@@ -24,6 +31,7 @@ Two additional corrections, grounded in canonical documents the original draft d
 - `WP-016B`: DONE/CANONICAL (verified: `evidence/WP-016B_BUILDER_EVIDENCE.md`, merge commit **is** canonical `main` tip)
 - `WP-015`, `WP-016`, `WP-026`: PENDING (verified: no builder evidence file exists for any of the three)
 - `WP-017`: technically unblocked, pending clean restart (verified: dangling non-merged `feature/wp-017-inventory-recipes` branch)
+- `WP-016`'s `Bounded Context: TRIDENTPOS / Finance` label carries an **OPEN, named advisory — `ARCH-ADV-013-01`** (`evidence/ACR-2026-013_R1_PLATFORM_ARCHITECTURE_REVIEW.md`, commit `09f034b3749148ba1fb4a812b01e9f7dc365eb45`): the label must be corrected to `TRIDENTPOS (Downstream Event Consumer: Finance)` prior to `WP-016` START. It does not block this ACR or this matrix (R1 correction — see Section 0 above and ACR Section N.1).
 - Protected PO decisions: `OQ-SSOT-01`, `OQ-SSOT-02`, `OQ-SSOT-06`, `OQ-SSOT-07`, `OQ-ARCH-01` — all confirmed absent from `PRODUCT_DECISIONS.md`, i.e. still open
 
 ## 3. Classification
