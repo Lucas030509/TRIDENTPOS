@@ -1,18 +1,23 @@
 /* ============================================================================
-   TRIDENTPOS — UI Preview 01 — Salón / Mesas / Cuenta
-   PREVIEW_FIXTURE_DATA
+   TRIDENTPOS — UI Preview V2 — Salón / Mesas / Cuenta / Navegación
+   PREVIEW_FIXTURE_DATA / PREVIEW_UI_PREFERENCE
    ----------------------------------------------------------------------------
-   Todo el estado de esta aplicación vive únicamente en memoria del navegador.
-   No hay persistencia, no hay red, no hay backend, no hay PostgreSQL/SQLite.
+   Todo el estado de esta aplicación vive únicamente en memoria/localStorage
+   del navegador. No hay red, no hay backend, no hay PostgreSQL/SQLite.
    Los cálculos de IVA/Total son aritmética de presentación (2 decimales) para
    fines de maqueta visual — NO son el motor financiero autoritativo de
    TRIDENTPOS (ver ADR-012, roundDiv, Money en bigint scale4).
+   El selector de modificadores es únicamente una demostración UX: no fija
+   reglas canónicas ni resuelve OQ-SSOT-07 (ModifierRecipeResolver).
+   El único dato persistido en localStorage es la preferencia visual del
+   sidebar (expandido/colapsado) — no es una preferencia de usuario real.
    ============================================================================ */
 
 (function () {
   "use strict";
 
   var TAX_RATE = 0.16;
+  var SIDEBAR_PREF_KEY = "tridentpos_preview_sidebar_v1"; // PREVIEW_UI_PREFERENCE
 
   /* ---------------------------------------------------------------------
      FIXTURE DATA — PREVIEW_FIXTURE_DATA
@@ -55,7 +60,47 @@
 
   var CATEGORIES = ["Entradas", "Tacos", "Platos", "Bebidas", "Postres"];
 
+  var FAVORITE_IDS = ["p06", "p18", "p07", "p24", "p20", "p12"];
+
   var ZONES = ["Salón Principal", "Terraza", "Barra", "Privado"];
+
+  /**
+   * Modifier demo — UX PREVIEW ONLY. Deliberately limited to one product
+   * family so this stays a demonstration, not a canonical modifier engine.
+   */
+  var MODIFIER_PRODUCTS = {
+    p06: {
+      groups: [
+        {
+          key: "termino",
+          label: "Término",
+          type: "radio",
+          options: [
+            { id: "medio", label: "Medio" },
+            { id: "34", label: "3/4" },
+            { id: "bien", label: "Bien cocido" }
+          ]
+        },
+        {
+          key: "extras",
+          label: "Extras",
+          type: "checkbox",
+          kind: "add",
+          options: [
+            { id: "aguacate", label: "Aguacate" },
+            { id: "queso", label: "Queso" }
+          ]
+        },
+        {
+          key: "quitar",
+          label: "Quitar",
+          type: "checkbox",
+          kind: "remove",
+          options: [{ id: "cebolla", label: "Sin cebolla" }]
+        }
+      ]
+    }
+  };
 
   function minutesAgo(min) {
     return Date.now() - min * 60 * 1000;
@@ -70,12 +115,6 @@
     return account.lines.reduce(function (sum, l) { return sum + lineSubtotal(l); }, 0);
   }
 
-  /**
-   * Tables. Only tables with `account` are occupied/atencion/por_cobrar.
-   * Every displayed subtotal/IVA/total is derived directly from each
-   * account's `lines` — there is no independent override, so the itemized
-   * partidas and the financial summary can never disagree.
-   */
   var TABLES = [
     // Salón Principal
     tbl(1, "Salón Principal", 4, "disponible"),
@@ -204,9 +243,17 @@
   var state = {
     zone: "todos",
     activeTableId: null,
-    posCategory: CATEGORIES[0],
-    posTicket: [] // { productId, qty }
+    posCategory: "Favoritos",
+    posSearch: "",
+    posTicket: [], // { lineId, productId, qty, modsKey, modsLabel }
+    modifier: null // { productId, selections } while modal is open
   };
+
+  var lineIdCounter = 0;
+  function nextLineId() {
+    lineIdCounter += 1;
+    return "tl" + lineIdCounter;
+  }
 
   /* ---------------------------------------------------------------------
      HELPERS
@@ -265,12 +312,59 @@
 
   function toast(msg) {
     var el = document.getElementById("toast");
-    el.textContent = msg + " — vista previa visual, sin lógica de negocio";
+    el.textContent = msg;
     el.classList.add("visible");
     clearTimeout(toast._t);
     toast._t = setTimeout(function () {
       el.classList.remove("visible");
     }, 2200);
+  }
+
+  /* ---------------------------------------------------------------------
+     SIDEBAR — expand / collapse — PREVIEW_UI_PREFERENCE
+     --------------------------------------------------------------------- */
+
+  function readSidebarPreference() {
+    try {
+      return window.localStorage.getItem(SIDEBAR_PREF_KEY);
+    } catch (e) {
+      return null; // localStorage unavailable (private mode, etc.) — fail soft
+    }
+  }
+
+  function writeSidebarPreference(value) {
+    try {
+      window.localStorage.setItem(SIDEBAR_PREF_KEY, value);
+    } catch (e) {
+      // Ignore — this is a cosmetic preview preference, not business state.
+    }
+  }
+
+  function applySidebarState(collapsed) {
+    var sidebar = document.getElementById("sidebar");
+    sidebar.classList.toggle("collapsed", collapsed);
+    var toggle = document.getElementById("sidebar-toggle");
+    toggle.setAttribute("data-tooltip", collapsed ? "Expandir" : "Colapsar");
+    toggle.querySelector(".nav-label").textContent = collapsed ? "Expandir" : "Colapsar";
+  }
+
+  function initSidebar() {
+    var stored = readSidebarPreference();
+    var collapsed;
+    if (stored === "collapsed" || stored === "expanded") {
+      collapsed = stored === "collapsed";
+    } else {
+      // No stored preference yet: default by viewport, per spec section 7.
+      collapsed = window.innerWidth <= 1280;
+    }
+    applySidebarState(collapsed);
+
+    document.getElementById("sidebar-toggle").addEventListener("click", function () {
+      var isCollapsed = document.getElementById("sidebar").classList.contains("collapsed");
+      var next = !isCollapsed;
+      applySidebarState(next);
+      writeSidebarPreference(next ? "collapsed" : "expanded");
+    });
   }
 
   /* ---------------------------------------------------------------------
@@ -286,9 +380,7 @@
     grid.innerHTML = visible
       .map(function (t) {
         var isAvailable = t.status === "disponible";
-        var total = t.account
-          ? accountSubtotal(t.account) * (1 + TAX_RATE)
-          : 0;
+        var total = t.account ? accountSubtotal(t.account) * (1 + TAX_RATE) : 0;
 
         var timeBlock = "";
         var waiterBlock = "";
@@ -298,11 +390,11 @@
           timeBlock = '<div class="table-available-label">Lista para recibir</div>';
         } else {
           var mins = Math.max(0, Math.round((Date.now() - t.account.openedAt) / 60000));
-          var warn = mins >= 45 ? " time-warn" : "";
+          var timeClass = mins >= 60 ? " time-critical" : mins >= 45 ? " time-warn" : "";
           waiterBlock = '<div class="table-waiter">' + escapeHtml(t.waiter) + "</div>";
           timeBlock =
             '<div class="table-time' +
-            warn +
+            timeClass +
             '"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>' +
             elapsedLabel(t.account.openedAt) +
             "</div>";
@@ -316,9 +408,12 @@
             "</div>";
         }
 
+        var selected = t.id === state.activeTableId ? " selected" : "";
+
         return (
           '<button class="table-card status-' +
           t.status +
+          selected +
           '" data-table-id="' +
           t.id +
           '">' +
@@ -363,6 +458,7 @@
   function openAccountPanel(tableId) {
     state.activeTableId = tableId;
     renderAccountPanel();
+    renderTablesGrid(); // reflect .selected state on the floor behind the drawer
     document.getElementById("account-panel").classList.add("open");
     document.getElementById("backdrop").classList.add("visible");
   }
@@ -370,6 +466,8 @@
   function closeAccountPanel() {
     document.getElementById("account-panel").classList.remove("open");
     document.getElementById("backdrop").classList.remove("visible");
+    state.activeTableId = null;
+    renderTablesGrid();
   }
 
   function renderAccountPanel() {
@@ -407,8 +505,13 @@
       metaItem("Folio", t.account.folio) +
       metaItem("Estado", statusLabel(t.status));
 
+    var linesCountLabel =
+      "(" + t.account.lines.length + (t.account.lines.length === 1 ? " partida)" : " partidas)");
+
     bodyEl.innerHTML =
-      '<div class="account-section"><h3>Partidas</h3><div class="order-lines" id="order-lines">' +
+      '<div class="account-section"><h3>Partidas <span class="order-lines-count">' +
+      linesCountLabel +
+      '</span></h3><div class="order-lines" id="order-lines">' +
       t.account.lines
         .map(function (line) {
           var mods = line.mods
@@ -467,7 +570,7 @@
   function bindToastButtons(container) {
     Array.prototype.forEach.call(container.querySelectorAll("[data-toast]"), function (btn) {
       btn.addEventListener("click", function () {
-        toast(btn.getAttribute("data-toast"));
+        toast(btn.getAttribute("data-toast") + " — vista previa visual, sin lógica de negocio");
       });
     });
   }
@@ -478,11 +581,14 @@
 
   function enterPosMode(table) {
     state.posTicket = [];
-    state.posCategory = CATEGORIES[0];
+    state.posCategory = "Favoritos";
+    state.posSearch = "";
+    document.getElementById("product-search").value = "";
     closeAccountPanel();
     switchView("pos");
     document.getElementById("pos-context-label").textContent =
       "Mesa " + String(table.number).padStart(2, "0") + " · " + table.waiter;
+    state.activeTableId = table.id; // keep context without opening the drawer
     renderCategoryTabs();
     renderProductGrid();
     renderTicket();
@@ -490,8 +596,11 @@
 
   function exitPosMode(reopenAccount) {
     switchView("salon");
+    closeModifierModal();
     if (reopenAccount && state.activeTableId) {
       openAccountPanel(state.activeTableId);
+    } else {
+      state.activeTableId = null;
     }
   }
 
@@ -500,15 +609,24 @@
       v.classList.remove("active");
     });
     document.getElementById("view-" + name).classList.add("active");
-    Array.prototype.forEach.call(document.querySelectorAll(".nav-item"), function (n) {
-      n.classList.toggle("active", n.getAttribute("data-nav") === name);
+    // "pos" (product selector) is a sub-mode of "salon", not a separate
+    // top-level section, so it keeps the Salón sidebar item highlighted.
+    var navName = name === "pos" ? "salon" : name;
+    Array.prototype.forEach.call(document.querySelectorAll(".nav-item[data-nav]"), function (n) {
+      n.classList.toggle("active", n.getAttribute("data-nav") === navName);
     });
   }
 
   function renderCategoryTabs() {
     var el = document.getElementById("category-tabs");
-    el.innerHTML = CATEGORIES.map(function (c) {
-      return (
+    var favIcon = '<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M12 2l3.1 6.3 6.9 1-5 4.9 1.2 6.9L12 17.8 5.8 21.1 7 14.2l-5-4.9 6.9-1L12 2z"/></svg>';
+
+    var chips = ['<button class="chip chip-favorite' +
+      (state.posCategory === "Favoritos" ? " active" : "") +
+      '" data-cat="Favoritos">' + favIcon + "Favoritos</button>"];
+
+    CATEGORIES.forEach(function (c) {
+      chips.push(
         '<button class="chip' +
         (c === state.posCategory ? " active" : "") +
         '" data-cat="' +
@@ -517,10 +635,14 @@
         c +
         "</button>"
       );
-    }).join("");
+    });
+
+    el.innerHTML = chips.join("");
     Array.prototype.forEach.call(el.querySelectorAll(".chip"), function (chip) {
       chip.addEventListener("click", function () {
         state.posCategory = chip.getAttribute("data-cat");
+        state.posSearch = "";
+        document.getElementById("product-search").value = "";
         renderCategoryTabs();
         renderProductGrid();
       });
@@ -535,15 +657,47 @@
     Postres: "🍰"
   };
 
+  function currentProductQtyInTicket(productId) {
+    return state.posTicket
+      .filter(function (l) { return l.productId === productId; })
+      .reduce(function (s, l) { return s + l.qty; }, 0);
+  }
+
+  function visibleProducts() {
+    var q = state.posSearch.trim().toLowerCase();
+    if (q) {
+      return MENU.filter(function (p) {
+        return p.name.toLowerCase().indexOf(q) !== -1 || p.cat.toLowerCase().indexOf(q) !== -1;
+      });
+    }
+    if (state.posCategory === "Favoritos") {
+      return FAVORITE_IDS.map(function (id) { return MENU.find(function (m) { return m.id === id; }); });
+    }
+    return MENU.filter(function (p) { return p.cat === state.posCategory; });
+  }
+
   function renderProductGrid() {
     var grid = document.getElementById("product-grid");
-    var items = MENU.filter(function (p) { return p.cat === state.posCategory; });
+    var items = visibleProducts();
+
+    if (items.length === 0) {
+      grid.innerHTML = '<div class="pos-search-empty">Sin resultados para tu búsqueda.</div>';
+      return;
+    }
+
     grid.innerHTML = items
       .map(function (p) {
+        var qty = currentProductQtyInTicket(p.id);
+        var badge = qty > 0 ? '<span class="product-card-qty-badge">' + qty + "</span>" : "";
         return (
           '<button class="product-card" data-product-id="' +
           p.id +
-          '"><div class="product-thumb">' +
+          '">' +
+          badge +
+          '<span class="product-card-plus1" id="plus1-' +
+          p.id +
+          '">+1</span>' +
+          '<div class="product-thumb">' +
           PRODUCT_ICONS[p.cat] +
           '</div><div class="product-name">' +
           escapeHtml(p.name) +
@@ -553,52 +707,105 @@
         );
       })
       .join("");
+
     Array.prototype.forEach.call(grid.querySelectorAll(".product-card"), function (card) {
       card.addEventListener("click", function () {
-        addToTicket(card.getAttribute("data-product-id"));
+        var pid = card.getAttribute("data-product-id");
+        productCardFeedback(card, pid);
+        if (MODIFIER_PRODUCTS[pid]) {
+          openModifierModal(pid);
+        } else {
+          addPlainToTicket(pid);
+        }
       });
     });
   }
 
-  function addToTicket(productId) {
-    var existing = state.posTicket.find(function (l) { return l.productId === productId; });
+  function productCardFeedback(card, productId) {
+    card.classList.remove("pulse");
+    // Force reflow so the animation can restart on rapid repeat clicks.
+    void card.offsetWidth;
+    card.classList.add("pulse");
+
+    var plus1 = document.getElementById("plus1-" + productId);
+    if (plus1) {
+      plus1.classList.remove("show");
+      void plus1.offsetWidth;
+      plus1.classList.add("show");
+    }
+  }
+
+  /* ---------------------------------------------------------------------
+     TICKET — line model: { lineId, productId, qty, modsKey, modsLabel }
+     --------------------------------------------------------------------- */
+
+  function addPlainToTicket(productId) {
+    var existing = state.posTicket.find(function (l) {
+      return l.productId === productId && l.modsKey === "";
+    });
     if (existing) {
       existing.qty += 1;
     } else {
-      state.posTicket.push({ productId: productId, qty: 1 });
+      state.posTicket.push({ lineId: nextLineId(), productId: productId, qty: 1, modsKey: "", modsLabel: [] });
     }
     renderTicket();
+    renderProductGrid();
   }
 
-  function changeTicketQty(productId, delta) {
-    var line = state.posTicket.find(function (l) { return l.productId === productId; });
+  function addModifiedToTicket(productId, modsKey, modsLabel) {
+    var existing = state.posTicket.find(function (l) {
+      return l.productId === productId && l.modsKey === modsKey;
+    });
+    if (existing) {
+      existing.qty += 1;
+    } else {
+      state.posTicket.push({
+        lineId: nextLineId(),
+        productId: productId,
+        qty: 1,
+        modsKey: modsKey,
+        modsLabel: modsLabel
+      });
+    }
+    renderTicket();
+    renderProductGrid();
+  }
+
+  function changeTicketQty(lineId, delta) {
+    var line = state.posTicket.find(function (l) { return l.lineId === lineId; });
     if (!line) return;
     line.qty += delta;
     if (line.qty <= 0) {
-      state.posTicket = state.posTicket.filter(function (l) { return l.productId !== productId; });
+      state.posTicket = state.posTicket.filter(function (l) { return l.lineId !== lineId; });
     }
     renderTicket();
+    renderProductGrid();
   }
 
-  function removeTicketLine(productId) {
-    state.posTicket = state.posTicket.filter(function (l) { return l.productId !== productId; });
+  function removeTicketLine(lineId) {
+    state.posTicket = state.posTicket.filter(function (l) { return l.lineId !== lineId; });
     renderTicket();
+    renderProductGrid();
   }
 
   function renderTicket() {
     var itemsEl = document.getElementById("ticket-items");
-    var emptyState = state.posTicket.length === 0;
 
-    if (emptyState) {
+    if (state.posTicket.length === 0) {
       itemsEl.innerHTML =
         '<div class="ticket-empty" id="ticket-empty">Selecciona productos del menú para agregarlos al ticket.</div>';
     } else {
       itemsEl.innerHTML = state.posTicket
         .map(function (line) {
           var p = MENU.find(function (m) { return m.id === line.productId; });
+          var modsHtml = line.modsLabel.length
+            ? '<div class="ticket-line-mods">' +
+              line.modsLabel.map(function (m) { return escapeHtml(m); }).join(" · ") +
+              "</div>"
+            : "";
           return (
-            '<div class="ticket-line" data-product-id="' +
-            p.id +
+            '<div class="ticket-line" data-line-id="' +
+            line.lineId +
             '">' +
             '<div class="qty-stepper"><button data-action="dec">−</button><span>' +
             line.qty +
@@ -607,7 +814,9 @@
             escapeHtml(p.name) +
             '</div><div class="ticket-line-price">' +
             fmtMoney(p.price) +
-            " c/u</div></div>" +
+            " c/u</div>" +
+            modsHtml +
+            "</div>" +
             '<div class="ticket-line-subtotal">' +
             fmtMoney(p.price * line.qty) +
             "</div>" +
@@ -618,15 +827,15 @@
         .join("");
 
       Array.prototype.forEach.call(itemsEl.querySelectorAll(".ticket-line"), function (row) {
-        var pid = row.getAttribute("data-product-id");
+        var lid = row.getAttribute("data-line-id");
         row.querySelector('[data-action="inc"]').addEventListener("click", function () {
-          changeTicketQty(pid, 1);
+          changeTicketQty(lid, 1);
         });
         row.querySelector('[data-action="dec"]').addEventListener("click", function () {
-          changeTicketQty(pid, -1);
+          changeTicketQty(lid, -1);
         });
         row.querySelector('[data-action="remove"]').addEventListener("click", function () {
-          removeTicketLine(pid);
+          removeTicketLine(lid);
         });
       });
     }
@@ -661,12 +870,16 @@
 
     state.posTicket.forEach(function (line) {
       var p = MENU.find(function (m) { return m.id === line.productId; });
+      var mods = line.modsLabel.map(function (label) {
+        // Removal-style labels start with "Sin " by convention in this fixture set.
+        return { t: /^sin\s/i.test(label) ? "remove" : "add", label: label };
+      });
       t.account.lines.push({
         id: "l" + Date.now() + Math.random().toString(16).slice(2, 6),
         name: p.name,
         qty: line.qty,
         unitPrice: p.price,
-        mods: []
+        mods: mods
       });
     });
 
@@ -674,6 +887,171 @@
     toast("Productos agregados a la cuenta");
     exitPosMode(true);
     renderTablesGrid();
+  }
+
+  /* ---------------------------------------------------------------------
+     MODIFIER MODAL — UX PREVIEW ONLY
+     --------------------------------------------------------------------- */
+
+  function openModifierModal(productId) {
+    var p = MENU.find(function (m) { return m.id === productId; });
+    var def = MODIFIER_PRODUCTS[productId];
+    if (!p || !def) return;
+
+    var selections = {};
+    def.groups.forEach(function (g) {
+      selections[g.key] = g.type === "radio" ? g.options[0].id : [];
+    });
+    state.modifier = { productId: productId, selections: selections };
+
+    document.getElementById("modifier-product-name").textContent = p.name;
+    renderModifierBody();
+
+    document.getElementById("modifier-backdrop").classList.add("visible");
+    document.getElementById("modifier-modal").classList.add("open");
+  }
+
+  function closeModifierModal() {
+    state.modifier = null;
+    document.getElementById("modifier-backdrop").classList.remove("visible");
+    document.getElementById("modifier-modal").classList.remove("open");
+  }
+
+  function renderModifierBody() {
+    var def = MODIFIER_PRODUCTS[state.modifier.productId];
+    var body = document.getElementById("modifier-modal-body");
+
+    body.innerHTML = def.groups
+      .map(function (g) {
+        var options = g.options
+          .map(function (opt) {
+            var inputType = g.type === "radio" ? "radio" : "checkbox";
+            var name = "modgroup-" + g.key;
+            var checked =
+              g.type === "radio"
+                ? state.modifier.selections[g.key] === opt.id
+                : state.modifier.selections[g.key].indexOf(opt.id) !== -1;
+            return (
+              '<div class="modifier-option"><input type="' +
+              inputType +
+              '" id="modopt-' +
+              opt.id +
+              '" name="' +
+              name +
+              '" data-group="' +
+              g.key +
+              '" data-option="' +
+              opt.id +
+              '"' +
+              (checked ? " checked" : "") +
+              ' /><label for="modopt-' +
+              opt.id +
+              '">' +
+              escapeHtml(opt.label) +
+              "</label></div>"
+            );
+          })
+          .join("");
+        return '<div class="modifier-group"><h4>' + escapeHtml(g.label) + "</h4>" + options + "</div>";
+      })
+      .join("");
+
+    Array.prototype.forEach.call(body.querySelectorAll("input"), function (input) {
+      input.addEventListener("change", function () {
+        var groupKey = input.getAttribute("data-group");
+        var optionId = input.getAttribute("data-option");
+        var group = def.groups.find(function (g) { return g.key === groupKey; });
+        if (group.type === "radio") {
+          state.modifier.selections[groupKey] = optionId;
+        } else {
+          var arr = state.modifier.selections[groupKey];
+          var idx = arr.indexOf(optionId);
+          if (input.checked && idx === -1) arr.push(optionId);
+          if (!input.checked && idx !== -1) arr.splice(idx, 1);
+        }
+      });
+    });
+  }
+
+  function confirmModifierSelection() {
+    if (!state.modifier) return;
+    var productId = state.modifier.productId;
+    var def = MODIFIER_PRODUCTS[productId];
+    var selections = state.modifier.selections;
+
+    var labels = [];
+    var keyParts = [];
+    def.groups.forEach(function (g) {
+      if (g.type === "radio") {
+        var opt = g.options.find(function (o) { return o.id === selections[g.key]; });
+        if (opt) {
+          labels.push(opt.label);
+          keyParts.push(g.key + ":" + opt.id);
+        }
+      } else {
+        var ids = selections[g.key].slice().sort();
+        ids.forEach(function (id) {
+          var o = g.options.find(function (x) { return x.id === id; });
+          if (o) labels.push(g.kind === "remove" ? "Sin " + o.label : o.label);
+        });
+        keyParts.push(g.key + ":" + ids.join(","));
+      }
+    });
+
+    addModifiedToTicket(productId, keyParts.join("|"), labels);
+    closeModifierModal();
+
+    var p = MENU.find(function (m) { return m.id === productId; });
+    toast("Agregado: " + p.name + (labels.length ? " (" + labels.join(", ") + ")" : ""));
+  }
+
+  /* ---------------------------------------------------------------------
+     SEARCH
+     --------------------------------------------------------------------- */
+
+  function initSearch() {
+    var input = document.getElementById("product-search");
+    input.addEventListener("input", function () {
+      state.posSearch = input.value;
+      if (state.posSearch.trim()) {
+        Array.prototype.forEach.call(document.querySelectorAll("#category-tabs .chip"), function (c) {
+          c.classList.remove("active");
+        });
+      } else {
+        renderCategoryTabs();
+      }
+      renderProductGrid();
+    });
+  }
+
+  /* ---------------------------------------------------------------------
+     KEYBOARD SHORTCUTS — preview only
+     --------------------------------------------------------------------- */
+
+  function initKeyboard() {
+    document.addEventListener("keydown", function (e) {
+      var tag = (document.activeElement && document.activeElement.tagName) || "";
+      var typing = tag === "INPUT" || tag === "TEXTAREA";
+
+      var isCmdK = (e.metaKey || e.ctrlKey) && (e.key === "k" || e.key === "K");
+      var isSlash = e.key === "/" && !typing;
+
+      if ((isCmdK || isSlash) && document.getElementById("view-pos").classList.contains("active")) {
+        e.preventDefault();
+        document.getElementById("product-search").focus();
+        return;
+      }
+
+      if (e.key === "Escape") {
+        if (document.getElementById("modifier-modal").classList.contains("open")) {
+          closeModifierModal();
+          return;
+        }
+        if (document.getElementById("account-panel").classList.contains("open")) {
+          closeAccountPanel();
+        }
+      }
+    });
   }
 
   /* ---------------------------------------------------------------------
@@ -692,6 +1070,10 @@
      --------------------------------------------------------------------- */
 
   function init() {
+    initSidebar();
+    initSearch();
+    initKeyboard();
+
     // Zone tabs
     Array.prototype.forEach.call(document.querySelectorAll("#zone-tabs .chip"), function (chip) {
       chip.addEventListener("click", function () {
@@ -704,8 +1086,8 @@
       });
     });
 
-    // Sidebar nav (only Salón is functional)
-    Array.prototype.forEach.call(document.querySelectorAll(".sidebar .nav-item"), function (item) {
+    // Sidebar nav (only Salón is functional; toggle handled separately)
+    Array.prototype.forEach.call(document.querySelectorAll(".sidebar .nav-item[data-nav]"), function (item) {
       item.addEventListener("click", function () {
         var target = item.getAttribute("data-nav");
         if (target === "disabled") {
@@ -724,6 +1106,11 @@
     });
     document.getElementById("btn-add-to-account").addEventListener("click", commitTicketToAccount);
 
+    document.getElementById("btn-close-modifier").addEventListener("click", closeModifierModal);
+    document.getElementById("btn-modifier-cancel").addEventListener("click", closeModifierModal);
+    document.getElementById("btn-modifier-add").addEventListener("click", confirmModifierSelection);
+    document.getElementById("modifier-backdrop").addEventListener("click", closeModifierModal);
+
     renderTablesGrid();
     tickClock();
     setInterval(tickClock, 15000);
@@ -735,25 +1122,72 @@
   /**
    * Screenshot/demo helper ONLY — lets evidence-capture tooling jump straight
    * to a specific screen via a URL query string, e.g.:
-   *   index.html?scene=table&id=mesa-03
-   *   index.html?scene=pos&table=mesa-05&demo=1
+   *   index.html?scene=table&id=mesa-3
+   *   index.html?scene=table&id=mesa-18&stress=20
+   *   index.html?scene=pos&table=mesa-5&demo=1
+   *   index.html?scene=pos&table=mesa-5&modifier=1
    * Not part of the product UX, not linked from anywhere in the UI itself.
    */
   function applyScreenshotScene() {
     var params = new URLSearchParams(window.location.search);
     var scene = params.get("scene");
+
+    var sidebarOverride = params.get("sidebar");
+    if (sidebarOverride === "collapsed" || sidebarOverride === "expanded") {
+      applySidebarState(sidebarOverride === "collapsed");
+    }
+
+    var qaTooltip = params.get("qaTooltip");
+    if (qaTooltip) {
+      var navBtn = document.querySelector('.nav-item[data-nav="' + qaTooltip + '"]');
+      if (navBtn) navBtn.classList.add("qa-force-tooltip");
+    }
+
     if (scene === "table") {
       var id = params.get("id");
-      if (findTable(id)) openAccountPanel(id);
+      var t = findTable(id);
+      if (!t) return;
+
+      var stress = parseInt(params.get("stress") || "0", 10);
+      if (stress > 0 && t.account) {
+        var sample = MENU.slice(0, 8);
+        var i = 0;
+        while (t.account.lines.length < stress) {
+          var p = sample[i % sample.length];
+          t.account.lines.push({
+            id: "stress" + i,
+            name: p.name,
+            qty: 1 + (i % 3),
+            unitPrice: p.price,
+            mods: []
+          });
+          i++;
+        }
+      }
+      openAccountPanel(id);
     } else if (scene === "pos") {
-      var t = findTable(params.get("table")) || TABLES.find(function (x) { return x.account; });
-      state.activeTableId = t.id;
-      enterPosMode(t);
+      var table = findTable(params.get("table")) || TABLES.find(function (x) { return x.account; });
+      state.activeTableId = table.id;
+      enterPosMode(table);
       if (params.get("demo") === "1") {
-        addToTicket("p06"); // Taco Rib Eye
-        addToTicket("p06");
-        addToTicket("p18"); // Agua Mineral
-        addToTicket("p24"); // Cheesecake
+        addPlainToTicket("p06");
+        addPlainToTicket("p06");
+        addPlainToTicket("p18");
+        addPlainToTicket("p24");
+      }
+      if (params.get("demoLong") === "1") {
+        ["p01", "p06", "p07", "p12", "p14", "p18", "p20", "p24", "p26"].forEach(function (id) {
+          addPlainToTicket(id);
+        });
+      }
+      if (params.get("modifier") === "1") {
+        openModifierModal("p06");
+      }
+      var searchQuery = params.get("search");
+      if (searchQuery) {
+        var input = document.getElementById("product-search");
+        input.value = searchQuery;
+        input.dispatchEvent(new Event("input"));
       }
     }
   }

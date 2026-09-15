@@ -8,11 +8,13 @@
 </head>
 <body>
 <!--
-  PREVIEW_FIXTURE_DATA
-  Este archivo es un PREVIEW VISUAL de UI/UX para TRIDENTPOS.
-  Todos los datos (mesas, cuentas, productos, totales) son ficticios,
-  viven únicamente en memoria del navegador, y NO representan datos
-  canónicos ni cálculos financieros autoritativos.
+  PREVIEW_FIXTURE_DATA / PREVIEW_UI_PREFERENCE
+  Este archivo es un PREVIEW VISUAL de UI/UX para TRIDENTPOS (V2).
+  Todos los datos (mesas, cuentas, productos, totales, modificadores) son
+  ficticios, viven únicamente en memoria/localStorage del navegador, y NO
+  representan datos canónicos, cálculos financieros autoritativos, ni
+  reglas de negocio (incluyendo el selector de modificadores, que es
+  únicamente una demostración UX — no resuelve OQ-SSOT-07).
   No modifica backend, base de datos, ni dominios de negocio.
 -->
 
@@ -26,44 +28,50 @@
     </div>
 
     <nav class="sidebar-nav">
-      <button class="nav-item active" data-nav="salon" title="Salón">
+      <button class="nav-item active" data-nav="salon" title="Salón" data-tooltip="Salón">
         <span class="nav-icon">
           <svg viewBox="0 0 24 24"><path d="M3 10h18M3 10v9a1 1 0 0 0 1 1h4v-6h8v6h4a1 1 0 0 0 1-1v-9M3 10l2.5-6h13L21 10"/></svg>
         </span>
         <span class="nav-label">Salón</span>
       </button>
-      <button class="nav-item" data-nav="disabled" title="Órdenes">
+      <button class="nav-item" data-nav="disabled" title="Órdenes" data-tooltip="Órdenes">
         <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M9 4h6a2 2 0 0 1 2 2v14l-5-3-5 3V6a2 2 0 0 1 2-2Z"/></svg></span>
         <span class="nav-label">Órdenes</span>
       </button>
-      <button class="nav-item" data-nav="disabled" title="KDS">
+      <button class="nav-item" data-nav="disabled" title="KDS" data-tooltip="KDS">
         <span class="nav-icon"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg></span>
         <span class="nav-label">KDS</span>
       </button>
-      <button class="nav-item" data-nav="disabled" title="Caja">
+      <button class="nav-item" data-nav="disabled" title="Caja" data-tooltip="Caja">
         <span class="nav-icon"><svg viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="13" rx="2"/><path d="M2 11h20M7 15h3"/></svg></span>
         <span class="nav-label">Caja</span>
       </button>
-      <button class="nav-item" data-nav="disabled" title="Inventario">
+      <button class="nav-item" data-nav="disabled" title="Inventario" data-tooltip="Inventario">
         <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M21 8 12 3 3 8m18 0-9 5m9-5v9l-9 5m0-9L3 8m9 5v9M3 8v9l9 5"/></svg></span>
         <span class="nav-label">Inventario</span>
       </button>
-      <button class="nav-item" data-nav="disabled" title="Compras">
+      <button class="nav-item" data-nav="disabled" title="Compras" data-tooltip="Compras">
         <span class="nav-icon"><svg viewBox="0 0 24 24"><circle cx="9" cy="21" r="1"/><circle cx="19" cy="21" r="1"/><path d="M2.5 3h2l2.6 12.4a2 2 0 0 0 2 1.6h8.4a2 2 0 0 0 2-1.6L21 8H6"/></svg></span>
         <span class="nav-label">Compras</span>
       </button>
-      <button class="nav-item" data-nav="disabled" title="Clientes">
+      <button class="nav-item" data-nav="disabled" title="Clientes" data-tooltip="Clientes">
         <span class="nav-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-8 8-8s8 3.6 8 8"/></svg></span>
         <span class="nav-label">Clientes</span>
       </button>
-      <button class="nav-item" data-nav="disabled" title="Reportes">
+      <button class="nav-item" data-nav="disabled" title="Reportes" data-tooltip="Reportes">
         <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M4 19h16M8 19V9m4 10V5m4 14v-7"/></svg></span>
         <span class="nav-label">Reportes</span>
       </button>
     </nav>
 
     <div class="sidebar-footer">
-      <button class="nav-item" data-nav="disabled" title="Configuración">
+      <button class="nav-item sidebar-toggle" id="sidebar-toggle" title="Colapsar menú" data-tooltip="Expandir">
+        <span class="nav-icon nav-icon-toggle">
+          <svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg>
+        </span>
+        <span class="nav-label">Colapsar</span>
+      </button>
+      <button class="nav-item" data-nav="disabled" title="Configuración" data-tooltip="Configuración">
         <span class="nav-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9c.2.6.7 1 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/></svg></span>
         <span class="nav-label">Configuración</span>
       </button>
@@ -144,6 +152,13 @@
 
         <div class="pos-body">
           <div class="pos-catalog">
+
+            <div class="pos-search">
+              <svg class="pos-search-icon" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+              <input type="text" id="product-search" class="pos-search-input" placeholder="Buscar producto..." autocomplete="off" />
+              <kbd class="pos-search-kbd" id="pos-search-kbd">/</kbd>
+            </div>
+
             <div class="category-tabs" id="category-tabs"><!-- rendered by app.js --></div>
             <div class="product-grid" id="product-grid"><!-- rendered by app.js --></div>
           </div>
@@ -242,6 +257,25 @@
       </button>
     </div>
   </aside>
+
+  <!-- MODIFIER MODAL — UX PREVIEW ONLY (no canonical modifier rules; does not resolve OQ-SSOT-07) -->
+  <div class="modal-backdrop" id="modifier-backdrop"></div>
+  <div class="modifier-modal" id="modifier-modal" role="dialog" aria-modal="true" aria-labelledby="modifier-product-name">
+    <div class="modifier-modal-header">
+      <div>
+        <p class="account-eyebrow">Personalizar</p>
+        <h3 id="modifier-product-name">Producto</h3>
+      </div>
+      <button class="icon-btn" id="btn-close-modifier" title="Cerrar">
+        <svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="modifier-modal-body" id="modifier-modal-body"><!-- rendered by app.js --></div>
+    <div class="modifier-modal-actions">
+      <button class="btn-secondary" id="btn-modifier-cancel">Cancelar</button>
+      <button class="btn-primary" id="btn-modifier-add">Agregar</button>
+    </div>
+  </div>
 
 </div>
 

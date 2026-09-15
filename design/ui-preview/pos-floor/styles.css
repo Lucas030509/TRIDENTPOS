@@ -64,11 +64,21 @@
   --r-lg: 16px;
   --r-xl: 20px;
 
-  /* ---- Layout ---- */
-  --sidebar-w: 220px;
-  --sidebar-w-collapsed: 76px;
-  --panel-w: 420px;
-  --topbar-h: 68px;
+  /* ---- Layout (Design Tokens — consolidated for future Design System) ---- */
+  --sidebar-expanded-width: 220px;
+  --sidebar-collapsed-width: 72px;
+  --header-height: 68px;
+  --drawer-width: 420px;
+  --ticket-width: 380px;
+  --touch-target-min: 44px;
+
+  /* ---- Semantic aliases ---- */
+  --accent: var(--accent-500);
+  --surface: var(--gray-0);
+  --border: var(--gray-200);
+
+  /* ---- Transitions ---- */
+  --transition-sidebar: 200ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 * { box-sizing: border-box; }
@@ -115,7 +125,7 @@ svg {
 /* ---- Sidebar ---- */
 
 .sidebar {
-  width: var(--sidebar-w);
+  width: var(--sidebar-expanded-width);
   flex-shrink: 0;
   background: linear-gradient(180deg, var(--navy-900), var(--navy-800));
   color: #cdd6e6;
@@ -123,6 +133,33 @@ svg {
   flex-direction: column;
   padding: 18px 12px;
   gap: 8px;
+  transition: width var(--transition-sidebar);
+}
+
+.sidebar.collapsed {
+  width: var(--sidebar-collapsed-width);
+  padding-left: 10px;
+  padding-right: 10px;
+}
+
+.sidebar.collapsed .nav-label,
+.sidebar.collapsed .brand-name {
+  display: none;
+}
+
+.sidebar.collapsed .sidebar-brand {
+  justify-content: center;
+  padding-left: 0;
+  padding-right: 0;
+}
+
+.sidebar.collapsed .nav-item {
+  justify-content: center;
+  padding: 12px;
+}
+
+.sidebar.collapsed .nav-icon-toggle svg {
+  transform: rotate(180deg);
 }
 
 .sidebar-brand {
@@ -130,6 +167,7 @@ svg {
   align-items: center;
   gap: 10px;
   padding: 8px 8px 20px 8px;
+  transition: justify-content var(--transition-sidebar);
 }
 
 .brand-mark {
@@ -207,6 +245,59 @@ svg {
   opacity: 1;
 }
 
+.nav-item:focus-visible,
+.chip:focus-visible,
+.btn-action:focus-visible,
+.icon-btn:focus-visible,
+.product-card:focus-visible,
+.table-card:focus-visible,
+.btn-primary:focus-visible,
+.btn-secondary:focus-visible,
+.pos-search-input:focus-visible {
+  outline: 2px solid var(--accent-500);
+  outline-offset: 2px;
+}
+
+/* ---- Collapsed sidebar tooltips (data-tooltip) ---- */
+
+.sidebar.collapsed .nav-item {
+  position: relative;
+}
+
+.sidebar.collapsed .nav-item[data-tooltip]::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  left: calc(100% + 12px);
+  top: 50%;
+  transform: translateY(-50%) translateX(-4px);
+  background: var(--gray-900);
+  color: white;
+  font-size: 12.5px;
+  font-weight: 600;
+  padding: 7px 12px;
+  border-radius: var(--r-sm);
+  white-space: nowrap;
+  box-shadow: var(--shadow-md);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease, transform 0.12s ease;
+  z-index: 40;
+}
+
+.sidebar.collapsed .nav-item:hover[data-tooltip]::after,
+.sidebar.collapsed .nav-item:focus-visible[data-tooltip]::after {
+  opacity: 1;
+  transform: translateY(-50%) translateX(0);
+}
+
+/* Screenshot/QA verification hook only — forces a tooltip visible without a
+   real pointer hover, since headless screenshots cannot simulate :hover.
+   Not part of the product UX. */
+.sidebar.collapsed .nav-item.qa-force-tooltip[data-tooltip]::after {
+  opacity: 1;
+  transform: translateY(-50%) translateX(0);
+}
+
 /* ---- Main column ---- */
 
 .main {
@@ -217,7 +308,7 @@ svg {
 }
 
 .topbar {
-  height: var(--topbar-h);
+  height: var(--header-height);
   flex-shrink: 0;
   background: var(--gray-0);
   border-bottom: 1px solid var(--gray-200);
@@ -486,6 +577,7 @@ svg {
   grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
   gap: 16px;
   overflow-y: auto;
+  overflow-x: hidden;
   padding-bottom: 16px;
   align-content: start;
 }
@@ -652,7 +744,7 @@ svg {
   top: 0;
   right: 0;
   bottom: 0;
-  width: var(--panel-w);
+  width: var(--drawer-width);
   max-width: 92vw;
   background: var(--gray-0);
   box-shadow: var(--shadow-panel);
@@ -725,6 +817,7 @@ svg {
 .account-panel-body {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 16px 22px;
 }
 
@@ -917,7 +1010,7 @@ svg {
 .pos-body {
   flex: 1;
   display: grid;
-  grid-template-columns: 1fr var(--panel-w);
+  grid-template-columns: 1fr var(--ticket-width);
   gap: 20px;
   min-height: 0;
 }
@@ -933,6 +1026,7 @@ svg {
   grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
   gap: 14px;
   overflow-y: auto;
+  overflow-x: hidden;
   padding-bottom: 16px;
   align-content: start;
 }
@@ -1020,6 +1114,7 @@ svg {
 .ticket-items {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 14px 20px;
   display: flex;
   flex-direction: column;
@@ -1089,6 +1184,19 @@ svg {
 .ticket-line-price {
   font-size: 12px;
   color: var(--gray-500);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ticket-line-mods {
+  font-size: 11.5px;
+  color: var(--accent-700);
+  font-weight: 600;
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .ticket-line-subtotal {
@@ -1179,31 +1287,395 @@ svg {
 }
 
 /* ============================================================================
+   V2 — SIDEBAR TOGGLE ROW
+   ============================================================================ */
+
+.sidebar-toggle {
+  margin-bottom: 4px;
+}
+
+.sidebar-toggle .nav-icon-toggle svg {
+  transition: transform var(--transition-sidebar);
+}
+
+/* ============================================================================
+   V2 — SELECTED TABLE STATE
+   ============================================================================ */
+
+.table-card.selected {
+  border-color: var(--accent-500);
+  box-shadow: 0 0 0 2px var(--accent-100), var(--shadow-md);
+}
+
+.table-card.selected .table-number {
+  color: var(--accent-700);
+}
+
+/* ---- Elevated time hierarchy (subtle — not an alarm) ---- */
+
+.table-time.time-critical {
+  color: #b45309;
+  font-weight: 700;
+}
+
+/* ============================================================================
+   V2 — PRODUCT SEARCH
+   ============================================================================ */
+
+.pos-search {
+  position: relative;
+  margin-bottom: 14px;
+  flex-shrink: 0;
+}
+
+.pos-search-icon {
+  position: absolute;
+  left: 16px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 18px;
+  height: 18px;
+  color: var(--gray-400);
+  pointer-events: none;
+}
+
+.pos-search-input {
+  width: 100%;
+  height: 50px;
+  border-radius: var(--r-md);
+  border: 1.5px solid var(--gray-200);
+  background: var(--gray-0);
+  padding: 0 44px 0 46px;
+  font-size: 14.5px;
+  font-family: inherit;
+  color: var(--gray-900);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.pos-search-input::placeholder {
+  color: var(--gray-400);
+}
+
+.pos-search-input:focus {
+  outline: none;
+  border-color: var(--accent-500);
+  box-shadow: 0 0 0 3px var(--accent-100);
+}
+
+.pos-search-kbd {
+  position: absolute;
+  right: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--gray-500);
+  background: var(--gray-100);
+  border: 1px solid var(--gray-200);
+  border-radius: 6px;
+  padding: 3px 7px;
+  pointer-events: none;
+}
+
+.pos-search-input:focus ~ .pos-search-kbd {
+  display: none;
+}
+
+.pos-search-empty {
+  color: var(--gray-400);
+  font-size: 13.5px;
+  text-align: center;
+  padding: 40px 10px;
+  grid-column: 1 / -1;
+}
+
+/* ============================================================================
+   V2 — CATEGORY CHIPS (touch-friendly + favorites)
+   ============================================================================ */
+
+.category-tabs .chip {
+  padding: 11px 20px;
+  font-size: 14px;
+}
+
+.chip-favorite {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.chip-favorite svg {
+  width: 14px;
+  height: 14px;
+}
+
+.chip.active.chip-favorite {
+  background: var(--accent-500);
+  border-color: var(--accent-500);
+}
+
+/* ============================================================================
+   V2 — PRODUCT CARD FEEDBACK
+   ============================================================================ */
+
+.product-card {
+  position: relative;
+}
+
+.product-card-qty-badge {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--accent-500);
+  color: white;
+  font-size: 11.5px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: var(--shadow-sm);
+  border: 2px solid var(--gray-0);
+}
+
+@keyframes product-pulse {
+  0% { transform: scale(1); }
+  35% { transform: scale(0.94); }
+  100% { transform: scale(1); }
+}
+
+.product-card.pulse {
+  animation: product-pulse 220ms ease;
+  border-color: var(--accent-500);
+}
+
+.product-card-plus1 {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  background: var(--gray-900);
+  color: white;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 3px 7px;
+  border-radius: 999px;
+  opacity: 0;
+  transform: translateY(0);
+  pointer-events: none;
+}
+
+.product-card-plus1.show {
+  animation: plus1-float 550ms ease forwards;
+}
+
+@keyframes plus1-float {
+  0% { opacity: 0; transform: translateY(4px); }
+  25% { opacity: 1; transform: translateY(0); }
+  75% { opacity: 1; transform: translateY(-6px); }
+  100% { opacity: 0; transform: translateY(-14px); }
+}
+
+/* ============================================================================
+   V2 — TICKET QUANTITY STEPPER (larger touch targets)
+   ============================================================================ */
+
+.qty-stepper {
+  padding: 4px;
+  gap: 2px;
+}
+
+.qty-stepper button {
+  width: var(--touch-target-min);
+  height: var(--touch-target-min);
+  font-size: 17px;
+  border-radius: 8px;
+}
+
+.qty-stepper span {
+  min-width: 22px;
+  font-size: 14px;
+}
+
+.ticket-line-remove {
+  width: 32px;
+  height: 32px;
+}
+
+/* ============================================================================
+   V2 — ACCOUNT DRAWER: PARTIDAS COUNT BADGE
+   ============================================================================ */
+
+.order-lines-count {
+  font-weight: 600;
+  color: var(--gray-400);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+/* ============================================================================
+   V2 — MODIFIER MODAL (UX preview only — not canonical modifier rules)
+   ============================================================================ */
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.4);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.18s ease;
+  z-index: 60;
+}
+
+.modal-backdrop.visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.modifier-modal {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -48%) scale(0.97);
+  width: 420px;
+  max-width: 92vw;
+  max-height: 82vh;
+  background: var(--gray-0);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-lg);
+  z-index: 61;
+  display: flex;
+  flex-direction: column;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
+.modifier-modal.open {
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1);
+  pointer-events: auto;
+}
+
+.modifier-modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 20px 20px 14px 20px;
+  border-bottom: 1px solid var(--gray-100);
+  flex-shrink: 0;
+}
+
+.modifier-modal-header h3 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.modifier-modal-body {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 18px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.modifier-group h4 {
+  margin: 0 0 10px 0;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--gray-500);
+}
+
+.modifier-option {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 11px 12px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--gray-200);
+  margin-bottom: 8px;
+  min-height: var(--touch-target-min);
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+
+.modifier-option:hover {
+  border-color: var(--gray-300);
+  background: var(--gray-50);
+}
+
+.modifier-option input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent-500);
+  flex-shrink: 0;
+}
+
+.modifier-option label {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--gray-800);
+  flex: 1;
+  cursor: pointer;
+}
+
+.modifier-option:has(input:checked) {
+  border-color: var(--accent-500);
+  background: var(--accent-50);
+}
+
+.modifier-modal-actions {
+  display: flex;
+  gap: 10px;
+  padding: 16px 20px 20px 20px;
+  border-top: 1px solid var(--gray-100);
+  flex-shrink: 0;
+}
+
+.btn-secondary {
+  flex: 1;
+  min-height: var(--touch-target-min);
+  border-radius: var(--r-md);
+  border: 1px solid var(--gray-200);
+  background: var(--gray-0);
+  color: var(--gray-700);
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.btn-secondary:hover {
+  background: var(--gray-50);
+}
+
+.modifier-modal-actions .btn-primary {
+  flex: 2;
+  min-height: var(--touch-target-min);
+  font-size: 14px;
+}
+
+/* ============================================================================
    RESPONSIVE
    ============================================================================ */
 
 @media (max-width: 1280px) {
   :root {
-    --sidebar-w: 84px;
-    --panel-w: 380px;
+    --drawer-width: 380px;
   }
-  .nav-label,
-  .brand-name {
-    display: none;
-  }
-  .sidebar-brand { justify-content: center; padding-left: 0; padding-right: 0; }
-  .nav-item { justify-content: center; padding: 12px; }
-  .nav-item .nav-icon { width: 22px; height: 22px; }
   .topbar-branch { display: none; }
   .topbar-sep { display: none; }
 }
 
 @media (max-width: 1100px) {
   :root {
-    --panel-w: 340px;
-  }
-  .pos-body {
-    grid-template-columns: 1fr 300px;
+    --drawer-width: 340px;
+    --ticket-width: 300px;
   }
   .tables-grid {
     grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
