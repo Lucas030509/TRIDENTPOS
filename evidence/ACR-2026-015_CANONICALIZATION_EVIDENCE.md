@@ -20,6 +20,8 @@
 
 All eight sidecar commits above are direct children of the Frozen ACR Subject `2c90a43c5dcfe0b01a80f60bf4c0ca529c1d13d9`; none descends from another. This candidate branch (`architecture/acr-2026-015-canonical-amendment`) is a direct child of canonical `main` (`f655551085dea3cff887a411adec4026842aed07`) — it does not descend from, cherry-pick, or merge any sidecar branch. The approved ACR text and Productization Matrix were copied verbatim from the Frozen Subject's tree, with metadata-only status-line updates (no architecture substance altered).
 
+**The only `ACR-2026-015` evidence file actually carried into this candidate's tree is this file, `evidence/ACR-2026-015_CANONICALIZATION_EVIDENCE.md`.** Every other `ACR-2026-015` evidence reference in this candidate (Coordinator Synthesis, Product Owner Approval, Architecture Change Gate) is a sidecar commit that exists only on its own review branch and is cited here and elsewhere by exact `<sha>:<path>` reference — never copied, cherry-picked, or merged into this tree.
+
 ## Review Results Summary
 
 | Review | Verdict | Blockers | Advisories |
@@ -35,15 +37,15 @@ Explicit determinations: `WP-016C` = DATA-SOUND; `WP-014A` persistence proposal 
 
 ## Coordinator Synthesis
 
-Verdict: `PASS WITH MANDATORY DOWNSTREAM CONDITIONS`. All 19 raw advisories classified (3 Closed by Coordinator Verification, 1 Mandatory Before WP Start, 9 Mandatory Acceptance Criteria, 5 Documentation/Hygiene, 1 Future Governance Improvement). Full classification and per-advisory citation: `evidence/ACR-2026-015_R1_COORDINATOR_SYNTHESIS.md`.
+Verdict: `PASS WITH MANDATORY DOWNSTREAM CONDITIONS`. All 19 raw advisories classified (3 Closed by Coordinator Verification, 1 Mandatory Before WP Start, 9 Mandatory Acceptance Criteria, 5 Documentation/Hygiene, 1 Future Governance Improvement). Full classification and per-advisory citation: `8fc490f3df1945c21f3a651767618d6cf133e1ad:evidence/ACR-2026-015_R1_COORDINATOR_SYNTHESIS.md` (sidecar commit; not present in this candidate's tree — see Governance Lineage table above).
 
 ## Product Owner Approval
 
-Approved: `WP-014A`; `WP-016C`; the `WP-026` → `WP-026A`–`D` decomposition; the roadmap change 29 → 34; the Reservations exclusion; all 11 mandatory downstream conditions (binding). Explicitly preserved OPEN: `OQ-SSOT-01`, `OQ-SSOT-02`, `OQ-SSOT-06`, `OQ-SSOT-07`, `OQ-ARCH-01`. Full text: `evidence/ACR-2026-015_R1_PRODUCT_OWNER_APPROVAL.md`.
+Approved: `WP-014A`; `WP-016C`; the `WP-026` → `WP-026A`–`D` decomposition; the roadmap change 29 → 34; the Reservations exclusion; all 11 mandatory downstream conditions (binding). Explicitly preserved OPEN: `OQ-SSOT-01`, `OQ-SSOT-02`, `OQ-SSOT-06`, `OQ-SSOT-07`, `OQ-ARCH-01`. Full text: `3808c25285018888d5f31113cab64cdca4192c31:evidence/ACR-2026-015_R1_PRODUCT_OWNER_APPROVAL.md` (sidecar commit; not present in this candidate's tree — see Governance Lineage table above).
 
 ## Architecture Change Gate
 
-Verdict: `PASS`. Authorization: prepare canonical amendment candidate only — not canonical, not merged, no WP start authorized. Full evidence: `evidence/ACR-2026-015_R1_ARCHITECTURE_CHANGE_GATE.md`.
+Verdict: `PASS`. Authorization: prepare canonical amendment candidate only — not canonical, not merged, no WP start authorized. Full evidence: `5ccce65262c8e98b82fc6ae08466da4b9de288f8:evidence/ACR-2026-015_R1_ARCHITECTURE_CHANGE_GATE.md` (sidecar commit; not present in this candidate's tree — see Governance Lineage table above).
 
 ## The 11 Mandatory Downstream Conditions (Binding, Carried Into `IMPLEMENTATION_PLAN.md`)
 

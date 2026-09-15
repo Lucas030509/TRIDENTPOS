@@ -3,17 +3,17 @@
 > [!NOTE]
 > **ACR-2026-015 PRODUCT OWNER APPROVED / ARCHITECTURE CHANGE GATE PASSED — PENDING CANONICAL MERGE**
 >
-> Amendment under `ACR-2026-015` (Salón Productization, POS Settlement & Frontend Execution Decomposition): insertion of additive Work Packages `WP-014A: Dining Operations Expansion` (Wave 4) and `WP-016C: POS Payment Orchestration & Account Settlement` (Wave 4); conversion of executable `WP-026` into a non-executable umbrella/milestone decomposed into `WP-026A`–`WP-026D` (Wave 8); a Frontend Architecture Gate (`FRONTEND_ARCHITECTURE.md`, authored by `05_Frontend_Architect`) inserted as a non-executable prerequisite before `WP-026A` START; correction of `WP-016`'s `Bounded Context` label per advisory `ARCH-ADV-013-01`; and an updated `WP-027` E2E lifecycle. Effective executable roadmap: 29 → 34 Work Packages, no existing WP renumbered. Independently reviewed (`01_Solution_Architect`, `03_Data_Architect`, `05_Frontend_Architect`, `06_UX_UI_Design_Architect`, `08_Security_Architect` — 5/5 PASS WITH ADVISORIES, 0 blockers), synthesized (`evidence/ACR-2026-015_R1_COORDINATOR_SYNTHESIS.md`), and approved by the Product Owner (`evidence/ACR-2026-015_R1_PRODUCT_OWNER_APPROVAL.md`), subject to 11 binding downstream conditions (`FE`/`DATA`/`UX`/`SEC-COND-015-0x`) carried forward as mandatory Acceptance Criteria on the WP entries above. Reservations remain explicitly excluded from this productization. Protected Product Owner decisions (`OQ-SSOT-01`, `OQ-SSOT-02`, `OQ-SSOT-06`, `OQ-SSOT-07`, `OQ-ARCH-01`) remain OPEN and are not touched by this amendment. `ARCH-ADV-013-01` is remediated by this candidate's `WP-016` label correction but is not itself formally closed until this candidate becomes canonical. See `evidence/ACR-2026-015_CANONICALIZATION_EVIDENCE.md` for full governance provenance. Pending independent canonical-amendment review and merge.
+> Amendment under `ACR-2026-015` (Salón Productization, POS Settlement & Frontend Execution Decomposition): insertion of additive Work Packages `WP-014A: Dining Operations Expansion` (Wave 4) and `WP-016C: POS Payment Orchestration & Account Settlement` (Wave 4); conversion of executable `WP-026` into a non-executable umbrella/milestone decomposed into `WP-026A`–`WP-026D` (Wave 8); a Frontend Architecture Gate (`FRONTEND_ARCHITECTURE.md`, authored by `05_Frontend_Architect`) inserted as a non-executable prerequisite before `WP-026A` START; correction of `WP-016`'s `Bounded Context` label per advisory `ARCH-ADV-013-01`; and an updated `WP-027` E2E lifecycle. Effective executable roadmap: 29 → 34 Work Packages, no existing WP renumbered. Independently reviewed (`01_Solution_Architect`, `03_Data_Architect`, `05_Frontend_Architect`, `06_UX_UI_Design_Architect`, `08_Security_Architect` — 5/5 PASS WITH ADVISORIES, 0 blockers), synthesized (Coordinator Synthesis: `8fc490f3df1945c21f3a651767618d6cf133e1ad:evidence/ACR-2026-015_R1_COORDINATOR_SYNTHESIS.md` — sidecar commit, not present in this candidate's tree), and approved by the Product Owner (Product Owner Approval: `3808c25285018888d5f31113cab64cdca4192c31:evidence/ACR-2026-015_R1_PRODUCT_OWNER_APPROVAL.md` — sidecar commit, not present in this candidate's tree), subject to 11 binding downstream conditions (`FE`/`DATA`/`UX`/`SEC-COND-015-0x`) carried forward as mandatory Acceptance Criteria on the WP entries above. Reservations remain explicitly excluded from this productization. Protected Product Owner decisions (`OQ-SSOT-01`, `OQ-SSOT-02`, `OQ-SSOT-06`, `OQ-SSOT-07`, `OQ-ARCH-01`) remain OPEN and are not touched by this amendment. `ARCH-ADV-013-01` is remediated by this candidate's `WP-016` label correction but is not itself formally closed until this candidate becomes canonical. See `evidence/ACR-2026-015_CANONICALIZATION_EVIDENCE.md` for full governance provenance. Pending independent canonical-amendment review and merge.
 
 > [!NOTE]
-> **ACR-2026-014 PROPOSED ARCHITECTURE CHANGE — PENDING GOVERNANCE APPROVAL**
+> **ACR-2026-014 MERGED / CANONICAL ON MAIN**
 > 
-> Proposed amendment under `ACR-2026-014` / `ADR-014`: Insertion of additive prerequisite work package `WP-016B: Platform Core Master Catalog Foundation (Categories & Products)` in Wave 4, and update of `WP-017` prerequisites to `WP-004, WP-016B` with strict prohibition on Inventory-owned products. Pending independent reviews and Product Owner approval.
+> Amendment under `ACR-2026-014` / `ADR-014`: Insertion of additive prerequisite work package `WP-016B: Platform Core Master Catalog Foundation (Categories & Products)` in Wave 4, and update of `WP-017` prerequisites to `WP-004, WP-016B` with strict prohibition on Inventory-owned products. Merged to canonical `main` at `d102f5296c9175c485aeb1a4bf7b5af3a93173b5`; `WP-016B` itself completed and merged at `f655551085dea3cff887a411adec4026842aed07`. *(Corrected by `ACR-2026-015` Canonical Amendment R1 — CA-QI-015-24: this banner previously and incorrectly stated `PROPOSED / PENDING GOVERNANCE APPROVAL`, which was factually stale by the time this candidate was prepared.)*
 
 > [!NOTE]
-> **ACR-2026-013 PROPOSED ARCHITECTURE CHANGE — PENDING GOVERNANCE APPROVAL**
+> **ACR-2026-013 MERGED / CANONICAL ON MAIN**
 > 
-> Proposed amendment under `ACR-2026-013`: Harmonization of Edge exact fixed-point signed integer storage (`INTEGER` scale 4, `ADR-012`) and monorepo package composition topology (`ADR-013`) for WP-014 (`@trident/pos` + `@trident/pos-edge-runtime`) and WP-017 (`@trident/inventory` + `@trident/cloud-server`). Pending formal review and Product Owner approval.
+> Amendment under `ACR-2026-013`: Harmonization of Edge exact fixed-point signed integer storage (`INTEGER` scale 4, `ADR-012`) and monorepo package composition topology (`ADR-013`) for WP-014 (`@trident/pos` + `@trident/pos-edge-runtime`) and WP-017 (`@trident/inventory` + `@trident/cloud-server`). Merged to canonical `main`: Exact Numerics & Bounded-Context Composition Model at `dceb4cf90fb75c7b32c90a86a616a341a5288ba3`; Package Dependency Graph Enforcement at `38062575ceed063c8f03af5a5c473d140dd264df`. *(Corrected by `ACR-2026-015` Canonical Amendment R1 — CA-QI-015-24: this banner previously and incorrectly stated `PROPOSED / PENDING GOVERNANCE APPROVAL`, which was factually stale by the time this candidate was prepared.)*
 
 > [!NOTE]
 > **ACR-2026-011 APPROVED / MERGED / CANONICAL ON MAIN — G9**
@@ -21,8 +21,8 @@
 > The additions and test specifications in this document relating to WP-009 (`DATA-INV-WP009-01`, `StationPinStore`, `EdgeSecureStore`, `edge_security_audit`, exact test obligations) represent governance overlays formally approved and merged into canonical main under G9 (`0e50fe12ba7a95638c8efe57d4cd9c598b56daa9`). The underlying baseline remains `APPROVED / FROZEN — 2026-09-03`.
 
 **Document ID:** `PLAN-IMP-001`  
-**Version:** `1.3 CANDIDATE OVERLAY — ACR-2026-015` (Underlying baseline: `1.0 APPROVED / FROZEN — 2026-09-03` with ACR-2026-011 Canonical Overlay — G9; ACR-2026-013 and ACR-2026-014 overlays remain separately `PROPOSED — PENDING GOVERNANCE APPROVAL`, unaffected by this overlay)  
-**Status:** `ACR-2026-015: PRODUCT OWNER APPROVED / GATE PASSED — PENDING CANONICAL MERGE` (other pending overlays retain their own independent status, see banners above)  
+**Version:** `1.3 CANDIDATE OVERLAY — ACR-2026-015` (Underlying baseline: `1.0 APPROVED / FROZEN — 2026-09-03` with ACR-2026-011 Canonical Overlay — G9; ACR-2026-013 and ACR-2026-014 overlays are `MERGED / CANONICAL ON MAIN`, unaffected by this candidate overlay)  
+**Status:** `ACR-2026-015: PRODUCT OWNER APPROVED / GATE PASSED — PENDING CANONICAL MERGE` (`ACR-2026-013`/`ACR-2026-014` are already canonical on `main`, independent of this candidate's own pending status; see banners above)  
 **Date:** `2026-09-13`  
 **Author Agent:** `01_Solution_Architect` (Overlay Synthesis: `01_Solution_Architect`)  
 **Target Gate:** `gates/IMPLEMENTATION_READINESS_GATE.md`  
@@ -683,7 +683,7 @@ Dining room, counter orders, kitchen display (KDS), cash drawer, Cortes X/Z, and
 * **Handoff Target:** `WP-017`
 
 #### `WP-016`: Cash Management, Shifts & Arqueo Ciego (Cortes X & Z)
-* **Bounded Context:** TRIDENTPOS (Downstream Event Consumer: Finance) — *remediated by `ACR-2026-015` per advisory `ARCH-ADV-013-01` (`evidence/ACR-2026-013_R1_PLATFORM_ARCHITECTURE_REVIEW.md` Sec. 2.8): all physical tables (`turnos_caja`, `movimientos_caja`, `cortes_caja`, `arqueos_ciegos`) belong strictly to TRIDENTPOS (`MOD-POS`); Finance is an asynchronous event subscriber to `CorteZGenerado`, not a shared package owner. This label correction was a required precondition for `WP-016` START, independent of and not caused by `ACR-2026-015`'s other changes.*
+* **Bounded Context:** TRIDENTPOS (Downstream Event Consumer: Finance) — *remediated by `ACR-2026-015` per advisory `ARCH-ADV-013-01` (`09f034b3749148ba1fb4a812b01e9f7dc365eb45:evidence/ACR-2026-013_R1_PLATFORM_ARCHITECTURE_REVIEW.md` Sec. 2.8, branch `review/acr-2026-013-r1-platform-architecture` — sidecar commit, not present in this candidate's tree): all physical tables (`turnos_caja`, `movimientos_caja`, `cortes_caja`, `arqueos_ciegos`) belong strictly to TRIDENTPOS (`MOD-POS`); Finance is an asynchronous event subscriber to `CorteZGenerado`, not a shared package owner. This label correction was a required precondition for `WP-016` START, independent of and not caused by `ACR-2026-015`'s other changes.*
 * **Frozen Requirements:** `DATA_MODEL.md` Sec. 2; `FUNCTIONAL_ARCHITECTURE.md` Sec. 3; `ADR-004`
 * **ADRs:** `ADR-004`
 * **Data Objects:** `turnos_caja`, `movimientos_caja`, `cortes_caja`, `arqueos_ciegos`
@@ -996,7 +996,7 @@ Web corporate backoffice, mobile waiter handheld, and desktop POS front-end.
 * **Migration Impact:** None
 * **Risk:** Low
 * **PO Dependency:** None
-* **Parallelizable:** YES (with `WP-025`, `WP-026`)
+* **Parallelizable:** YES (with `WP-025`, `WP-026A`) *(corrected by `ACR-2026-015` R1: `WP-026` is a non-executable umbrella and cannot itself run in parallel; the parallel executable sibling is `WP-026A`)*
 * **Handoff Target:** `WP-027`
 
 #### `WP-025`: Mobile Waiter Handheld Client (Comandero Móvil)
@@ -1021,7 +1021,7 @@ Web corporate backoffice, mobile waiter handheld, and desktop POS front-end.
 * **Migration Impact:** None
 * **Risk:** Medium
 * **PO Dependency:** `OQ-SSOT-02` (Classification: B & E; hook implemented; concrete behavior PENDING PO DECISION), `OQ-SSOT-04` (Classification: C & E; mobile total void UI deferred until PO decision), `OQ-SSOT-06` (Classification: B & E; hook implemented; concrete proration algorithm PENDING PO DECISION).
-* **Parallelizable:** YES (with `WP-024`, `WP-026`)
+* **Parallelizable:** YES (with `WP-024`, `WP-026A`) *(corrected by `ACR-2026-015` R1: `WP-026` is a non-executable umbrella and cannot itself run in parallel; the parallel executable sibling is `WP-026A`)*
 * **Handoff Target:** `WP-027`
 
 #### `WP-026`: Native POS Presentation Milestone (Non-Executable Umbrella)
@@ -1156,7 +1156,7 @@ Disaster recovery verification, hardware performance benchmarks, chaos tests, an
 * **Builder Agent:** `18_DevOps_Engineer`
 * **Specialist Reviewer:** `09_QA_Test_Architect`
 * **Code Reviewer:** `11_Code_Reviewer`
-* **Prerequisites:** All prior WPs (`WP-001` through `WP-028`, including additive `WP-016B`, `WP-014A`, `WP-016C`, and `WP-026A`–`WP-026D` per `ACR-2026-015`).
+* **Prerequisites:** All prior EXECUTABLE Work Packages through `WP-026D`, including additive `WP-014A`, `WP-016B`, `WP-016C` and `WP-026A`–`WP-026D` per `ACR-2026-015`, excluding non-executable umbrella `WP-026`. *(Corrected by `ACR-2026-015` Canonical Amendment R1 — CA-QI-015-18: the prior candidate text read "`WP-001` through `WP-028`", which wrongly included `WP-028` itself, creating a `WP-027` ↔ `WP-028` cycle since `WP-028`'s own Prerequisite is `WP-027`. `WP-027` depends only on WPs that precede it.)*
 * **Dependencies:** Docker Compose test environment, chaos test harness (Toxiproxy / Chaos Mesh).
 * **Inputs:** `PROJECT_BLUEPRINT.md`, `SECURITY_RISKS.md`, `ARCHITECTURE_CHANGE_REQUEST_SALON_PRODUCTIZATION.md` Section U (`ACR-2026-015`)
 * **Outputs:** Automated cross-context E2E test suite executing full restaurant lifecycle, updated per `ACR-2026-015`: Open Table $\rightarrow$ Add Products $\rightarrow$ Send to Kitchen $\rightarrow$ KDS Production $\rightarrow$ Inventory Depletion $\rightarrow$ Request Check / Precuenta $\rightarrow$ Payment Settlement (`WP-016C`) $\rightarrow$ Account Close $\rightarrow$ Cash / Shift Reconciliation (Corte Z) $\rightarrow$ Facturación where applicable $\rightarrow$ Cloud Sync $\rightarrow$ Finance downstream posting (conditional, per `FUNCTIONAL_ARCHITECTURE.md` Sec. 6.3).
@@ -1203,11 +1203,11 @@ Disaster recovery verification, hardware performance benchmarks, chaos tests, an
 
 | Bounded Context | Work Packages Covering Context | Primary Data Entities |
 |---|---|---|
-| **Platform Core** | `WP-001`, `WP-002`, `WP-003`, `WP-004`, `WP-005`, `WP-006`, `WP-007`, `WP-009`, `WP-010`, `WP-012`, `WP-013`, `WP-024`, `WP-028` | `organizations`, `branches`, `users`, `roles`, `stations`, `audit_log_events`, `security_telemetry_events`, `OutboxQueue` |
-| **TRIDENTPOS** | `WP-008`, `WP-010`, `WP-014`, `WP-015`, `WP-016`, `WP-025`, `WP-026` | `mesas`, `cuentas`, `ordenes`, `orden_partidas`, `kds_tickets`, `turnos_caja` |
+| **Platform Core** | `WP-001`, `WP-002`, `WP-003`, `WP-004`, `WP-005`, `WP-006`, `WP-007`, `WP-009`, `WP-010`, `WP-012`, `WP-013`, `WP-016B`, `WP-024`, `WP-028` | `organizations`, `branches`, `users`, `roles`, `stations`, `audit_log_events`, `security_telemetry_events`, `OutboxQueue`, `categories`, `products` |
+| **TRIDENTPOS** | `WP-008`, `WP-010`, `WP-014`, `WP-014A`, `WP-015`, `WP-016`, `WP-016C`, `WP-025`, `WP-026A`, `WP-026B`, `WP-026C`, `WP-026D` | `mesas`, `cuentas`, `ordenes`, `orden_partidas`, `kds_tickets`, `turnos_caja`, `movimientos_caja`, `cortes_caja`, `arqueos_ciegos`, `pagos` |
 | **Inventory** | `WP-017`, `WP-018` | `insumos`, `almacenes`, `recetas`, `stock_actual`, `movimientos_inventario` |
 | **Procurement** | `WP-019` | `proveedores`, `ordenes_compra`, `recepciones_mercancia` |
-| **Finance** | `WP-016`, `WP-020` | `cuentas_por_pagar`, `cuentas_por_cobrar`, `gastos_sucursal`, `arqueos_ciegos` |
+| **Finance** | `WP-020` | `cuentas_por_pagar`, `cuentas_por_cobrar`, `gastos_sucursal` |
 | **Billing** | `WP-011`, `WP-021` | `comprobantes_fiscales`, `folio_leases`, `emisor_fiscal_config` |
 | **CRM** | `WP-022` | `clientes`, `direcciones_cliente` |
 | **Delivery** | `WP-023` | `pedidos_externos`, `repartidores_domicilio` |
@@ -1237,8 +1237,11 @@ To strictly enforce EAAF governance, every code-producing Work Package is assign
 | `WP-012` | Transactional Outbox & Ingested Idempotency | `13_Backend_Developer` | `01_Solution_Architect` | `11_Code_Reviewer` |
 | `WP-013` | Bidirectional Sync Service & WAN Reconnection | `13_Backend_Developer` | `01_Solution_Architect` | `11_Code_Reviewer` |
 | `WP-014` | Dining Room, Tables & Orders Engine with OCC | `16_Native_Edge_Developer` | `03_Data_Architect` | `11_Code_Reviewer` |
+| `WP-014A` | Dining Operations Expansion | `16_Native_Edge_Developer` | `01_Solution_Architect` or `03_Data_Architect` (per final implementation footprint) | `11_Code_Reviewer` |
 | `WP-015` | KDS LAN Event Dispatcher & Printer Service | `16_Native_Edge_Developer` | `01_Solution_Architect` | `11_Code_Reviewer` |
 | `WP-016` | Cash Management, Shifts & Arqueo Ciego (Cortes X/Z)| `16_Native_Edge_Developer` | `03_Data_Architect` | `11_Code_Reviewer` |
+| `WP-016B` | Platform Core Master Catalog Foundation | `17_Database_Engineer` (supporting: `13_Backend_Developer`) | `03_Data_Architect` | `11_Code_Reviewer` |
+| `WP-016C` | POS Payment Orchestration & Account Settlement | `16_Native_Edge_Developer` (supporting: `13_Backend_Developer`, only if required) | `03_Data_Architect` + `08_Security_Architect` | `11_Code_Reviewer` |
 | `WP-017` | Inventory Catalog, Warehouses & Recipe Explosion | `13_Backend_Developer` | `03_Data_Architect` | `11_Code_Reviewer` |
 | `WP-018` | Real-Time Kárdex & KDS Depletion Service | `13_Backend_Developer` | `03_Data_Architect` | `11_Code_Reviewer` |
 | `WP-019` | Procurement, Supplier Management & Receiving | `13_Backend_Developer` | `01_Solution_Architect` | `11_Code_Reviewer` |
@@ -1248,7 +1251,11 @@ To strictly enforce EAAF governance, every code-producing Work Package is assign
 | `WP-023` | Delivery Hub & Aggregator Webhook Engine | `13_Backend_Developer` | `08_Security_Architect` | `11_Code_Reviewer` |
 | `WP-024` | Corporate Backoffice Web Portal (Next.js) | `15_Web_Frontend_Developer` | `01_Solution_Architect` | `11_Code_Reviewer` |
 | `WP-025` | Mobile Waiter Handheld Client (Comandero Móvil) | `14_Mobile_Developer` | `01_Solution_Architect` | `11_Code_Reviewer` |
-| `WP-026` | Native Desktop POS & KDS Station UI | `16_Native_Edge_Developer` | `01_Solution_Architect` | `11_Code_Reviewer` |
+| `WP-026` | Native POS Presentation Milestone | `NON-EXECUTABLE UMBRELLA` — no builder; tracked via `WP-026A`–`WP-026D` below | `NON-EXECUTABLE UMBRELLA` | `NON-EXECUTABLE UMBRELLA` |
+| `WP-026A` | Native POS App Shell & Design System Foundation | `16_Native_Edge_Developer` | `01_Solution_Architect` | `11_Code_Reviewer` |
+| `WP-026B` | Salón & Ordering UI | `16_Native_Edge_Developer` | `06_UX_UI_Design_Architect` + `01_Solution_Architect` | `11_Code_Reviewer` |
+| `WP-026C` | KDS Station UI | `16_Native_Edge_Developer` | `01_Solution_Architect` | `11_Code_Reviewer` |
+| `WP-026D` | Caja & Payment UI | `16_Native_Edge_Developer` | `01_Solution_Architect` + `08_Security_Architect` | `11_Code_Reviewer` |
 | `WP-027` | Cross-Context E2E Integration & Chaos Testing | `18_DevOps_Engineer` | `09_QA_Test_Architect` | `11_Code_Reviewer` |
 | `WP-028` | Hardware Benchmarking & Release Packaging | `18_DevOps_Engineer` | `10_DevOps_Platform_Architect` | `11_Code_Reviewer` |
 
@@ -1284,12 +1291,16 @@ flowchart TD
 
     subgraph Wave4 [Wave 4: TRIDENTPOS Core P0]
         WP008 & WP010 & WP012 --> WP014[WP-014: Dining Room & Orders OCC]
+        WP014 --> WP014A[WP-014A: Dining Operations Expansion]
         WP014 --> WP015[WP-015: KDS LAN & Printers]
         WP014 --> WP016[WP-016: Cash Shifts & Cortes X/Z]
+        WP004 --> WP016B[WP-016B: Platform Core Master Catalog]
+        WP014 & WP016 --> WP016C[WP-016C: POS Payment Orchestration & Settlement]
     end
 
     subgraph Wave5 [Wave 5: Inventory & Procurement]
         WP004 --> WP017[WP-017: Catalog & Recipes]
+        WP016B --> WP017
         WP017 & WP015 --> WP018[WP-018: Kárdex & Depletion]
         WP017 --> WP019[WP-019: Procurement & Receiving]
     end
@@ -1307,14 +1318,20 @@ flowchart TD
     subgraph Wave8 [Wave 8: Presentation Surfaces]
         WP005 & WP017 & WP020 --> WP024[WP-024: Backoffice Web]
         WP009 & WP010 & WP014 --> WP025[WP-025: Mobile Waiter App]
-        WP007 & WP014 & WP015 & WP016 --> WP026[WP-026: Desktop POS & KDS UI]
+        FEGATE[Frontend Architecture Gate: FRONTEND_ARCHITECTURE.md APPROVED/FROZEN] --> WP026A
+        WP007 --> WP026A[WP-026A: App Shell & Design System Foundation]
+        WP026A & WP014 & WP014A --> WP026B[WP-026B: Salón & Ordering UI]
+        WP026A & WP015 --> WP026C[WP-026C: KDS Station UI]
+        WP026A & WP016 & WP016C --> WP026D[WP-026D: Caja & Payment UI]
     end
 
     subgraph Wave9 [Wave 9: Hardening & Release]
-        WP021 & WP024 & WP025 & WP026 --> WP027[WP-027: E2E Chaos Testing]
+        WP021 & WP024 & WP025 & WP026B & WP026C & WP026D --> WP027[WP-027: E2E Chaos Testing]
         WP027 --> WP028[WP-028: Hardware Benchmark & Packaging]
     end
 ```
+
+*`WP-026` itself (the non-executable umbrella) is intentionally not a DAG node — it has no independent execution edges; it is satisfied when `WP-026A`–`WP-026D` all complete. The graph above is acyclic: `WP-027`'s only outbound edge is to `WP-028`, and no edge points from `WP-028` back into any `WP-027` prerequisite (`CA-QI-015-18`/`-21`).*
 
 ---
 
@@ -1331,14 +1348,14 @@ The table below strictly classifies the dependency relationship for every open d
 
 | OQ | Affected WP | Classification | Neutral Work Allowed | Forbidden Assumption | Decision Deadline |
 |---|---|---|---|---|---|
-| **`OQ-SSOT-01`** (Cancelación Post-Cocina) | `WP-014`, `WP-024`, `WP-026` | **B & E** | Generic `CancellationPolicy` interface, authorization check extension hook, audit event logging. | Assuming waiter is allowed or blocked; assuming supervisor/manager PIN is required; assuming any default boolean flag. | Before `WP-014` / `WP-026` post-kitchen cancellation behavior enters completion. |
-| **`OQ-SSOT-02`** (PIN Transferencia Cuenta) | `WP-014`, `WP-025` | **B & E** | `TransferValidationRule` contract abstraction with unresolved policy hook. | Assuming `REQUIRE_RECEIVER_PIN = true` or `false`. | Before `WP-014` / `WP-025` table transfer flow enters completion. |
+| **`OQ-SSOT-01`** (Cancelación Post-Cocina) | `WP-014`, `WP-014A`, `WP-024`, `WP-026B` | **B & E** | Generic `CancellationPolicy` interface, authorization check extension hook, audit event logging. `WP-026B` may only present the resulting UI hook — it does not define policy. | Assuming waiter is allowed or blocked; assuming supervisor/manager PIN is required; assuming any default boolean flag. | Before `WP-014` / `WP-014A` / `WP-026B` post-kitchen cancellation behavior enters completion. |
+| **`OQ-SSOT-02`** (PIN Transferencia Cuenta) | `WP-014`, `WP-014A`, `WP-025`, `WP-026B` | **B & E** | `TransferValidationRule` contract abstraction with unresolved policy hook. `WP-026B` may only present the resulting UI hook — it does not define policy. | Assuming `REQUIRE_RECEIVER_PIN = true` or `false`. | Before `WP-014` / `WP-014A` / `WP-025` / `WP-026B` table transfer flow enters completion. |
 | **`OQ-SSOT-03`** (Límite Crédito CxC) | `WP-020`, `WP-024` | **B & E** | `CreditLimitValidator` policy interface and customer credit balance ledger calculation methods. | Assuming `STRICT_BLOCK`, `ALLOW_WITH_SUPERVISOR_OVERRIDE`, or `WARN_ONLY` as baseline policy. | Before `WP-020` customer charge execution enters completion. |
 | **`OQ-SSOT-04`** (Cancelación Total Móvil) | `WP-014`, `WP-025` | **C & E** | Local account state machine with void capability hook; stationary POS void flow. Mobile UI void screen deferred. | Assuming mobile total cancellation is prohibited or allowed (`ALLOW_MOBILE_TOTAL_VOID = false/true`). | Before `WP-025` mobile account settlement/void screen enters completion. |
 | **`OQ-SSOT-05`** (Algoritmo Abastecimiento) | `WP-019`, `WP-024` | **B & E** | `ReplenishmentSuggestionProvider` contract definition; manual purchase order creation workflows. | Assuming Min/Max par levels, reorder points, sales velocity, or forecasting as default algorithm. | Before `WP-019` automated purchase suggestion service enters completion. |
-| **`OQ-SSOT-06`** (Prorrateo Split Cuenta) | `WP-014`, `WP-025`, `WP-026` | **B & E** | `BillSplitProrationStrategy` pluggable interface, split ticket partition data structures. | Assuming proportional by item price, equal split, discount-first, or tip-first as project default. | Before `WP-014` bill splitting engine enters completion. |
-| **`OQ-SSOT-07`** (Recetas Modificadores) | `WP-017`, `WP-018` | **B & E** | `ModifierRecipeResolver` contract definition and raw recipe ingredient linkage. | Assuming "additive ingredient explosion", replacement priority, or modifier precedence semantics. | Before `WP-017` / `WP-018` recipe explosion and depletion engine enters completion. |
-| **`OQ-ARCH-01`** (Turnos Multi-Cajero) | `WP-016`, `WP-026` | **D** (PO Blocked at Business Completion) | Cash transaction ledger, cash drawer hardware triggers, blind count math. | Assuming single-cashier-per-drawer as baseline or multi-cashier sub-drawers without PO decision. | Before `WP-016` shift aggregate schema and state machine enter completion. |
+| **`OQ-SSOT-06`** (Prorrateo Split Cuenta) | `WP-014`, `WP-014A`, `WP-025`, `WP-026B` | **B & E** | `BillSplitProrationStrategy` pluggable interface, split ticket partition data structures. `WP-026B` may only present the resulting UI hook — it does not define policy. | Assuming proportional by item price, equal split, discount-first, or tip-first as project default. | Before `WP-014` bill splitting engine enters completion. |
+| **`OQ-SSOT-07`** (Recetas Modificadores) | `WP-017`, `WP-018` | **B & E** | `ModifierRecipeResolver` contract definition and raw recipe ingredient linkage. Inventory (`WP-017`/`WP-018`) remains the sole owner of recipe-resolution semantics; `WP-026B` (Salón & Ordering UI) may present modifier *selection* only and must not decide or duplicate recipe/modifier resolution logic. | Assuming "additive ingredient explosion", replacement priority, or modifier precedence semantics; assuming `WP-026B` UI has authority over recipe semantics. | Before `WP-017` / `WP-018` recipe explosion and depletion engine enters completion. |
+| **`OQ-ARCH-01`** (Turnos Multi-Cajero) | `WP-016`, `WP-016C`, `WP-026D` | **D** (PO Blocked at Business Completion) | Cash transaction ledger, cash drawer hardware triggers, blind count math. `WP-016C` consumes whatever shift-assignment capability results, without deciding it; `WP-026D` may only present it. | Assuming single-cashier-per-drawer as baseline or multi-cashier sub-drawers without PO decision. | Before `WP-016` shift aggregate schema and state machine enter completion. |
 | **`OQ-ARCH-02`** (Facturación Global Fin de Mes) | `WP-021`, `WP-024` | **C & E** | Neutral database query identifying unclaimed fiscal tickets at month-end. | Assuming automatic cron stamping (`AUTO_GLOBAL_INVOICING_ENABLED = false/true`) or specific period cutoff. | Before `WP-021` batch invoicing runner enters completion. |
 
 ---
@@ -1371,7 +1388,7 @@ Every one of the 11 cataloged Security Validation Debts is mapped to concrete Wo
 | **`DAT-04`** | SQLite Power-Loss Durability on SSD Cache | `WP-008`, `WP-028` | `16_Native_Edge_Developer` | Power-loss testing on consumer SSDs; dual `PRAGMA synchronous` (NORMAL / FULL for Corte Z); flush-barrier validation. |
 | **`DAT-08`** | Disaster Recovery Cold-Restore Simulation | `WP-027` | `18_DevOps_Engineer` | Automated DR drill wiping Edge database and verifying catalog bootstrap from Cloud in $< 30\text{ min}$. |
 | **`RSK-08`** | SSD Volatile Cache Loss | `WP-008`, `WP-028` | `16_Native_Edge_Developer` | Recommend hardware UPS with auto-shutdown daemon; test simulated power cut during active transaction. |
-| **`RSK-11`** | Electron/Node Footprint on Low-End POS ($\le 2\text{ GB}$) | `WP-026`, `WP-028` | `16_Native_Edge_Developer` | Memory profiling under load; evaluation of memory limits (`--max-old-space-size=256`); Tauri migration path tracked in `ADR-003`. |
+| **`RSK-11`** | Electron/Node Footprint on Low-End POS ($\le 2\text{ GB}$) | `WP-026A`, `WP-026D`, `WP-028` | `16_Native_Edge_Developer` | Memory profiling under load (baseline in `WP-026A`, re-verified under payment-screen load in `WP-026D`); evaluation of memory limits (`--max-old-space-size=256`); Tauri migration path tracked in `ADR-003`. *(Corrected by `ACR-2026-015` R1 — CA-QI-015-23: `WP-026` is a non-executable umbrella and cannot be an evidence owner; the actual executable owners are `WP-026A` and `WP-026D`, per their own Security Debt fields.)* |
 | **`RSK-15`** | Empirical RTO/RPO DR Drills | `WP-027` | `18_DevOps_Engineer` | Controlled chaos drill measuring exact elapsed time to restore service after hard Edge Host failure. |
 
 ---
