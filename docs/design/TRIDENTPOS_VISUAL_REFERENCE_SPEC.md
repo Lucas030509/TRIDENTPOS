@@ -86,24 +86,95 @@ the semantic names directly.
 
 ## 4. Typography
 
-`--font-sans` (system UI stack) remains the body/UI font — **no external
-font is loaded**. This preserves the dependency-free, no-network-call
-commitment established in V1/V2 (see the preview's README): the page must
-work fully offline from `file://`, with zero requests. The "editorial,
-modern, human" feel the reference calls for is instead achieved with
-`--font-display` (`Georgia` / system serif stack), used only for large
-numerals and headings — KPI values, view titles, table numbers, drawer
-titles — never for body copy or controls.
+**TRIDENTPOS DOES NOT USE SERIF DISPLAY TYPOGRAPHY.** V3's initial
+Georgia/serif "editorial" treatment was reviewed by the Product Owner and
+rejected as generic/traditional — it did not reproduce the premium
+hospitality-tech character of the approved visual reference. This decision
+is superseded (V3-R1).
+
+### Approved direction: Rounded Geometric Sans
+
+TRIDENTPOS typography should read as modern, rounded, premium, friendly,
+and highly readable — rounded geometric shapes, generous counters, soft
+curves, medium/light weights, strong-but-not-heavy headings, elegant
+numerical metrics. Never corporate-rigid, never traditional-ERP-dense.
+
+**Preferred typefaces** (chosen to reproduce the *character* of the
+approved reference, not its exact proprietary typography — these are not
+claimed to be the fonts used in the Behance source):
+
+- **Display / headings / KPI / large numbers**: **Outfit**
+- **Body / UI / controls / labels**: **DM Sans**
+
+Georgia, Times, and serif typefaces of any kind must not appear anywhere
+in the visual system.
+
+### Font loading — preview vs. production
+
+`--font-sans`/`--font-body` and `--font-display` remain **dependency-free,
+no-network-call** in this preview, consistent with V1/V2/V3 (see the
+preview's README): the page must work fully offline from `file://`, with
+zero requests. Outfit and DM Sans are open-source and self-hostable, but
+are **not loaded over the network here** — they are named first in each
+stack as the documented target, and the browser silently falls through to
+whatever is actually installed. Naming an unavailable font in a
+`font-family` list never triggers a fetch; only `@font-face` or a
+stylesheet `<link>` would, and neither exists in this preview.
+
+On the machine this preview was built and validated on, that fallback
+resolves to **Avenir Next** (confirmed installed — ships with macOS), which
+is a reasonable stand-in for the rounded-geometric-sans character this
+system targets. On a machine without Avenir Next, it falls through further
+to Helvetica Neue / the OS UI sans stack — still sans-serif, never serif.
+
+**Production frontend must self-host Outfit + DM Sans** (e.g. via a
+bundled webfont, not a third-party CDN) once Frontend Architecture
+governance approves the delivery mechanism. Do not copy proprietary font
+files from anywhere, and do not commit unauthorized font binaries into
+this repository.
 
 ```
---font-sans     → body copy, buttons, labels, inputs
---font-display  → view <h1>, drawer/modal <h2>/<h3>, brand mark
+--font-display  → Outfit, Avenir Next, Avenir, Helvetica Neue, system sans
+--font-body     → DM Sans, Avenir Next, Avenir, Helvetica Neue, Arial, system sans
+--font-sans     → alias of --font-body (legacy name, still referenced across the preview)
 --font-metric   → alias of --font-display, used specifically for money/KPI numerals
 ```
 
-If a future module needs true editorial type beyond the system stack, that
-requires a `DESIGN CHANGE REQUEST` (section 23) to introduce a loaded
-webfont, since it changes the no-network-call guarantee.
+Usage: `--font-display` for view `<h1>`, drawer/modal `<h2>`/`<h3>`, the
+brand mark/name, table numbers ("Mesa 01"); `--font-metric` for every money
+value and KPI number (table totals, drawer/ticket subtotal-IVA-total rows,
+KPI card values); `--font-body` for everything else — body copy, buttons,
+labels, inputs, metadata (waiter names, elapsed time, capacity, branch
+name) — which stays visually subordinate at regular-to-medium weight.
+
+### Type scale
+
+| Role | Size | Weight |
+|---|---|---|
+| Display XL | 32px | 500 |
+| Heading L | 28px | 500 |
+| Heading M | 22px | 500 |
+| Heading S | 18px | 500 |
+| Body | 14px | 400 |
+| Body strong | 14px | 500 |
+| Small (labels, metadata, timestamps) | 12px | 400–500 |
+| Metric XL (large KPI numbers) | 32–40px | 500 |
+| Metric (inline money values) | 20–24px | 500 |
+| Button | 14px | 500–600 |
+
+**Do not use 700/800 as a default heading weight anywhere in this system.**
+A small number of compact UI elements — status badges, small numeric
+badges/counters, buttons — use up to 600 for legibility at very small
+sizes; nothing in the system goes beyond 600. This is a deliberate,
+system-wide reduction from V3's initial 700 defaults, not limited to the
+display typeface swap.
+
+A live, rendered reference of this scale is available at
+`?scene=design-system` (dev/QA helper, not linked from the UI).
+
+If a future module needs typography beyond this system (a new weight, a
+genuinely different typeface), that requires a `DESIGN CHANGE REQUEST`
+(section 23) — reviewed and approved before implementation.
 
 ## 5. Spacing
 

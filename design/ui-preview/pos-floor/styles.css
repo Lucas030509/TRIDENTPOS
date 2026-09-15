@@ -1,10 +1,14 @@
 /* ============================================================================
-   TRIDENTPOS — UI Preview V3 — Visual System Reskin (Warm Hospitality)
+   TRIDENTPOS — UI Preview V3-R1 — Typography Alignment Remediation
    PREVIEW_FIXTURE_DATA — visual/UX prototype only, not production styling.
    ----------------------------------------------------------------------------
-   V3 is a VISUAL RESKIN ONLY: same UX, same navigation, same flows, same
-   states, same interaction model. See docs/design/TRIDENTPOS_VISUAL_REFERENCE_SPEC.md
-   for the full rationale behind every token below.
+   V3-R1 is a TYPOGRAPHY REMEDIATION ONLY on top of V3's visual reskin: the
+   Product Owner rejected V3's Georgia/serif "editorial" display typography
+   as generic/traditional. TRIDENTPOS now uses a Rounded Geometric Sans
+   direction (Outfit for display/metrics, DM Sans for body/UI) — see
+   docs/design/TRIDENTPOS_VISUAL_REFERENCE_SPEC.md for the full rationale.
+   No UX/navigation/layout/spacing change is included in this revision —
+   only font-family and font-weight, per the typography scale in that doc.
    ============================================================================ */
 
 :root {
@@ -70,14 +74,23 @@
 
   --danger-500: #c23b2e;
 
-  /* ---- Typography (section 11) ----
-     No external font is loaded — same dependency-free / no-network-call
-     commitment as V1/V2 (see README). "Editorial" feel is achieved with a
-     serif display face for large numerals/headings (from the system font
-     stack, no @font-face) paired with the existing system sans for body
-     text, rather than a Google Fonts import. */
-  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  --font-display: Georgia, "Iowan Old Style", "Palatino Linotype", "Book Antiqua", serif;
+  /* ---- Typography (V3-R1 — Rounded Geometric Sans, per Product Owner
+     typography remediation; see docs/design/TRIDENTPOS_VISUAL_REFERENCE_SPEC.md).
+     TRIDENTPOS does NOT use serif display typography — the V3 Georgia/serif
+     "editorial" treatment is rejected and removed.
+     Preferred production typefaces: Outfit (display) + DM Sans (body/UI) —
+     open-source, self-hostable, not yet available in this dependency-free
+     preview. No external font is loaded here (same no-network-call
+     commitment as V1/V2/V3): "Outfit"/"DM Sans" are named first in each
+     stack as the documented target, and resolve locally to "Avenir Next"
+     (confirmed installed on this machine, ships with macOS) with zero
+     network requests — naming an unavailable font in a font-family list
+     never triggers a fetch, only @font-face/a stylesheet <link> would.
+     Production frontend must self-host Outfit + DM Sans once Frontend
+     Architecture governance approves the delivery mechanism. */
+  --font-display: "Outfit", "Avenir Next", "Avenir", "Helvetica Neue", -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-body: "DM Sans", "Avenir Next", "Avenir", "Helvetica Neue", -apple-system, BlinkMacSystemFont, Arial, sans-serif;
+  --font-sans: var(--font-body);
   --font-metric: var(--font-display);
 
   /* ---- Elevation (soft, section 13) ---- */
@@ -236,16 +249,17 @@ svg {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-weight: 700;
+  font-weight: 600;
   font-family: var(--font-display);
   font-size: 17px;
   flex-shrink: 0;
 }
 
 .brand-name {
-  font-weight: 700;
+  font-family: var(--font-display);
+  font-weight: 600;
   font-size: 15px;
-  letter-spacing: 0.3px;
+  letter-spacing: 0.2px;
   color: #f7f4ec;
   white-space: nowrap;
 }
@@ -400,7 +414,7 @@ svg {
 }
 
 .topbar-brand {
-  font-weight: 700;
+  font-weight: 600;
   font-family: var(--font-display);
   color: var(--text-primary);
   letter-spacing: 0.2px;
@@ -484,7 +498,7 @@ svg {
   background: var(--status-attention);
   color: white;
   font-size: 10px;
-  font-weight: 700;
+  font-weight: 600;
   min-width: 16px;
   height: 16px;
   border-radius: 999px;
@@ -516,7 +530,7 @@ svg {
   background: linear-gradient(135deg, var(--accent-500), var(--accent-700));
   color: white;
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 600;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -574,8 +588,9 @@ svg {
 
 .view-header h1 {
   font-family: var(--font-display);
-  font-size: 26px;
-  font-weight: 700;
+  font-size: 28px;
+  font-weight: 500;
+  line-height: 1.15;
   margin: 0 0 5px 0;
   color: var(--text-primary);
 }
@@ -717,9 +732,9 @@ svg {
 .table-number {
   font-family: var(--font-display);
   font-size: 21px;
-  font-weight: 700;
+  font-weight: 500;
   color: var(--text-primary);
-  line-height: 1.1;
+  line-height: 1.2;
   white-space: nowrap;
 }
 
@@ -746,7 +761,7 @@ svg {
   padding: 4px 10px;
   border-radius: 999px;
   font-size: 11px;
-  font-weight: 700;
+  font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.3px;
   white-space: nowrap;
@@ -786,7 +801,7 @@ svg {
 .table-time svg { width: 12px; height: 12px; }
 
 .table-time.time-warn { color: var(--status-warning); font-weight: 600; }
-.table-time.time-critical { color: #a8590f; font-weight: 700; }
+.table-time.time-critical { color: #a8590f; font-weight: 600; }
 
 .table-available-label {
   font-size: 13px;
@@ -805,7 +820,7 @@ svg {
 .table-total {
   font-family: var(--font-metric);
   font-size: 17px;
-  font-weight: 700;
+  font-weight: 500;
   color: var(--text-primary);
   font-variant-numeric: tabular-nums;
 }
@@ -815,7 +830,7 @@ svg {
   align-items: center;
   gap: 4px;
   font-size: 11px;
-  font-weight: 700;
+  font-weight: 600;
   color: var(--status-warning);
 }
 
@@ -871,7 +886,7 @@ svg {
 .account-eyebrow {
   margin: 0 0 3px 0;
   font-size: 11.5px;
-  font-weight: 700;
+  font-weight: 500;
   text-transform: uppercase;
   letter-spacing: 0.5px;
   color: var(--accent-600);
@@ -881,7 +896,7 @@ svg {
   margin: 0;
   font-family: var(--font-display);
   font-size: 22px;
-  font-weight: 700;
+  font-weight: 500;
   color: var(--text-primary);
 }
 
@@ -924,7 +939,7 @@ svg {
 
 .account-section h3 {
   font-size: 12.5px;
-  font-weight: 700;
+  font-weight: 500;
   text-transform: uppercase;
   letter-spacing: 0.4px;
   color: var(--text-muted);
@@ -956,7 +971,7 @@ svg {
   border-radius: var(--radius-sm);
   background: var(--accent-50);
   color: var(--accent-700);
-  font-weight: 700;
+  font-weight: 600;
   font-size: 13px;
   display: flex;
   align-items: center;
@@ -978,9 +993,10 @@ svg {
 }
 
 .order-line-subtotal {
+  font-family: var(--font-metric);
   font-variant-numeric: tabular-nums;
   color: var(--text-secondary);
-  font-weight: 600;
+  font-weight: 500;
   flex-shrink: 0;
 }
 
@@ -1014,13 +1030,17 @@ svg {
   font-variant-numeric: tabular-nums;
 }
 
+.summary-row span:last-child {
+  font-family: var(--font-metric);
+}
+
 .summary-total {
   border-top: 1px solid var(--border-subtle);
   margin-top: 6px;
   padding-top: 12px;
   font-family: var(--font-metric);
-  font-size: 19px;
-  font-weight: 700;
+  font-size: 20px;
+  font-weight: 500;
   color: var(--text-primary);
 }
 
@@ -1113,7 +1133,7 @@ svg {
   margin: 0 0 2px 0;
   font-family: var(--font-display);
   font-size: 22px;
-  font-weight: 700;
+  font-weight: 500;
 }
 
 .pos-body {
@@ -1210,7 +1230,7 @@ svg {
 
 .product-name {
   font-size: 13.5px;
-  font-weight: 700;
+  font-weight: 500;
   color: var(--text-primary);
   line-height: 1.3;
 }
@@ -1229,7 +1249,7 @@ svg {
   margin-top: 4px;
   font-family: var(--font-metric);
   font-size: 15.5px;
-  font-weight: 700;
+  font-weight: 500;
   color: var(--text-primary);
   font-variant-numeric: tabular-nums;
 }
@@ -1265,8 +1285,8 @@ svg {
 .ticket-header h2 {
   margin: 0;
   font-family: var(--font-display);
-  font-size: 16.5px;
-  font-weight: 700;
+  font-size: 17px;
+  font-weight: 500;
 }
 
 .ticket-count {
@@ -1323,7 +1343,7 @@ svg {
   border: none;
   background: var(--gray-0);
   color: var(--text-secondary);
-  font-weight: 700;
+  font-weight: 600;
   font-size: 17px;
   display: flex;
   align-items: center;
@@ -1334,7 +1354,7 @@ svg {
 .qty-stepper span {
   min-width: 22px;
   text-align: center;
-  font-weight: 700;
+  font-weight: 600;
   font-size: 14px;
 }
 
@@ -1353,6 +1373,7 @@ svg {
 }
 
 .ticket-line-price {
+  font-family: var(--font-metric);
   font-size: 12px;
   color: var(--text-muted);
   white-space: nowrap;
@@ -1371,8 +1392,9 @@ svg {
 }
 
 .ticket-line-subtotal {
+  font-family: var(--font-metric);
   font-size: 13.5px;
-  font-weight: 700;
+  font-weight: 500;
   color: var(--text-primary);
   flex-shrink: 0;
   font-variant-numeric: tabular-nums;
@@ -1407,7 +1429,7 @@ svg {
   background: var(--action-primary);
   border: 1px solid var(--action-primary);
   color: white;
-  font-weight: 700;
+  font-weight: 600;
   border-radius: 999px;
 }
 
@@ -1533,7 +1555,7 @@ svg {
   transform: translateY(-50%);
   font-family: inherit;
   font-size: 11.5px;
-  font-weight: 700;
+  font-weight: 600;
   color: var(--text-secondary);
   background: var(--surface-muted);
   border: 1px solid var(--border-subtle);
@@ -1594,7 +1616,7 @@ svg {
   background: var(--status-success);
   color: white;
   font-size: 11.5px;
-  font-weight: 700;
+  font-weight: 600;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1621,7 +1643,7 @@ svg {
   background: var(--gray-900);
   color: white;
   font-size: 11px;
-  font-weight: 700;
+  font-weight: 600;
   padding: 3px 7px;
   border-radius: 999px;
   opacity: 0;
@@ -1709,7 +1731,7 @@ svg {
   margin: 0;
   font-family: var(--font-display);
   font-size: 19px;
-  font-weight: 700;
+  font-weight: 500;
 }
 
 .modifier-modal-body {
@@ -1725,7 +1747,7 @@ svg {
 .modifier-group h4 {
   margin: 0 0 10px 0;
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 500;
   text-transform: uppercase;
   letter-spacing: 0.4px;
   color: var(--text-muted);
@@ -1783,7 +1805,7 @@ svg {
   border: 1px solid var(--border-subtle);
   background: var(--surface-card);
   color: var(--text-secondary);
-  font-weight: 700;
+  font-weight: 600;
   font-size: 14px;
 }
 
@@ -1840,7 +1862,7 @@ svg {
 .kpi-value {
   font-family: var(--font-metric);
   font-size: 32px;
-  font-weight: 700;
+  font-weight: 500;
   color: var(--text-primary);
   font-variant-numeric: tabular-nums;
 }
@@ -1875,8 +1897,8 @@ svg {
 .panel-card h3 {
   margin: 0 0 var(--space-4) 0;
   font-family: var(--font-display);
-  font-size: 16px;
-  font-weight: 700;
+  font-size: 18px;
+  font-weight: 500;
   color: var(--text-primary);
 }
 
@@ -1898,7 +1920,7 @@ svg {
 
 .insight-title {
   font-size: 13.5px;
-  font-weight: 700;
+  font-weight: 500;
   color: var(--text-primary);
 }
 
@@ -1952,7 +1974,7 @@ svg {
 
 .feed-title {
   font-size: 13.5px;
-  font-weight: 700;
+  font-weight: 500;
   color: var(--text-primary);
 }
 
@@ -1993,8 +2015,8 @@ svg {
 .ds-section h3 {
   margin: 0 0 var(--space-4) 0;
   font-family: var(--font-display);
-  font-size: 16px;
-  font-weight: 700;
+  font-size: 18px;
+  font-weight: 500;
 }
 
 .ds-row {
@@ -2033,7 +2055,7 @@ svg {
   align-items: center;
   justify-content: center;
   font-size: 11px;
-  font-weight: 700;
+  font-weight: 500;
   color: var(--text-secondary);
 }
 

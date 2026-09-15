@@ -206,6 +206,30 @@ fixing:
    responsive two-row grid for `.ticket-line` at ≤1100px, without shrinking
    any touch target below 44×44px.
 
+## What's new in V3-R1 (typography remediation only)
+
+The Product Owner reviewed V3 and rejected its Georgia/serif "editorial"
+display typography as generic/traditional. **TRIDENTPOS does not use serif
+display typography.** The approved direction is Rounded Geometric Sans:
+Outfit (display/headings/KPI/metrics) + DM Sans (body/UI/controls),
+documented in full in
+[`docs/design/TRIDENTPOS_VISUAL_REFERENCE_SPEC.md`](../../../docs/design/TRIDENTPOS_VISUAL_REFERENCE_SPEC.md).
+
+This preview stays dependency-free and network-free: Outfit/DM Sans are
+not installed and are not fetched over the network (naming a font in a
+CSS stack never triggers a request — only `@font-face`/a stylesheet
+`<link>` would, and neither exists here). They resolve locally to
+**Avenir Next** (confirmed installed — ships with macOS), a reasonable
+stand-in for the same rounded-geometric character. Production frontend
+should self-host Outfit + DM Sans once Frontend Architecture governance
+approves the delivery mechanism.
+
+Alongside the font-family swap, heading/body/label font-weights were
+normalized system-wide away from 700/800 toward the new type scale (mostly
+500, up to 600 for small badges/buttons/counters) — see the "Typography"
+section of `?scene=design-system` for a live, rendered reference. No UX,
+navigation, layout, spacing, or business logic changed in this revision.
+
 ## What you can click
 
 - **Zone tabs** (`Todos | Salón | Terraza | Barra | Privado`) filter the

@@ -1,9 +1,12 @@
 /* ============================================================================
-   TRIDENTPOS — UI Preview V3 — Visual System Reskin
+   TRIDENTPOS — UI Preview V3-R1 — Typography Alignment Remediation
    PREVIEW_FIXTURE_DATA / PREVIEW_UI_PREFERENCE
-   V3 is a VISUAL RESKIN ONLY — this file's UX logic is unchanged from V2
-   except where explicitly noted (product card markup for imagery, and two
-   new dev-only preview scenes: dashboard, design-system).
+   V3-R1 is a TYPOGRAPHY REMEDIATION ONLY on top of V3's visual reskin — no
+   UX/logic change here beyond the Design System scene gaining a Typography
+   section (see renderDesignSystemOverview). V3 itself was a VISUAL RESKIN
+   ONLY — this file's UX logic is unchanged from V2 except where explicitly
+   noted (product card markup for imagery, and two dev-only preview scenes:
+   dashboard, design-system).
    ----------------------------------------------------------------------------
    Todo el estado de esta aplicación vive únicamente en memoria/localStorage
    del navegador. No hay red, no hay backend, no hay PostgreSQL/SQLite.
@@ -1153,6 +1156,20 @@
     var el = document.getElementById("ds-grid");
     if (!el) return;
 
+    var typeScale =
+      '<div style="display:flex;flex-direction:column;gap:14px;">' +
+      '<div><div style="font-family:var(--font-display);font-size:32px;font-weight:500;line-height:1.15;">Display XL</div><div class="ds-swatch-label">32px · weight 500 · --font-display</div></div>' +
+      '<div><div style="font-family:var(--font-display);font-size:28px;font-weight:500;">Heading L</div><div class="ds-swatch-label">28px · weight 500 · --font-display</div></div>' +
+      '<div><div style="font-family:var(--font-display);font-size:22px;font-weight:500;">Heading M</div><div class="ds-swatch-label">22px · weight 500 · --font-display</div></div>' +
+      '<div><div style="font-family:var(--font-display);font-size:18px;font-weight:500;">Heading S</div><div class="ds-swatch-label">18px · weight 500 · --font-display</div></div>' +
+      '<div><div style="font-family:var(--font-body);font-size:14px;font-weight:400;">Body — texto regular de interfaz</div><div class="ds-swatch-label">14px · weight 400 · --font-body</div></div>' +
+      '<div><div style="font-family:var(--font-body);font-size:14px;font-weight:500;">Body strong — texto regular enfatizado</div><div class="ds-swatch-label">14px · weight 500 · --font-body</div></div>' +
+      '<div><div style="font-family:var(--font-body);font-size:12px;font-weight:500;color:var(--text-muted);">Small — metadata, labels, timestamps</div><div class="ds-swatch-label">12px · weight 400–500 · --font-body</div></div>' +
+      '<div><div style="font-family:var(--font-metric);font-size:36px;font-weight:500;font-variant-numeric:tabular-nums;">$18,423</div><div class="ds-swatch-label">Metric XL · 32–40px · weight 500 · --font-metric</div></div>' +
+      '<div><div style="font-family:var(--font-metric);font-size:22px;font-weight:500;font-variant-numeric:tabular-nums;">$505.76</div><div class="ds-swatch-label">Metric · 20–24px · weight 500 · --font-metric</div></div>' +
+      '<div><button class="btn-primary" style="padding:12px 22px;">Button</button><div class="ds-swatch-label" style="margin-top:6px;">14px · weight 600 · --font-body</div></div>' +
+      "</div>";
+
     var colors = [
       ["Graphite (action-primary)", "var(--gray-900)"],
       ["Warm White (surface-page)", "var(--surface-page)"],
@@ -1196,6 +1213,7 @@
       '<span class="status-badge status-por_cobrar">Por cobrar</span>';
 
     el.innerHTML =
+      '<div class="ds-section"><h3>Typography — Rounded Geometric Sans</h3>' + typeScale + "</div>" +
       '<div class="ds-section"><h3>Color</h3><div class="ds-row">' + colorHtml + "</div></div>" +
       '<div class="ds-section"><h3>Radius</h3><div class="ds-row">' + radiusHtml + "</div></div>" +
       '<div class="ds-section"><h3>Buttons · Badges · Chips</h3><div class="ds-row">' + buttonsHtml + "</div></div>" +
