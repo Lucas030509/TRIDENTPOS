@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>TRIDENTPOS — Salón</title>
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<!--
+  PREVIEW_FIXTURE_DATA
+  Este archivo es un PREVIEW VISUAL de UI/UX para TRIDENTPOS.
+  Todos los datos (mesas, cuentas, productos, totales) son ficticios,
+  viven únicamente en memoria del navegador, y NO representan datos
+  canónicos ni cálculos financieros autoritativos.
+  No modifica backend, base de datos, ni dominios de negocio.
+-->
+
+<div class="app" id="app">
+
+  <!-- SIDEBAR -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-brand">
+      <div class="brand-mark">T</div>
+      <span class="brand-name">TRIDENTPOS</span>
+    </div>
+
+    <nav class="sidebar-nav">
+      <button class="nav-item active" data-nav="salon" title="Salón">
+        <span class="nav-icon">
+          <svg viewBox="0 0 24 24"><path d="M3 10h18M3 10v9a1 1 0 0 0 1 1h4v-6h8v6h4a1 1 0 0 0 1-1v-9M3 10l2.5-6h13L21 10"/></svg>
+        </span>
+        <span class="nav-label">Salón</span>
+      </button>
+      <button class="nav-item" data-nav="disabled" title="Órdenes">
+        <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M9 4h6a2 2 0 0 1 2 2v14l-5-3-5 3V6a2 2 0 0 1 2-2Z"/></svg></span>
+        <span class="nav-label">Órdenes</span>
+      </button>
+      <button class="nav-item" data-nav="disabled" title="KDS">
+        <span class="nav-icon"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg></span>
+        <span class="nav-label">KDS</span>
+      </button>
+      <button class="nav-item" data-nav="disabled" title="Caja">
+        <span class="nav-icon"><svg viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="13" rx="2"/><path d="M2 11h20M7 15h3"/></svg></span>
+        <span class="nav-label">Caja</span>
+      </button>
+      <button class="nav-item" data-nav="disabled" title="Inventario">
+        <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M21 8 12 3 3 8m18 0-9 5m9-5v9l-9 5m0-9L3 8m9 5v9M3 8v9l9 5"/></svg></span>
+        <span class="nav-label">Inventario</span>
+      </button>
+      <button class="nav-item" data-nav="disabled" title="Compras">
+        <span class="nav-icon"><svg viewBox="0 0 24 24"><circle cx="9" cy="21" r="1"/><circle cx="19" cy="21" r="1"/><path d="M2.5 3h2l2.6 12.4a2 2 0 0 0 2 1.6h8.4a2 2 0 0 0 2-1.6L21 8H6"/></svg></span>
+        <span class="nav-label">Compras</span>
+      </button>
+      <button class="nav-item" data-nav="disabled" title="Clientes">
+        <span class="nav-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-8 8-8s8 3.6 8 8"/></svg></span>
+        <span class="nav-label">Clientes</span>
+      </button>
+      <button class="nav-item" data-nav="disabled" title="Reportes">
+        <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M4 19h16M8 19V9m4 10V5m4 14v-7"/></svg></span>
+        <span class="nav-label">Reportes</span>
+      </button>
+    </nav>
+
+    <div class="sidebar-footer">
+      <button class="nav-item" data-nav="disabled" title="Configuración">
+        <span class="nav-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9c.2.6.7 1 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/></svg></span>
+        <span class="nav-label">Configuración</span>
+      </button>
+    </div>
+  </aside>
+
+  <!-- MAIN -->
+  <div class="main">
+
+    <!-- HEADER -->
+    <header class="topbar">
+      <div class="topbar-left">
+        <span class="topbar-brand">TRIDENTPOS</span>
+        <span class="topbar-sep">|</span>
+        <span class="topbar-branch">Sucursal Roma Norte</span>
+      </div>
+      <div class="topbar-right">
+        <div class="status-pill status-online" id="connection-status">
+          <span class="status-dot"></span>
+          <span>En línea</span>
+        </div>
+        <div class="topbar-clock" id="topbar-clock">--:--</div>
+        <button class="icon-btn" title="Notificaciones">
+          <svg viewBox="0 0 24 24"><path d="M6 8a6 6 0 0 1 12 0c0 5 2 6 2 6H4s2-1 2-6Z"/><path d="M9.5 20a2.5 2.5 0 0 0 5 0"/></svg>
+          <span class="notif-badge">3</span>
+        </button>
+        <button class="profile-chip">
+          <span class="avatar">CM</span>
+          <span class="profile-info">
+            <span class="profile-name">Carlos Mendoza</span>
+            <span class="profile-role">Cajero</span>
+          </span>
+        </button>
+      </div>
+    </header>
+
+    <!-- CONTENT -->
+    <div class="content">
+
+      <!-- VIEW: SALÓN -->
+      <section class="view view-salon active" id="view-salon">
+        <div class="view-header">
+          <div>
+            <h1>Salón</h1>
+            <p class="view-subtitle" id="salon-subtitle">20 mesas · 6 cuentas abiertas</p>
+          </div>
+          <div class="legend">
+            <span class="legend-item"><i class="dot dot-disponible"></i>Disponible</span>
+            <span class="legend-item"><i class="dot dot-ocupada"></i>Ocupada</span>
+            <span class="legend-item"><i class="dot dot-atencion"></i>Atención</span>
+            <span class="legend-item"><i class="dot dot-por_cobrar"></i>Por cobrar</span>
+          </div>
+        </div>
+
+        <div class="zone-tabs" id="zone-tabs">
+          <button class="chip active" data-zone="todos">Todos</button>
+          <button class="chip" data-zone="Salón Principal">Salón</button>
+          <button class="chip" data-zone="Terraza">Terraza</button>
+          <button class="chip" data-zone="Barra">Barra</button>
+          <button class="chip" data-zone="Privado">Privado</button>
+        </div>
+
+        <div class="tables-grid" id="tables-grid"><!-- rendered by app.js --></div>
+      </section>
+
+      <!-- VIEW: POS / PRODUCT SELECTOR -->
+      <section class="view view-pos" id="view-pos">
+        <div class="pos-header">
+          <button class="btn-back" id="btn-back-to-salon">
+            <svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg>
+            Salón
+          </button>
+          <div class="pos-header-title">
+            <h1>Agregar productos</h1>
+            <p class="view-subtitle" id="pos-context-label">Mesa —</p>
+          </div>
+        </div>
+
+        <div class="pos-body">
+          <div class="pos-catalog">
+            <div class="category-tabs" id="category-tabs"><!-- rendered by app.js --></div>
+            <div class="product-grid" id="product-grid"><!-- rendered by app.js --></div>
+          </div>
+
+          <aside class="ticket-panel">
+            <div class="ticket-header">
+              <h2>Ticket actual</h2>
+              <span class="ticket-count" id="ticket-count">0 productos</span>
+            </div>
+            <div class="ticket-items" id="ticket-items">
+              <div class="ticket-empty" id="ticket-empty">Selecciona productos del menú para agregarlos al ticket.</div>
+            </div>
+            <div class="ticket-summary">
+              <div class="summary-row">
+                <span>Subtotal</span>
+                <span id="ticket-subtotal">$0.00</span>
+              </div>
+              <div class="summary-row">
+                <span>IVA (16%)</span>
+                <span id="ticket-tax">$0.00</span>
+              </div>
+              <div class="summary-row summary-total">
+                <span>Total</span>
+                <span id="ticket-total">$0.00</span>
+              </div>
+            </div>
+            <button class="btn-primary btn-large" id="btn-add-to-account">Agregar a la cuenta</button>
+          </aside>
+        </div>
+      </section>
+
+    </div>
+  </div>
+
+  <!-- ACCOUNT SIDE PANEL -->
+  <div class="backdrop" id="backdrop"></div>
+  <aside class="account-panel" id="account-panel">
+    <div class="account-panel-header">
+      <div>
+        <p class="account-eyebrow">Cuenta</p>
+        <h2 id="account-title">Mesa —</h2>
+      </div>
+      <button class="icon-btn" id="btn-close-panel" title="Cerrar">
+        <svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+
+    <div class="account-meta" id="account-meta"><!-- rendered by app.js --></div>
+
+    <div class="account-panel-body" id="account-panel-body">
+      <div class="account-section">
+        <h3>Partidas</h3>
+        <div class="order-lines" id="order-lines"><!-- rendered by app.js --></div>
+      </div>
+    </div>
+
+    <div class="account-summary" id="account-summary">
+      <div class="summary-row">
+        <span>Subtotal</span>
+        <span id="account-subtotal">$0.00</span>
+      </div>
+      <div class="summary-row">
+        <span>IVA</span>
+        <span id="account-tax">$0.00</span>
+      </div>
+      <div class="summary-row summary-total">
+        <span>TOTAL</span>
+        <span id="account-total">$0.00</span>
+      </div>
+    </div>
+
+    <div class="account-actions" id="account-actions">
+      <button class="btn-action btn-primary" id="btn-add-products">
+        <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+        Agregar productos
+      </button>
+      <button class="btn-action" data-toast="Enviar a cocina">
+        <svg viewBox="0 0 24 24"><path d="M4 15h16M8 15V6a4 4 0 0 1 8 0v9M6 15l1 5h10l1-5"/></svg>
+        Enviar a cocina
+      </button>
+      <button class="btn-action" data-toast="Mover mesa">
+        <svg viewBox="0 0 24 24"><path d="M7 7 3 12l4 5M17 7l4 5-4 5M3 12h18"/></svg>
+        Mover mesa
+      </button>
+      <button class="btn-action" data-toast="Dividir cuenta">
+        <svg viewBox="0 0 24 24"><path d="M12 3v18M5 8h4M15 8h4M5 16h4M15 16h4"/></svg>
+        Dividir cuenta
+      </button>
+      <button class="btn-action" data-toast="Imprimir">
+        <svg viewBox="0 0 24 24"><path d="M6 9V3h12v6M6 18H4a1 1 0 0 1-1-1v-5a1 1 0 0 1 1-1h16a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1h-2M6 14h12v7H6z"/></svg>
+        Imprimir
+      </button>
+      <button class="btn-action btn-cobrar" data-toast="Cobrar">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 0 1 5 0c0 2.5-5 1.5-5 4a2.5 2.5 0 0 0 5 0M12 6.5v11"/></svg>
+        Cobrar
+      </button>
+    </div>
+  </aside>
+
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
