@@ -1258,24 +1258,27 @@
   }
 
   function renderAccountActions(t, vs) {
-    var primaryBtn;
-    if (vs === "por_cobrar") {
-      primaryBtn = '<button class="btn-action btn-cobrar" data-action="open-payment" data-arg="' + t.id + '">' + iconMoney() + "Cobrar " + fmtMoney(accountTotal(t.account)) + "</button>";
-    } else {
-      primaryBtn = '<button class="btn-action btn-primary" data-action="add-products" data-arg="' + t.id + '">' + iconPlus() + "Agregar productos</button>";
-    }
+    var primaryBtn = vs === "por_cobrar"
+      ? '<button class="btn-action btn-cobrar account-action-primary" data-action="open-payment" data-arg="' + t.id + '">' + iconMoney() + "Cobrar " + fmtMoney(accountTotal(t.account)) + "</button>"
+      : '<button class="btn-action btn-primary account-action-primary" data-action="add-products" data-arg="' + t.id + '">' + iconPlus() + "Agregar productos</button>";
+
     var kitchenBtn = vs !== "por_cobrar"
       ? '<button class="btn-action" data-action="send-to-kitchen" data-arg="' + t.id + '"' + (hasUnsentLines(t) ? "" : " disabled") + ">" + iconKitchen() + "Enviar a cocina</button>"
       : "";
     var checkBtn = (vs === "ocupada" || vs === "atencion")
       ? '<button class="btn-action" data-action="request-check" data-arg="' + t.id + '">' + iconMoney() + "Solicitar cuenta</button>"
       : "";
+    var secondaryRow = (kitchenBtn || checkBtn)
+      ? '<div class="account-actions-secondary-row">' + kitchenBtn + checkBtn + "</div>"
+      : "";
 
     document.getElementById("account-actions").innerHTML =
-      '<div class="account-actions-primary">' + primaryBtn + kitchenBtn + checkBtn +
-      '<button class="btn-action btn-action-more" id="btn-account-more" title="Más acciones">' +
+      '<div class="account-actions-toolbar">' +
+      '<button class="account-actions-more-btn" id="btn-account-more" title="Más acciones">' +
       '<svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="12" cy="19" r="1.4"/></svg></button>' +
-      "</div>";
+      "</div>" +
+      primaryBtn +
+      secondaryRow;
 
     bindDropdownActions(document.getElementById("account-actions"));
     document.getElementById("btn-account-more").addEventListener("click", function (e) {

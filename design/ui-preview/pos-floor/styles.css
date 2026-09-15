@@ -1055,10 +1055,12 @@ svg {
 }
 
 .account-actions {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-  padding: 16px 24px 24px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 20px 24px calc(22px + env(safe-area-inset-bottom, 0px)) 24px;
+  border-top: 1px solid var(--surface-muted);
+  box-shadow: 0 -8px 20px rgba(28, 25, 18, 0.03);
   flex-shrink: 0;
 }
 
@@ -1086,7 +1088,6 @@ svg {
 }
 
 .btn-action.btn-primary {
-  grid-column: 1 / -1;
   background: var(--action-primary);
   border-color: var(--action-primary);
   color: white;
@@ -1097,7 +1098,6 @@ svg {
 }
 
 .btn-action.btn-cobrar {
-  grid-column: 1 / -1;
   background: var(--status-attention);
   border-color: var(--status-attention);
   color: white;
@@ -2504,20 +2504,51 @@ svg {
   font-size: 12.5px;
 }
 
-/* ---- Account actions v4 (primary + secondary "..." menu, §50/§21) ---- */
+/* ---- Account actions footer (primary / secondary / tertiary hierarchy —
+   de-cluttered per Product Owner refinement request) ---- */
 
-.account-actions-primary {
+.account-actions-toolbar {
   display: flex;
-  gap: 8px;
-  padding: 14px 24px 20px 24px;
+  justify-content: flex-end;
+}
+
+.account-actions-more-btn {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-card);
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
   flex-shrink: 0;
 }
 
-.account-actions-primary .btn-action { flex: 1; }
-.account-actions-primary .btn-action-more {
-  flex: none;
-  width: 46px;
-  padding: 0;
+.account-actions-more-btn svg { width: 18px; height: 18px; }
+.account-actions-more-btn:hover { background: var(--surface-muted); color: var(--text-secondary); }
+
+.account-action-primary {
+  width: 100%;
+  min-height: 52px;
+  font-size: 14.5px;
+}
+
+.account-actions-secondary-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+.account-actions-secondary-row .btn-action {
+  min-height: 48px;
+  font-size: 12.5px;
+  padding: 10px 8px;
+  white-space: nowrap;
+}
+
+@media (max-width: 1100px) {
+  .account-actions-secondary-row { grid-template-columns: 1fr; }
 }
 
 /* ---- Generic modal width variants ---- */
@@ -2842,9 +2873,6 @@ svg {
   }
   .tables-grid {
     grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-  }
-  .account-actions {
-    grid-template-columns: 1fr;
   }
   .dashboard-columns {
     grid-template-columns: 1fr;
