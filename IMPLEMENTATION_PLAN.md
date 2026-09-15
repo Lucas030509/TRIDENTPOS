@@ -1,6 +1,11 @@
 # IMPLEMENTATION PLAN — ERP RESTAURANTES / TRIDENTPOS
 
 > [!NOTE]
+> **ACR-2026-015 PRODUCT OWNER APPROVED / ARCHITECTURE CHANGE GATE PASSED — PENDING CANONICAL MERGE**
+>
+> Amendment under `ACR-2026-015` (Salón Productization, POS Settlement & Frontend Execution Decomposition): insertion of additive Work Packages `WP-014A: Dining Operations Expansion` (Wave 4) and `WP-016C: POS Payment Orchestration & Account Settlement` (Wave 4); conversion of executable `WP-026` into a non-executable umbrella/milestone decomposed into `WP-026A`–`WP-026D` (Wave 8); a Frontend Architecture Gate (`FRONTEND_ARCHITECTURE.md`, authored by `05_Frontend_Architect`) inserted as a non-executable prerequisite before `WP-026A` START; correction of `WP-016`'s `Bounded Context` label per advisory `ARCH-ADV-013-01`; and an updated `WP-027` E2E lifecycle. Effective executable roadmap: 29 → 34 Work Packages, no existing WP renumbered. Independently reviewed (`01_Solution_Architect`, `03_Data_Architect`, `05_Frontend_Architect`, `06_UX_UI_Design_Architect`, `08_Security_Architect` — 5/5 PASS WITH ADVISORIES, 0 blockers), synthesized (`evidence/ACR-2026-015_R1_COORDINATOR_SYNTHESIS.md`), and approved by the Product Owner (`evidence/ACR-2026-015_R1_PRODUCT_OWNER_APPROVAL.md`), subject to 11 binding downstream conditions (`FE`/`DATA`/`UX`/`SEC-COND-015-0x`) carried forward as mandatory Acceptance Criteria on the WP entries above. Reservations remain explicitly excluded from this productization. Protected Product Owner decisions (`OQ-SSOT-01`, `OQ-SSOT-02`, `OQ-SSOT-06`, `OQ-SSOT-07`, `OQ-ARCH-01`) remain OPEN and are not touched by this amendment. `ARCH-ADV-013-01` is remediated by this candidate's `WP-016` label correction but is not itself formally closed until this candidate becomes canonical. See `evidence/ACR-2026-015_CANONICALIZATION_EVIDENCE.md` for full governance provenance. Pending independent canonical-amendment review and merge.
+
+> [!NOTE]
 > **ACR-2026-014 PROPOSED ARCHITECTURE CHANGE — PENDING GOVERNANCE APPROVAL**
 > 
 > Proposed amendment under `ACR-2026-014` / `ADR-014`: Insertion of additive prerequisite work package `WP-016B: Platform Core Master Catalog Foundation (Categories & Products)` in Wave 4, and update of `WP-017` prerequisites to `WP-004, WP-016B` with strict prohibition on Inventory-owned products. Pending independent reviews and Product Owner approval.
@@ -16,8 +21,8 @@
 > The additions and test specifications in this document relating to WP-009 (`DATA-INV-WP009-01`, `StationPinStore`, `EdgeSecureStore`, `edge_security_audit`, exact test obligations) represent governance overlays formally approved and merged into canonical main under G9 (`0e50fe12ba7a95638c8efe57d4cd9c598b56daa9`). The underlying baseline remains `APPROVED / FROZEN — 2026-09-03`.
 
 **Document ID:** `PLAN-IMP-001`  
-**Version:** `1.2 PROPOSED OVERLAY — ACR-2026-013` (Underlying baseline: `1.0 APPROVED / FROZEN — 2026-09-03` with ACR-2026-011 Canonical Overlay — G9)  
-**Status:** `PROPOSED ARCHITECTURE CHANGE — PENDING GOVERNANCE APPROVAL`  
+**Version:** `1.3 CANDIDATE OVERLAY — ACR-2026-015` (Underlying baseline: `1.0 APPROVED / FROZEN — 2026-09-03` with ACR-2026-011 Canonical Overlay — G9; ACR-2026-013 and ACR-2026-014 overlays remain separately `PROPOSED — PENDING GOVERNANCE APPROVAL`, unaffected by this overlay)  
+**Status:** `ACR-2026-015: PRODUCT OWNER APPROVED / GATE PASSED — PENDING CANONICAL MERGE` (other pending overlays retain their own independent status, see banners above)  
 **Date:** `2026-09-13`  
 **Author Agent:** `01_Solution_Architect` (Overlay Synthesis: `01_Solution_Architect`)  
 **Target Gate:** `gates/IMPLEMENTATION_READINESS_GATE.md`  
@@ -625,6 +630,33 @@ Dining room, counter orders, kitchen display (KDS), cash drawer, Cortes X/Z, and
 * **Parallelizable:** YES — with `WP-017` only after ACR-2026-013 and graph-enforcement remediation are canonical on main. Independent sibling branches from the same current canonical main baseline.
 * **Handoff Target:** `WP-015`, `WP-016`, `WP-017`
 
+#### `WP-014A`: Dining Operations Expansion
+* **Bounded Context:** TRIDENTPOS
+* **Frozen Requirements:** `DATA_MODEL.md` Sec. 2 & 3; `FUNCTIONAL_ARCHITECTURE.md` Sec. 3; `ADR-002`, `ADR-004`, `ADR-012`, `ADR-013`; `ACR-2026-015`
+* **ADRs:** `ADR-013` (package placement)
+* **Data Objects:** Additive extension of SQLite `mesas`, `cuentas` (waiter reassignment, guest-count change, request-check/precuenta-lifecycle, transfer, split, cancellation, release, and operational event/audit-trail fields, exact shape determined at build time under `ADR-012` fixed-point discipline); no new database.
+* **Package Placement & Topology (`ADR-013` §4.2, verified, not deferred to implementation):** Domain logic in `@trident/pos` (already listed responsibility: "Salones, Mesas, Cuentas, Partidas... Puertos de repositorio y contratos de políticas"); no new package. Persists via the existing `@trident/edge` SQLite WAL adapter, assembled by `@trident/pos-edge-runtime` — the same composition already established by `WP-014`.
+* **APIs / Contracts:** Additive extension of the Fastify local POS REST API established by `WP-014` (waiter change, guest-count change, request-check, precuenta print, transfer, split, cancel, release endpoints; exact contract shapes are this WP's own build-time deliverable).
+* **Builder Agent:** `16_Native_Edge_Developer`
+* **Specialist Reviewer:** `01_Solution_Architect` or `03_Data_Architect` (per final implementation footprint)
+* **Code Reviewer:** `11_Code_Reviewer`
+* **Prerequisites:** `WP-014`
+* **Dependencies:** SQLite 3 WAL, local Fastify daemon, Value Object `Money` (`ADR-012`) — unchanged from `WP-014`.
+* **Inputs:** `ARCHITECTURE_CHANGE_REQUEST_SALON_PRODUCTIZATION.md` Section H (`ACR-2026-015`), `DATA_MODEL.md`, `ADR-013` §4.2, `PRODUCT_DECISIONS.md` `DEC-006`.
+* **Outputs:** Waiter reassignment; guest-count change; request-check; precuenta lifecycle (sales folio assigned only at printed-precuenta time per `DEC-006`, `APROBADA`); table/account transfer command surface; account split command surface; cancellation command surface; table release; operational event/audit trail; Salón operational read model; attention-signal projection (read-model only — does not become an authoritative `Mesa.status` or `Cuenta.status` value); floor-layout coordinate persistence if confirmed as TRIDENTPOS-owned configuration; table-merge semantics implemented only as a neutral, parameterized hook pending explicit specification (no concrete merge/account-grouping model may be built beyond the hook without a further architecture decision).
+* **Explicit Non-Scope:** Payment tender orchestration (`WP-016C`); KDS transport (`WP-015`); Inventory depletion; Reservations; Finance ledger posting; fiscal stamping; UI implementation (`WP-026B`).
+* **Acceptance Criteria:** OCC (`expectedVersion`) remains enforced across all new table/account mutations, no lost updates; audit events are immutable; the attention-signal projection never overwrites underlying domain state; precuenta/check-request transitions preserve `DEC-006`'s folio-at-precuenta rule; transfer/split/cancel behavior implements zero implicit business-rule defaults for `CancellationPolicy`/`TransferValidationRule`/`BillSplitProrationStrategy`; **`DATA-COND-015-03` (mandatory, `ACR-2026-015` Coordinator Synthesis):** specialist review must explicitly verify `cuentas.status` and confirm no preview-only visual state (e.g. `EN_ATENCIÓN`, `POR_COBRAR`) becomes a new authoritative `Cuenta`/`Mesa` status value without a separate approved architecture change.
+* **Tests:** OCC race-condition tests for each new mutation type; audit-event immutability test; folio-assignment timing test (precuenta print, not table-open or check-request); table-merge hook neutrality test (confirms no concrete merge behavior executes before policy is decided).
+* **Security Debt:** None.
+* **Evidence Required:** OCC conflict test logs per mutation type; audit-event sample; `DEC-006` compliance test log.
+* **Rollback:** Void the additive migration (Expand-only; no destructive change to `WP-014`'s existing schema or behavior).
+* **Feature Flag:** NO
+* **Migration Impact:** Expand (extends existing `mesas`/`cuentas`; does not redefine `WP-014`'s frozen historical schema or contracts).
+* **Risk:** Medium
+* **PO Dependency:** `OQ-SSOT-01` (Classification: B & E; reuses `WP-014`'s existing `CancellationPolicy` hook; concrete policy PENDING PO DECISION), `OQ-SSOT-02` (Classification: B & E; reuses `WP-014`'s existing `TransferValidationRule` hook; concrete rule PENDING PO DECISION), `OQ-SSOT-06` (Classification: B & E; reuses `WP-014`'s existing `BillSplitProrationStrategy` hook; concrete algorithm PENDING PO DECISION). Table-merge semantics additionally blocked pending explicit Product Owner / architecture specification beyond a neutral hook.
+* **Parallelizable:** YES (with `WP-015`, `WP-016` — same parallelization pattern as `WP-014`).
+* **Handoff Target:** `WP-026B`
+
 #### `WP-015`: Kitchen Display System (KDS) LAN Event Dispatcher & Printer Service
 * **Bounded Context:** TRIDENTPOS
 * **Frozen Requirements:** `FUNCTIONAL_ARCHITECTURE.md` Sec. 3; `ADR-005`
@@ -651,7 +683,7 @@ Dining room, counter orders, kitchen display (KDS), cash drawer, Cortes X/Z, and
 * **Handoff Target:** `WP-017`
 
 #### `WP-016`: Cash Management, Shifts & Arqueo Ciego (Cortes X & Z)
-* **Bounded Context:** TRIDENTPOS / Finance
+* **Bounded Context:** TRIDENTPOS (Downstream Event Consumer: Finance) — *remediated by `ACR-2026-015` per advisory `ARCH-ADV-013-01` (`evidence/ACR-2026-013_R1_PLATFORM_ARCHITECTURE_REVIEW.md` Sec. 2.8): all physical tables (`turnos_caja`, `movimientos_caja`, `cortes_caja`, `arqueos_ciegos`) belong strictly to TRIDENTPOS (`MOD-POS`); Finance is an asynchronous event subscriber to `CorteZGenerado`, not a shared package owner. This label correction was a required precondition for `WP-016` START, independent of and not caused by `ACR-2026-015`'s other changes.*
 * **Frozen Requirements:** `DATA_MODEL.md` Sec. 2; `FUNCTIONAL_ARCHITECTURE.md` Sec. 3; `ADR-004`
 * **ADRs:** `ADR-004`
 * **Data Objects:** `turnos_caja`, `movimientos_caja`, `cortes_caja`, `arqueos_ciegos`
@@ -705,6 +737,42 @@ Dining room, counter orders, kitchen display (KDS), cash drawer, Cortes X/Z, and
 * **PO Dependency:** None (Preserves 9/9 protected PO decisions PENDING PO DECISION).
 * **Parallelizable:** YES (independent additive DDL migration)
 * **Handoff Target:** `WP-017`
+
+#### `WP-016C`: POS Payment Orchestration & Account Settlement
+* **Bounded Context:** TRIDENTPOS, with event-contract outputs toward Finance / Billing / Loyalty (conditional downstream subscribers; **no synchronous runtime dependency TRIDENTPOS → Finance**).
+* **Frozen Requirements:** `FUNCTIONAL_ARCHITECTURE.md` Sec. 6.3 (`Contrato TRIDENTPOS ↔ Finance / Billing`); `CAPABILITY_MAP.md` `CAP-OPS-07`; `DATA_AUTHORITY_MATRIX.md` (Pagos & Transacciones de Cobro row); `ADR-012`; `ADR-013` §4.2; `ACR-2026-015`
+* **ADRs:** `ADR-012`, `ADR-013`
+* **Data Objects:** Extends the existing frozen SQLite `pagos` table (`DATA_MODEL.md` Sec. 3) — an Expand migration adding an idempotency/dedup key column (see Acceptance Criteria). `pagos` was not previously a Data Object of any WP; this WP is its first owner.
+* **Package Placement & Topology (`ADR-013` §4.2, verified — not deferred to implementation):**
+  - Dominio puro: `@trident/pos` — payment/settlement domain rules, tender lines, idempotency check, settlement state machine, `CuentaPagada` emission. Already listed in `ADR-013`'s responsibility matrix ("...Cobro POS (`pagos`)..."). Depende únicamente de `@trident/core`.
+  - Persistencia e Infraestructura: `@trident/edge` — generic physical card-terminal socket/driver I/O only, no settlement business rules (mirrors the existing `WP-015` ESC/POS printer pattern). Depende únicamente de `@trident/core`.
+  - Ensamblado y Raíz de Composición: `@trident/pos-edge-runtime` — wires the `@trident/pos` settlement aggregate to the `@trident/edge` terminal adapter and Fastify/IPC transport; posee cero lógica de negocio propia.
+* **APIs / Contracts:** Extends the Fastify local POS REST API (tender submission, mixed/split payment, settlement completion); abstract card-terminal adapter contract (no concrete provider/terminal selected by this WP).
+* **Builder Agent:** `16_Native_Edge_Developer` (Edge-local orchestration); `13_Backend_Developer` (supporting, only if a cloud-side contract adapter surface is required).
+* **Specialist Reviewer:** `03_Data_Architect` + `08_Security_Architect` (mandatory — payment adapter, idempotency, and credential surface).
+* **Code Reviewer:** `11_Code_Reviewer`
+* **Prerequisites:** `WP-014`, `WP-016` (**`WP-016` remains separately blocked by `ARCH-ADV-013-01` until its `Bounded Context` label is corrected — see `WP-016`'s own entry above, now remediated by this candidate**).
+* **Dependencies:** SQLite 3, Value Object `Money` (`ADR-012`), the existing `WP-012` Transactional Outbox / `IngestedIdempotencyLog` composite-key pattern (`(organization_id, branch_id, aggregate_type, aggregate_id, action, client_op_id)`).
+* **Inputs:** `ARCHITECTURE_CHANGE_REQUEST_SALON_PRODUCTIZATION.md` Section G (`ACR-2026-015`); `FUNCTIONAL_ARCHITECTURE.md` Sec. 6.3; `DATA_AUTHORITY_MATRIX.md`; `evidence/WP-012_BUILDER_EVIDENCE.md`; `evidence/WP-009_BUILDER_EVIDENCE_R5.md` (secure-storage pattern).
+* **Outputs:** `EFECTIVO`, `TARJETA`, `TRANSFERENCIA` tender capture; mixed/split tender; partial payment; remaining balance; tip capture; payment reference/authorization metadata; idempotent payment submission; settlement completion; account-close coordination with `WP-014`/`WP-014A`; `CuentaPagada` domain-event emission exactly as already specified in `FUNCTIONAL_ARCHITECTURE.md` Sec. 6.3.
+* **Explicit First-Slice Exclusions:** `RESTCARD` (depends on `WP-022`, not yet started) and `CXC` (depends on `OQ-SSOT-03`, Finance/CRM-owned, unresolved) — both already present in the frozen `pagos.payment_method` enum but rejected at the API boundary in this WP's first slice; neither may be added without a separate authorization.
+* **Acceptance Criteria (binding — `ACR-2026-015` Coordinator Synthesis mandatory downstream conditions; none of the following six may be waived or downgraded to optional):**
+  1. **`DATA-COND-015-01`:** Atomic local settlement — the `pagos` INSERT, the `cuentas` payment/status/version transition, and the required outbox event occur under one governed local SQLite transaction boundary. No partial durable settlement state may be accepted silently.
+  2. **`DATA-COND-015-02`:** Canonical payment idempotency implemented via an Expand migration adding a `client_op_id`/idempotency-key column to `pagos`, following the proven `WP-012` composite-key pattern, or an architecture-reviewed equivalent. Closes the pre-existing gap between `DATA_AUTHORITY_MATRIX.md`'s "Append-Only + Idempotency Key" requirement and the frozen `pagos` DDL, which has no such column today.
+  3. **`SEC-COND-015-01`:** Any card-terminal credential / API secret uses the `WP-009` secure-storage pattern (`StationPinStore` / `ElectronSafeStorageBackend`, OS Keychain / DPAPI / Secret Service, fail-closed) or an independently approved equivalent OS-level fail-closed secure store. Explicitly forbidden: renderer `localStorage`; renderer-accessible secrets; plaintext config; IPC-exposed credential payloads; source-controlled credentials.
+  4. **`SEC-COND-015-02`:** A concrete crash-reconciliation protocol is defined for "external authorization succeeded, local durable settlement not yet committed," including replay/idempotency semantics — a statement that the risk was considered is not sufficient to pass this criterion.
+  5. **`SEC-COND-015-03`:** Settlement is explicitly bound to operational audit evidence (actor, station, timestamp, account, payment reference, tender lines), reusing `local_audit_trail` or an equivalent canonical audit primitive rather than leaving the linkage implicit.
+  6. No duplicate tender line on retry; no double account settlement; exact `ADR-012` Money representation preserved throughout (already conformant in the frozen `pagos.amount`/`tip_amount` columns).
+* **Tests:** Idempotent retry simulation (duplicate submission of an identical tender, exactly one settlement executes); crash-then-recover simulation between terminal authorization and local persistence; mixed-tender reconciliation test; audit-trail linkage test; `turno_caja_id NOT NULL` shift-gating test across all tender types (not only cash).
+* **Security Debt:** Crash-recovery protocol (`SEC-COND-015-02`) and terminal-credential storage mechanism (`SEC-COND-015-01`) are open design items until this WP's own specialist review (`03_Data_Architect` + `08_Security_Architect`) produces and verifies a concrete answer — tracked here, not silently dropped.
+* **Evidence Required:** Idempotency test log; crash-recovery test log; audit-trail sample linking a settlement to `local_audit_trail`; `ADR-012` compliance check.
+* **Rollback:** Reverse settlement via a compensating entry with mandatory audit record — the append-only `pagos` table is never destructively altered.
+* **Feature Flag:** NO (adapter-specific kill switches permitted where external terminal integrations exist).
+* **Migration Impact:** Expand (extends the existing frozen `pagos` table only).
+* **Risk:** High
+* **PO Dependency:** `OQ-ARCH-01` (Classification: D; this WP consumes whatever shift-assignment capability `WP-016` ultimately implements once the Product Owner decides the multi-cashier model; it does not decide it).
+* **Parallelizable:** YES (with `WP-015`; sequenced after `WP-016`'s shift capability and after `WP-016`'s `ARCH-ADV-013-01` label remediation).
+* **Handoff Target:** `WP-026D`
 
 ---
 
@@ -956,29 +1024,122 @@ Web corporate backoffice, mobile waiter handheld, and desktop POS front-end.
 * **Parallelizable:** YES (with `WP-024`, `WP-026`)
 * **Handoff Target:** `WP-027`
 
-#### `WP-026`: Native Desktop POS & KDS Station UI (Electron Desktop App)
+#### `WP-026`: Native POS Presentation Milestone (Non-Executable Umbrella)
+* **Classification:** NON-EXECUTABLE UMBRELLA / MILESTONE — per `ACR-2026-015`, `WP-026` no longer produces implementation code directly. It tracks completion of the four executable Work Packages below (`WP-026A`, `WP-026B`, `WP-026C`, `WP-026D`), which decompose its original scope ("Native Desktop POS & KDS Station UI, Electron Desktop App") into independently reviewable, independently startable units.
+* **Bounded Context:** TRIDENTPOS / Native Edge (unchanged).
+* **Frozen Requirements carried forward to the four sub-WPs:** `ADR-003`. *(Documentation-hygiene note, not fixed by this candidate: the original `WP-026` entry's citation of `SOLUTION_ARCHITECTURE.md` Sec. 3 was stale — that section concerns Cloud event handling, unrelated to frontend architecture. This is exactly why a dedicated Frontend Architecture Gate is inserted below rather than left to `WP-026A` to informally resolve.)*
+* **Dependencies carried forward, unchanged (already frozen, not re-decided by any sub-WP):** Electron 30+, React, Tailwind CSS, ESC/POS printer bridge.
+* **Handoff Target:** `WP-027` (via all four sub-WPs).
+
+> [!IMPORTANT]
+> **Frontend Architecture Gate — Prerequisite, Non-Executable**
+>
+> `FRONTEND_ARCHITECTURE.md` is a governance/architecture prerequisite artifact, **not an executable Work Package** — it is not counted in the effective executable WP total (Section below, 29 → 34).
+>
+> **Author:** `05_Frontend_Architect`. **Required status before `WP-026A` START:** `APPROVED` / `FROZEN`, via independent architecture review by a fresh instance distinct from the author (no self-review).
+>
+> Must explicitly define, within the already-frozen React + Electron 30+ + Tailwind CSS stack (not re-selecting it): routing; state management; session boundaries; API/IPC boundaries; client contract strategy; caching; offline presentation architecture; error architecture; component-library technical architecture; primitive/component boundaries; variant/composition strategy; design-token consumption mechanism (`FE-COND-015-01`). `WP-026A` must consume this approved architecture, not invent it (`FE-COND-015-02`).
+>
+> `FRONTEND_ARCHITECTURE.md` is not created by `ACR-2026-015`'s canonicalization — it is a separate, later artifact and gate.
+
+#### `WP-026A`: Native POS App Shell & Design System Foundation
 * **Bounded Context:** TRIDENTPOS / Native Edge
-* **Frozen Requirements:** `SOLUTION_ARCHITECTURE.md` Sec. 3; `ADR-003`
+* **Frozen Requirements:** `FRONTEND_ARCHITECTURE.md` (APPROVED/FROZEN — hard prerequisite, see gate above); `ADR-003`; `ACR-2026-015`
 * **ADRs:** `ADR-003`
-* **Data Objects:** Local UI state store
-* **APIs / Contracts:** Local IPC Bridge (`window.electronAPI`)
-* **Builder Agent:** `16_Native_Edge_Developer`
-* **Specialist Reviewer:** `01_Solution_Architect`
+* **Data Objects:** Local UI state store (shape determined by the approved `FRONTEND_ARCHITECTURE.md`, not by this WP).
+* **APIs / Contracts:** Local IPC Bridge (`window.electronAPI`), consumed per the approved Frontend Architecture, not redesigned here.
+* **Builder Agent:** `16_Native_Edge_Developer` — **builder only; does not author architecture.**
+* **Specialist Reviewer:** `01_Solution_Architect` (verifies implementation conforms to the already-frozen `FRONTEND_ARCHITECTURE.md`; does not re-decide architecture at this stage).
 * **Code Reviewer:** `11_Code_Reviewer`
-* **Prerequisites:** `WP-007`, `WP-014`, `WP-015`, `WP-016`
-* **Dependencies:** Electron 30+ (`IMPLEMENTATION VERSION TO PIN`), React, Tailwind CSS, ESC/POS printer bridge.
-* **Inputs:** `ADR-003`, `SOLUTION_ARCHITECTURE.md`
-* **Outputs:** High-performance touch-screen interface for cashier and kitchen: Fast numeric keypad PIN entry, split billing, cash drawer control, integrated credit card terminal trigger, real-time KDS kitchen order cards with color-coded timers.
-* **Acceptance Criteria:** UI responds smoothly to touch events; KDS ticket status transitions update instantly across all screens; printer status indicator displayed.
-* **Tests:** Touch response latency test; KDS ticket state transition test; memory leak profiling test over continuous simulated shift.
+* **Prerequisites:** `WP-007`; **`FRONTEND_ARCHITECTURE.md` APPROVED/FROZEN** (harder prerequisite than the original `WP-026` entry).
+* **Dependencies:** Electron 30+, React, Tailwind CSS, ESC/POS printer bridge (frozen, unchanged).
+* **Inputs:** Approved `FRONTEND_ARCHITECTURE.md`; `ADR-003`.
+* **Outputs:** Electron renderer App Shell; routing implementation; approved state-management implementation; approved IPC/local-REST client implementation; auth/session presentation; OCC-409 UX infrastructure; error boundaries; shared component foundation; design tokens; responsive primitives; accessibility primitives.
+* **Acceptance Criteria:** **`FE-COND-015-02` (mandatory):** every architectural choice implemented (routing, state, session, IPC/API, caching, offline presentation, error handling, component architecture, token-consumption architecture) already exists in the approved `FRONTEND_ARCHITECTURE.md`; none is decided inside this WP. Preserves `ADR-003`'s Electron context-isolation / `nodeIntegration`-disabled posture without weakening it or `WP-007`'s security controls. UI responds smoothly to touch events.
+* **Tests:** Touch response latency test; App Shell conformance-to-architecture test; context-isolation regression test.
 * **Security Debt:** `RSK-11` (Memory footprint benchmarking on POS hardware $\le 2\text{ GB}$ RAM).
-* **Evidence Required:** Memory profile snapshot showing memory consumption during peak load.
+* **Evidence Required:** Memory profile snapshot; `FRONTEND_ARCHITECTURE.md` conformance checklist signed by the specialist reviewer.
 * **Rollback:** Sideload previous Electron installer version.
 * **Feature Flag:** NO
 * **Migration Impact:** None
 * **Risk:** Medium
-* **PO Dependency:** `OQ-SSOT-01` (Classification: B & E; post-kitchen cancel UI hook implemented; concrete authorization rule PENDING PO DECISION), `OQ-ARCH-01` (Classification: D; shift UI hook implemented; concrete multi-cashier UI blocked until PO decision).
-* **Parallelizable:** YES (with `WP-024`, `WP-025`)
+* **PO Dependency:** None (architecture-conformance WP; business-policy hooks live in `WP-014A`/`WP-016C`, not here).
+* **Parallelizable:** YES (independent of `WP-024`, `WP-025`; must precede `WP-026B`/`C`/`D`).
+* **Handoff Target:** `WP-026B`, `WP-026C`, `WP-026D`
+
+#### `WP-026B`: Salón & Ordering UI
+* **Bounded Context:** TRIDENTPOS / Native Edge
+* **Frozen Requirements:** Approved `FRONTEND_ARCHITECTURE.md`; canonicalized Visual System; `ACR-2026-015`
+* **ADRs:** `ADR-003`
+* **Data Objects:** None authoritative (consumes `WP-014`/`WP-014A` contracts only).
+* **APIs / Contracts:** Consumes the Fastify local POS REST API established by `WP-014`/`WP-014A`.
+* **Builder Agent:** `16_Native_Edge_Developer`
+* **Specialist Reviewer:** `06_UX_UI_Design_Architect` + `01_Solution_Architect` (independent, per EAAF review model)
+* **Code Reviewer:** `11_Code_Reviewer`
+* **Prerequisites:** `WP-026A`, `WP-014`, productive required portions of `WP-014A`
+* **Dependencies:** Electron 30+, React, Tailwind CSS (frozen, unchanged).
+* **Inputs:** `WP-014`/`WP-014A` contracts; approved `FRONTEND_ARCHITECTURE.md`; canonicalized Visual System.
+* **Outputs:** Salón table grid; area filtering; operational state projection; floor-plan operational view; account drawer; open table/account; add product; modifier presentation; kitchen-send invocation; waiter/guest operations; precuenta/check-request; transfer/split/cancel UI hooks; local operational search; operational event/history presentation; event-driven notifications; permission-aware actions; OCC conflict UX.
+* **Acceptance Criteria:** **`FE-COND-015-03` (mandatory): NO BUSINESS RULE AUTHORITY IN UI.** Transfer, split, cancel, attention, and floor-state UI consume canonical contracts/projections only — they do not define `CancellationPolicy`, `TransferValidationRule`, `BillSplitProrationStrategy`, or table-merge semantics, all of which remain `WP-014A`'s (pending Product Owner decision). **`UX-COND-015-01` (mandatory, after Visual System canonicalization):** inherits the approved visual NFRs explicitly — minimum touch target 44×44; responsive at 1440×900, 1280×800, 1024×768; WCAG 2.2 AA target; keyboard/focus requirements; responsive reflow; reduced-motion / `prefers-reduced-motion` support. No blanket accessibility PASS claim until reduced-motion and the remaining required checks actually pass. No independent visual language from `WP-026C`/`WP-026D` (`UX-COND-015-02`).
+* **Tests:** OCC-409 conflict UX test; permission-boundary test (denied action shows correct messaging without exposing internal permission IDs); responsive reflow test at all three named breakpoints; touch-target audit.
+* **Security Debt:** None beyond `WP-026A`'s inherited baseline.
+* **Evidence Required:** Real-browser/device validation across the three named breakpoints; accessibility test results (including reduced-motion).
+* **Rollback:** Sideload previous Electron installer version.
+* **Feature Flag:** NO
+* **Migration Impact:** None
+* **Risk:** Medium
+* **PO Dependency:** `OQ-SSOT-01`, `OQ-SSOT-02`, `OQ-SSOT-06` (all inherited from `WP-014A`; this WP presents, does not resolve, the pending policies).
+* **Parallelizable:** YES (with `WP-026C`, `WP-026D`, once each one's own prerequisites are canonical — none may be serialized behind an unrelated sibling).
+* **Handoff Target:** `WP-027`
+
+#### `WP-026C`: KDS Station UI
+* **Bounded Context:** TRIDENTPOS / Native Edge
+* **Frozen Requirements:** Approved `FRONTEND_ARCHITECTURE.md`; canonicalized Visual System; `ADR-005`; `ACR-2026-015`
+* **ADRs:** `ADR-003`, `ADR-005`
+* **Data Objects:** None authoritative (consumes `WP-015` contracts only).
+* **APIs / Contracts:** Consumes `WP-015`'s local WebSocket broadcast (`WS /kds/events`).
+* **Builder Agent:** `16_Native_Edge_Developer`
+* **Specialist Reviewer:** `01_Solution_Architect`
+* **Code Reviewer:** `11_Code_Reviewer`
+* **Prerequisites:** `WP-026A`, `WP-015`
+* **Dependencies:** Electron 30+, React, Tailwind CSS (frozen, unchanged).
+* **Inputs:** `WP-015` contracts; approved `FRONTEND_ARCHITECTURE.md`; canonicalized Visual System.
+* **Outputs:** Station ticket board; KDS states sourced from canonical events/contracts only; timers; priorities; preparation/ready/served actions; printer status; operational delay indicators; reconnect behavior; multi-screen real-time update.
+* **Acceptance Criteria:** No independent KDS state machine may be invented in the renderer — all state transitions are sourced from `WP-015`'s canonical events. `UX-COND-015-01`/`UX-COND-015-02` bind identically to `WP-026B` (shared Visual System, shared NFR floor; no independent visual language).
+* **Tests:** KDS ticket state-transition conformance test (renderer state matches canonical event stream exactly); reconnect-behavior test; multi-screen consistency test.
+* **Security Debt:** None beyond `WP-026A`'s inherited baseline.
+* **Evidence Required:** KDS event-timing log; reconnect test log.
+* **Rollback:** Sideload previous Electron installer version.
+* **Feature Flag:** NO
+* **Migration Impact:** None
+* **Risk:** Low
+* **PO Dependency:** None.
+* **Parallelizable:** YES (with `WP-026B`, `WP-026D`, once each one's own prerequisites are canonical).
+* **Handoff Target:** `WP-027`
+
+#### `WP-026D`: Caja & Payment UI
+* **Bounded Context:** TRIDENTPOS / Native Edge
+* **Frozen Requirements:** Approved `FRONTEND_ARCHITECTURE.md`; canonicalized Visual System; `ACR-2026-015`
+* **ADRs:** `ADR-003`
+* **Data Objects:** None authoritative (consumes `WP-016`/`WP-016C` contracts only).
+* **APIs / Contracts:** Consumes `WP-016`'s cash-shift API and `WP-016C`'s settlement API.
+* **Builder Agent:** `16_Native_Edge_Developer`
+* **Specialist Reviewer:** `01_Solution_Architect` + `08_Security_Architect` (terminal/payment security surface).
+* **Code Reviewer:** `11_Code_Reviewer`
+* **Prerequisites:** `WP-026A`, `WP-016`, `WP-016C`
+* **Dependencies:** Electron 30+, React, Tailwind CSS, integrated credit card terminal trigger (frozen, unchanged).
+* **Inputs:** `WP-016`/`WP-016C` contracts; approved `FRONTEND_ARCHITECTURE.md`; canonicalized Visual System.
+* **Outputs:** Payment screen/modal; cash/card/transfer entry; mixed/partial payment; balance remaining; tip; cash received/change; terminal trigger/status; settlement confirmation; account close; table release; active shift/drawer status; error/recovery UX.
+* **Acceptance Criteria:** No authoritative payment logic may reside only in frontend state — all settlement logic lives in `WP-016C` (`@trident/pos`); this WP only presents it. `UX-COND-015-01`/`UX-COND-015-02` bind identically to `WP-026B`/`WP-026C`. Crash-recovery UX must reflect, not re-implement, `WP-016C`'s `SEC-COND-015-02` reconciliation protocol.
+* **Tests:** Touch response latency test; mixed-payment UI reconciliation test against `WP-016C`'s settlement state; terminal-trigger error-path test.
+* **Security Debt:** `RSK-11` (Memory footprint benchmarking, inherited from `WP-026A`'s baseline, re-verified under payment-screen load).
+* **Evidence Required:** Memory profile snapshot under peak payment load; UI-to-settlement-state reconciliation test log.
+* **Rollback:** Sideload previous Electron installer version.
+* **Feature Flag:** NO
+* **Migration Impact:** None
+* **Risk:** Medium
+* **PO Dependency:** `OQ-ARCH-01` (inherited from `WP-016C`; this WP presents, does not resolve, the pending multi-cashier shift model).
+* **Parallelizable:** YES (with `WP-026B`, `WP-026C`, once each one's own prerequisites are canonical).
 * **Handoff Target:** `WP-027`
 
 ---
@@ -995,11 +1156,11 @@ Disaster recovery verification, hardware performance benchmarks, chaos tests, an
 * **Builder Agent:** `18_DevOps_Engineer`
 * **Specialist Reviewer:** `09_QA_Test_Architect`
 * **Code Reviewer:** `11_Code_Reviewer`
-* **Prerequisites:** All prior WPs (`WP-001` through `WP-026`)
+* **Prerequisites:** All prior WPs (`WP-001` through `WP-028`, including additive `WP-016B`, `WP-014A`, `WP-016C`, and `WP-026A`–`WP-026D` per `ACR-2026-015`).
 * **Dependencies:** Docker Compose test environment, chaos test harness (Toxiproxy / Chaos Mesh).
-* **Inputs:** `PROJECT_BLUEPRINT.md`, `SECURITY_RISKS.md`
-* **Outputs:** Automated cross-context E2E test suite executing full restaurant lifecycle: Table Opening $\rightarrow$ Order Entry $\rightarrow$ KDS Production $\rightarrow$ Inventory Depletion $\rightarrow$ Payment $\rightarrow$ Facturación $\rightarrow$ Corte Z $\rightarrow$ Cloud Sync $\rightarrow$ Financial Ledger Posting.
-* **Acceptance Criteria:** E2E suite passes 100% on clean environment; simulated WAN loss during order placement proves zero data loss; RPO target 0 and RTO targets validated on simulated process crash.
+* **Inputs:** `PROJECT_BLUEPRINT.md`, `SECURITY_RISKS.md`, `ARCHITECTURE_CHANGE_REQUEST_SALON_PRODUCTIZATION.md` Section U (`ACR-2026-015`)
+* **Outputs:** Automated cross-context E2E test suite executing full restaurant lifecycle, updated per `ACR-2026-015`: Open Table $\rightarrow$ Add Products $\rightarrow$ Send to Kitchen $\rightarrow$ KDS Production $\rightarrow$ Inventory Depletion $\rightarrow$ Request Check / Precuenta $\rightarrow$ Payment Settlement (`WP-016C`) $\rightarrow$ Account Close $\rightarrow$ Cash / Shift Reconciliation (Corte Z) $\rightarrow$ Facturación where applicable $\rightarrow$ Cloud Sync $\rightarrow$ Finance downstream posting (conditional, per `FUNCTIONAL_ARCHITECTURE.md` Sec. 6.3).
+* **Acceptance Criteria:** E2E suite passes 100% on clean environment; simulated WAN loss during order placement proves zero data loss; RPO target 0 and RTO targets validated on simulated process crash. Any unresolved Product Owner policy (`OQ-SSOT-01`, `OQ-SSOT-02`, `OQ-SSOT-06`, `OQ-SSOT-07`, `OQ-ARCH-01`) must be parameterized in the test fixture — no hidden default.
 * **Tests:** Full E2E regression suite; chaos network partition test; process SIGKILL recovery test.
 * **Security Debt:** `SEC-VAL-09` (WAN failure mode validation), `DAT-08` (DR restore simulation), `RSK-15` (Empirical RTO/RPO DR drill).
 * **Evidence Required:** Comprehensive E2E test run report and chaos recovery audit trace.
