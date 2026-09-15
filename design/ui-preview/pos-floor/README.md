@@ -382,6 +382,88 @@ numbering — the old params are no longer wired up.
   both the Salón grid and the product-selector/ticket workspace.
 - Dark Mode remains intentionally out of scope.
 
+## What's new in V4-R1 (operational UI polish & consistency pass)
+
+**V4-R1 is a polish pass on top of V4 — no new business functionality, no
+UX/navigation/flow changes, no protected Product Owner decision touched.**
+The Product Owner flagged the account drawer's bottom action area as
+crowded; this round fixes that and does a consistency audit across the
+rest of the functional prototype.
+
+- **Account drawer action hierarchy.** The footer is now three clear tiers
+  instead of one crowded row: an isolated tertiary "…" overflow button in
+  its own toolbar row (top), one dominant full-width primary CTA
+  ("Agregar productos" / "Cobrar $X"), and — only when applicable to the
+  current state — a balanced two-button secondary row ("Enviar a cocina" /
+  "Solicitar cuenta"). The footer keeps a sticky position, gains a subtle
+  top divider + soft shadow separating it from the item list above, and
+  respects `env(safe-area-inset-bottom)`.
+- **Responsive action stacking.** At ≤1100px width (which includes the
+  1024×768 POS breakpoint) the secondary row collapses from two columns to
+  one full-width column per action instead of compressing text — verified
+  by screenshot at 1440, 1280, and 1024.
+- **Button system consistency.** `.icon-btn` (topbar icons, modal close
+  buttons) grew from 40×40 to 44×44 to meet the touch-target minimum.
+  Dropdown/overflow menu items grew from a 40px to a 44px minimum row
+  height for the same reason. `.payment-method-tabs`/`.split-tabs` chips
+  had accidentally overridden the base `.chip` touch target down to 38px —
+  restored to 44px. Introduced a single shared `.btn-primary.btn-danger`
+  class and switched every destructive confirm button (cancel account,
+  forced release) to use it instead of ad-hoc inline `style="background:…"`
+  attributes.
+- **Overflow menu / danger action separation.** The table "…" menu now
+  visually separates "Cancelar cuenta" and "Liberar mesa" from the rest of
+  the menu with their own divider and renders them in the shared
+  `.dropdown-item.danger` (red) style, consistent with the existing user
+  menu's "Cerrar sesión" treatment. "Liberar mesa" also got its own icon
+  (previously reused the cancel "×" icon).
+- **Permission-denied messaging never exposes internal IDs.** Several
+  blocked-action notices and hints were literally interpolating the raw
+  `CAN_*` capability key into user-facing text (e.g. "no tiene permiso
+  CAN_FORCE_RELEASE"). Replaced with a small `CAPABILITY_LABEL` map so the
+  user always sees a plain-language reason ("no tiene permiso para liberar
+  mesas con saldo pendiente").
+- **Fixed a real rendering bug in every "OQ-SSOT-xx protected decision"
+  notice.** `.notice-box` was `display: flex`, which — for a box whose
+  content is a sentence of plain text with an inline `<strong>`/`<code>`/
+  `<button>` in the middle — turns each inline run into its own flex
+  column instead of wrapping as one paragraph. This visibly broke the
+  split-bill OQ-SSOT-06 notice, the move-table OQ-SSOT-02 notice, and the
+  discount/cancel authorization notices (their "Solicitar autorización"
+  button rendered beside the text instead of below it). Fixed by making
+  `.notice-box` `display: block` and adding a small `<code>` style for the
+  `PREVIEW_*`/`OQ-SSOT-*` inline tokens. Caught by screenshot, not assumed.
+- **Split payment line readability.** Payment lines now show method and
+  amount as two aligned columns ("Tarjeta … $500.00") with authorization/
+  change detail on its own muted line below, instead of one run-on string.
+- **Totals hierarchy.** TOTAL is now weight 600 (was 500) against the
+  still-lighter Subtotal/IVA rows, without changing its size — a touch more
+  dominant without becoming oversized.
+- **Drawer metadata block.** Reduced the `MESERO`/`PERSONAS`/`TIEMPO`/
+  `FOLIO`/`ESTADO` label weight from 600 to 500 so the block reads as one
+  coherent metadata row rather than five small shouted headings.
+- **"No tables for this filter" empty state.** Combining zone + status +
+  "solo mis mesas" filters could previously render a blank grid with no
+  explanation; it now shows an explicit empty-state message.
+- **Typography weight audit.** Six remaining `font-weight: 700` micro-label
+  declarations (history type, notification title, search group heading,
+  search kbd hint, demo-panel tag) were normalized to 600, consistent with
+  the "avoid 700/800 as a default" rule in
+  [`TRIDENTPOS_VISUAL_REFERENCE_SPEC.md`](../../../docs/design/TRIDENTPOS_VISUAL_REFERENCE_SPEC.md).
+- **Table card "…" menu button** grew from 24×24 to 32×32 for a larger tap
+  target. A full 44×44 target was deliberately not used here — the card is
+  only ~220px wide and a control that size would visually dominate the
+  compact card and risk colliding with the status badge next to it, which
+  would cross from "polish" into "redesign." Documented here rather than
+  silently left at the smaller size.
+- **Everything else was audited and left unchanged** because it already
+  met the bar: modal structure (header/context/body/actions, consistent
+  `[Cancelar] [Primary]` / `[Cancelar] [Danger]` footer ordering), KPI and
+  area filter pill styling, floor-plan/card status-color parity, the
+  global search overlay, the notification panel, the product selector and
+  ticket panel (already a single sticky CTA, no crowding), and the icon
+  stroke-width/size system.
+
 ## Real-browser validation
 
 Every screen listed above, at all three breakpoints, was rendered with a
@@ -420,10 +502,20 @@ V2's real-browser findings (horizontal scrollbar from an `overflow-y`/
 `overflow-x` interaction, a ticket-line text-overflow collision) remain
 fixed and were re-verified as part of this round's screenshot pass.
 
+**V4-R1** rendered representative scenarios covering the account drawer
+(ocupada, por cobrar, atención), the table "…" menu, discount/authorization
+blocking, move table, split bill, split payment, floor plan, and global
+search at 1440×900, 1280×800, and 1024×768 in real headless Chrome, with
+0 console errors at every capture. The `.notice-box` flex/block rendering
+bug (see above) was caught this way — a static code read would not have
+shown it. All 30 `?qa=` scenarios from V4 remain reachable and unchanged
+in behavior; only markup/CSS around them changed.
+
 ## Screenshots
 
-See `screenshots_v4/` in this directory for captured evidence of the
-functional Salón operations prototype (all required scenarios and both
-narrower breakpoints). Earlier rounds remain for reference/comparison:
-`screenshots/` (V1), `screenshots_v2/` (V2), `screenshots_v3/` (V3 visual
-reskin), `screenshots_v3r1/` (V3-R1 typography remediation).
+See `screenshots_v4r1/` in this directory for before/after evidence of the
+polish pass (account drawer at three breakpoints, table menu, payment,
+split bill, floor plan, search). Earlier rounds remain for reference/
+comparison: `screenshots/` (V1), `screenshots_v2/` (V2), `screenshots_v3/`
+(V3 visual reskin), `screenshots_v3r1/` (V3-R1 typography remediation),
+`screenshots_v4/` (V4 functional Salón operations prototype).

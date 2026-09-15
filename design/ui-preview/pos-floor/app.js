@@ -85,6 +85,17 @@
 
   var CURRENT_USER = { name: "Carlos Mendoza", roleKey: "gerente" };
 
+  /* User-facing labels for permission capabilities — never show the raw
+     CAN_* identifier to the user (§29 of the V4-R1 polish work order). */
+  var CAPABILITY_LABEL = {
+    CAN_DISCOUNT: "aplicar descuentos",
+    CAN_CANCEL_ACCOUNT: "cancelar cuentas",
+    CAN_FORCE_RELEASE: "liberar mesas con cuentas abiertas",
+    CAN_CHANGE_WAITER: "cambiar el mesero asignado",
+    CAN_MOVE_TABLE: "mover mesas",
+    CAN_EDIT_FLOOR_PLAN: "editar el plano del salón"
+  };
+
   function hasPermission(cap) {
     return !!(ROLES[CURRENT_USER.roleKey] && ROLES[CURRENT_USER.roleKey].can[cap]);
   }
@@ -873,7 +884,9 @@
     var grid = document.getElementById("tables-grid");
     var visible = visibleTables();
 
-    grid.innerHTML = visible.map(renderTableCard).join("");
+    grid.innerHTML = visible.length
+      ? visible.map(renderTableCard).join("")
+      : '<div class="ticket-empty" style="grid-column:1/-1;padding:50px 10px;">No hay mesas para este filtro. Prueba con "Limpiar filtros".</div>';
 
     var openCount = TABLES.filter(function (t) { return t.session; }).length;
     document.getElementById("salon-subtitle").textContent = TABLES.length + " mesas · " + openCount + " cuentas abiertas";
@@ -951,9 +964,8 @@
   function buildTableSecondaryMenuHtml(tableId) {
     var t = findTable(tableId);
     var vs = computeVisualState(t);
-    var hasAccount = !!t.account;
-    function item(label, action, icon, extraDisabled) {
-      return '<button class="dropdown-item' + (extraDisabled ? " disabled" : "") + '"' + (extraDisabled ? " disabled" : "") +
+    function item(label, action, icon, extraDisabled, danger) {
+      return '<button class="dropdown-item' + (danger ? " danger" : "") + (extraDisabled ? " disabled" : "") + '"' + (extraDisabled ? " disabled" : "") +
         ' data-action="' + action + '" data-arg="' + tableId + '">' + icon + escapeHtml(label) + "</button>";
     }
     if (vs === "reservada") {
@@ -972,9 +984,9 @@
       item("Ver historial", "table-menu-history", iconHistory()) +
       '<div class="dropdown-sep"></div>' +
       item("Aplicar descuento", "table-menu-discount", iconDiscount()) +
-      item("Cancelar cuenta", "table-menu-cancel", iconCancel()) +
-      item("Liberar mesa", "table-menu-release", iconCancel()) +
-      (hasAccount ? "" : "")
+      '<div class="dropdown-sep"></div>' +
+      item("Cancelar cuenta", "table-menu-cancel", iconCancel(), false, true) +
+      item("Liberar mesa", "table-menu-release", iconUnlock(), false, true)
     );
   }
 
@@ -987,6 +999,7 @@
   function iconHistory() { return '<svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5"/><path d="M12 8v4l3 3"/></svg>'; }
   function iconDiscount() { return '<svg viewBox="0 0 24 24"><path d="M4 12 12 4l8 8-8 8-8-8Z"/><circle cx="9.5" cy="9.5" r="1"/></svg>'; }
   function iconCancel() { return '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m9 9 6 6m0-6-6 6"/></svg>'; }
+  function iconUnlock() { return '<svg viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 7.5-2"/></svg>'; }
 
   /* ---------------------------------------------------------------------
      FLOOR PLAN VIEW (§17)
@@ -1013,7 +1026,7 @@
 
       el.addEventListener("pointerdown", function (e) {
         if (!state.floorConfigMode) return;
-        if (!hasPermission("CAN_EDIT_FLOOR_PLAN")) { toast("Tu rol no puede editar el plano (PREVIEW_POLICY_STUBS)"); return; }
+        if (!hasPermission("CAN_EDIT_FLOOR_PLAN")) { toast("Sin permiso para editar el plano del salón"); return; }
         dragging = true; moved = false;
         startX = e.clientX; startY = e.clientY;
         var t = findTable(tableId);
@@ -1258,24 +1271,27 @@
   }
 
   function renderAccountActions(t, vs) {
-    var primaryBtn;
-    if (vs === "por_cobrar") {
-      primaryBtn = '<button class="btn-action btn-cobrar" data-action="open-payment" data-arg="' + t.id + '">' + iconMoney() + "Cobrar " + fmtMoney(accountTotal(t.account)) + "</button>";
-    } else {
-      primaryBtn = '<button class="btn-action btn-primary" data-action="add-products" data-arg="' + t.id + '">' + iconPlus() + "Agregar productos</button>";
-    }
+    var primaryBtn = vs === "por_cobrar"
+      ? '<button class="btn-action btn-cobrar account-action-primary" data-action="open-payment" data-arg="' + t.id + '">' + iconMoney() + "Cobrar " + fmtMoney(accountTotal(t.account)) + "</button>"
+      : '<button class="btn-action btn-primary account-action-primary" data-action="add-products" data-arg="' + t.id + '">' + iconPlus() + "Agregar productos</button>";
+
     var kitchenBtn = vs !== "por_cobrar"
       ? '<button class="btn-action" data-action="send-to-kitchen" data-arg="' + t.id + '"' + (hasUnsentLines(t) ? "" : " disabled") + ">" + iconKitchen() + "Enviar a cocina</button>"
       : "";
     var checkBtn = (vs === "ocupada" || vs === "atencion")
       ? '<button class="btn-action" data-action="request-check" data-arg="' + t.id + '">' + iconMoney() + "Solicitar cuenta</button>"
       : "";
+    var secondaryRow = (kitchenBtn || checkBtn)
+      ? '<div class="account-actions-secondary-row">' + kitchenBtn + checkBtn + "</div>"
+      : "";
 
     document.getElementById("account-actions").innerHTML =
-      '<div class="account-actions-primary">' + primaryBtn + kitchenBtn + checkBtn +
-      '<button class="btn-action btn-action-more" id="btn-account-more" title="Más acciones">' +
+      '<div class="account-actions-toolbar">' +
+      '<button class="account-actions-more-btn" id="btn-account-more" title="Más acciones">' +
       '<svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="12" cy="19" r="1.4"/></svg></button>' +
-      "</div>";
+      "</div>" +
+      primaryBtn +
+      secondaryRow;
 
     bindDropdownActions(document.getElementById("account-actions"));
     document.getElementById("btn-account-more").addEventListener("click", function (e) {
@@ -1645,7 +1661,7 @@
   }
 
   function blockedNotice(cap) {
-    return '<div class="notice-box danger">Tu rol (' + ROLES[CURRENT_USER.roleKey].label + ') no tiene el permiso <strong>' + cap + '</strong> (PREVIEW_POLICY_STUBS). Cambia de rol desde el menú de usuario ("Cambiar turno") para probar esta acción con permisos elevados.</div>';
+    return '<div class="notice-box danger">Tu rol (' + ROLES[CURRENT_USER.roleKey].label + ") no tiene permiso para <strong>" + (CAPABILITY_LABEL[cap] || "realizar esta acción") + '</strong>. Cambia de rol desde el menú de usuario ("Cambiar turno") para probar esta acción con permisos elevados.</div>';
   }
   function closeOnlyFooter() {
     return '<button class="btn-secondary" data-action="close-modal">Cerrar</button>';
@@ -1841,7 +1857,7 @@
         '<div class="notice-box danger">OQ-SSOT-01 (política de cancelación post-cocina) permanece abierta. Esta acción usa <code>PREVIEW_CANCELLATION_POLICY</code> únicamente para demostrar el flujo de permisos/auditoría.</div>' +
         (!authorized ? '<div class="notice-box warning" id="cancel-auth-notice">Requiere autorización de gerente. <button class="btn-secondary" style="margin-top:8px;min-height:32px;" data-action="mock-authorize" data-arg="cancel">Solicitar autorización de gerente</button></div>' : "") +
         '<div class="form-field"><label>Motivo (obligatorio)</label><textarea id="cancel-reason" placeholder="Motivo de la cancelación"></textarea></div>',
-      footerHtml: '<button class="btn-secondary" data-action="close-modal">Cancelar</button><button class="btn-primary" id="btn-confirm-cancel" data-action="confirm-cancel-account" data-arg="' + tableId + '"' + (authorized ? "" : " disabled") + ' style="background:var(--danger-500);border-color:var(--danger-500);">Cancelar cuenta</button>'
+      footerHtml: '<button class="btn-secondary" data-action="close-modal">Cancelar</button><button class="btn-primary btn-danger" id="btn-confirm-cancel" data-action="confirm-cancel-account" data-arg="' + tableId + '"' + (authorized ? "" : " disabled") + ">Cancelar cuenta</button>"
     });
   }
 
@@ -1881,9 +1897,9 @@
       eyebrow: "Mesa " + pad2(t.number), title: "Liberar mesa",
       bodyHtml:
         '<div class="notice-box danger">La cuenta tiene un saldo pendiente de ' + fmtMoney(balance) + '. Por política, no se libera una mesa con saldo pendiente salvo excepción administrativa.</div>' +
-        (canForce ? '<p class="field-hint">Tu rol (' + ROLES[CURRENT_USER.roleKey].label + ") permite una excepción administrativa (CAN_FORCE_RELEASE)." : '<p class="field-hint">Tu rol (' + ROLES[CURRENT_USER.roleKey].label + ") no tiene permiso CAN_FORCE_RELEASE."),
+        (canForce ? '<p class="field-hint">Tu rol (' + ROLES[CURRENT_USER.roleKey].label + ") permite una excepción administrativa para liberar la mesa." : '<p class="field-hint">Tu rol (' + ROLES[CURRENT_USER.roleKey].label + ") no tiene permiso para liberar mesas con saldo pendiente."),
       footerHtml: '<button class="btn-secondary" data-action="close-modal">Cerrar</button>' +
-        (canForce ? '<button class="btn-primary" data-action="confirm-force-release" data-arg="' + tableId + '" style="background:var(--danger-500);border-color:var(--danger-500);">Excepción administrativa: liberar</button>' : "")
+        (canForce ? '<button class="btn-primary btn-danger" data-action="confirm-force-release" data-arg="' + tableId + '">Excepción administrativa: liberar</button>' : "")
     });
   }
 
@@ -2014,15 +2030,16 @@
 
   function renderPaymentLine(l, i) {
     var methodLabel = { tarjeta: "Tarjeta", efectivo: "Efectivo", transferencia: "Transferencia" }[l.method];
-    var extra = "";
+    var detail = "";
     if (l.method === "tarjeta") {
-      extra = l.status === "declined" ? ' — <strong style="color:var(--danger-500);">Declinado</strong>' : ' — <strong style="color:var(--status-success);">Aprobado</strong> (ref ' + l.ref + ")";
+      detail = l.status === "declined" ? '<strong style="color:var(--danger-500);">Declinado</strong>' : '<strong style="color:var(--status-success);">Aprobado</strong> (ref ' + l.ref + ")";
     } else if (l.method === "efectivo") {
-      extra = " — Recibido " + fmtMoney(l.received) + " · Cambio " + fmtMoney(Math.max(0, l.received - l.amount));
+      detail = "Recibido " + fmtMoney(l.received) + " · Cambio " + fmtMoney(Math.max(0, l.received - l.amount));
     } else if (l.method === "transferencia") {
-      extra = " — Ref " + l.ref;
+      detail = "Ref " + l.ref;
     }
-    return '<div class="payment-line"><span>' + methodLabel + " " + fmtMoney(l.amount) + extra + '</span>' +
+    return '<div class="payment-line"><div class="payment-line-main"><div class="payment-line-row"><span class="payment-line-method">' + methodLabel + '</span><span class="payment-line-amount">' + fmtMoney(l.amount) + "</span></div>" +
+      (detail ? '<div class="payment-line-detail">' + detail + "</div>" : "") + "</div>" +
       '<button class="payment-line-remove" data-action="remove-payment-line" data-arg="' + i + '"><svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg></button></div>';
   }
 
@@ -2100,7 +2117,7 @@
         closeAllDropdowns();
         state.floorConfigMode = true;
         setViewMode("floor");
-        if (!hasPermission("CAN_EDIT_FLOOR_PLAN")) toast("Tu rol no puede editar el plano — modo solo lectura (PREVIEW_POLICY_STUBS)");
+        if (!hasPermission("CAN_EDIT_FLOOR_PLAN")) toast("Sin permiso para editar el plano — modo solo lectura");
         else toast("Modo configuración activo — arrastra las mesas");
         break;
       case "print-floor-map":

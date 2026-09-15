@@ -484,8 +484,8 @@ svg {
 
 .icon-btn {
   position: relative;
-  width: 40px;
-  height: 40px;
+  width: 44px;
+  height: 44px;
   border-radius: 999px;
   border: 1px solid var(--border-subtle);
   background: var(--surface-card);
@@ -929,9 +929,9 @@ svg {
 .meta-label {
   font-size: 10.5px;
   color: var(--gray-400);
-  font-weight: 600;
+  font-weight: 500;
   text-transform: uppercase;
-  letter-spacing: 0.4px;
+  letter-spacing: 0.3px;
 }
 
 .meta-value {
@@ -1050,17 +1050,46 @@ svg {
   padding-top: 12px;
   font-family: var(--font-metric);
   font-size: 20px;
-  font-weight: 500;
+  font-weight: 600;
   color: var(--text-primary);
 }
 
+/* Footer action zone (§5/§6 of the V4-R1 polish work order): a single
+   isolated tertiary overflow trigger in its own toolbar row, one dominant
+   full-width primary CTA, and — only when applicable to the current visual
+   state — a balanced two-button secondary row. Sticky to the bottom of the
+   drawer, separated from the item list above by a top divider + soft
+   shadow (not a heavy border), with safe-area-aware bottom padding. */
 .account-actions {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-  padding: 16px 24px 24px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 20px 24px calc(22px + env(safe-area-inset-bottom, 0px)) 24px;
+  border-top: 1px solid var(--surface-muted);
+  box-shadow: 0 -8px 20px rgba(28, 25, 18, 0.03);
   flex-shrink: 0;
 }
+
+.account-actions-toolbar {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.account-actions-more-btn {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-card);
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.account-actions-more-btn svg { width: 18px; height: 18px; }
+.account-actions-more-btn:hover { background: var(--surface-muted); color: var(--text-secondary); }
 
 .btn-action {
   display: flex;
@@ -1068,7 +1097,7 @@ svg {
   justify-content: center;
   gap: 7px;
   padding: 12px 10px;
-  min-height: 46px;
+  min-height: 48px;
   border-radius: 999px;
   border: 1px solid var(--border-subtle);
   background: var(--surface-card);
@@ -1086,7 +1115,6 @@ svg {
 }
 
 .btn-action.btn-primary {
-  grid-column: 1 / -1;
   background: var(--action-primary);
   border-color: var(--action-primary);
   color: white;
@@ -1097,7 +1125,6 @@ svg {
 }
 
 .btn-action.btn-cobrar {
-  grid-column: 1 / -1;
   background: var(--status-attention);
   border-color: var(--status-attention);
   color: white;
@@ -1105,6 +1132,31 @@ svg {
 
 .btn-action.btn-cobrar:hover {
   filter: brightness(0.93);
+}
+
+.account-action-primary {
+  width: 100%;
+  min-height: 52px;
+  font-size: 14.5px;
+}
+
+.account-actions-secondary-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+.account-actions-secondary-row .btn-action {
+  min-height: 48px;
+  font-size: 12.5px;
+  padding: 10px 8px;
+  white-space: nowrap;
+}
+
+@media (max-width: 1100px) {
+  .account-actions-secondary-row {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* ============================================================================
@@ -1452,6 +1504,23 @@ svg {
   border-color: var(--gray-200);
   color: var(--gray-400);
   cursor: not-allowed;
+}
+
+/* Shared danger-action variant — used instead of ad-hoc inline styling so
+   every destructive confirm button (cancel account, etc.) looks identical. */
+.btn-primary.btn-danger {
+  background: var(--danger-500);
+  border-color: var(--danger-500);
+}
+
+.btn-primary.btn-danger:hover {
+  filter: brightness(0.93);
+}
+
+.btn-primary.btn-danger:disabled {
+  background: var(--gray-200);
+  border-color: var(--gray-200);
+  color: var(--gray-400);
 }
 
 .btn-large {
@@ -2114,7 +2183,7 @@ svg {
   font-size: 13.5px;
   font-weight: 500;
   text-align: left;
-  min-height: 40px;
+  min-height: 44px;
 }
 
 .dropdown-item:hover {
@@ -2159,7 +2228,7 @@ svg {
   color: var(--text-primary);
   font-size: 13.5px;
   font-weight: 500;
-  min-height: 40px;
+  min-height: 44px;
 }
 
 .dropdown-checkitem:hover { background: var(--surface-muted); }
@@ -2341,8 +2410,8 @@ svg {
 }
 
 .table-card-menu-btn {
-  width: 24px;
-  height: 24px;
+  width: 32px;
+  height: 32px;
   border-radius: 50%;
   border: none;
   background: transparent;
@@ -2354,7 +2423,7 @@ svg {
 }
 
 .table-card-menu-btn:hover { background: var(--surface-muted); color: var(--text-secondary); }
-.table-card-menu-btn svg { width: 16px; height: 16px; }
+.table-card-menu-btn svg { width: 18px; height: 18px; }
 
 /* ---- Floor plan view (§17) ---- */
 
@@ -2504,22 +2573,6 @@ svg {
   font-size: 12.5px;
 }
 
-/* ---- Account actions v4 (primary + secondary "..." menu, §50/§21) ---- */
-
-.account-actions-primary {
-  display: flex;
-  gap: 8px;
-  padding: 14px 24px 20px 24px;
-  flex-shrink: 0;
-}
-
-.account-actions-primary .btn-action { flex: 1; }
-.account-actions-primary .btn-action-more {
-  flex: none;
-  width: 46px;
-  padding: 0;
-}
-
 /* ---- Generic modal width variants ---- */
 
 .generic-modal { width: 460px; }
@@ -2552,13 +2605,25 @@ svg {
 .field-hint { font-size: 11.5px; color: var(--text-muted); }
 .field-error { font-size: 11.5px; color: var(--danger-500); font-weight: 600; }
 
+/* display:block (not flex) — this box's content is inline prose that may
+   include a <strong>/<code>/<button> mid-sentence; flex would turn each of
+   those into its own column instead of wrapping text normally (confirmed
+   by screenshot: an OQ-SSOT notice rendered as three misaligned columns). */
 .notice-box {
-  display: flex;
-  gap: 10px;
+  display: block;
   padding: 12px 14px;
   border-radius: var(--radius-sm);
   font-size: 12.5px;
+  line-height: 1.5;
   margin-bottom: 14px;
+}
+
+.notice-box code {
+  font-family: var(--font-metric);
+  font-size: 11.5px;
+  background: rgba(0, 0, 0, 0.06);
+  padding: 1px 5px;
+  border-radius: 4px;
 }
 
 .notice-box.warning { background: var(--status-warning-bg); color: #8a5c0a; }
@@ -2604,25 +2669,29 @@ svg {
 .payment-summary-cell.remaining.paid .value { color: var(--status-success); }
 
 .payment-method-tabs { display: flex; gap: 6px; margin-bottom: 14px; flex-wrap: wrap; }
-.payment-method-tabs .chip { padding: 8px 14px; font-size: 12.5px; min-height: 38px; }
+.payment-method-tabs .chip { padding: 8px 14px; font-size: 12.5px; min-height: 44px; }
 
 .payment-line-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
 .payment-line {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 10px;
   padding: 10px 12px;
   background: var(--surface-muted);
   border-radius: var(--radius-sm);
-  font-size: 13px;
 }
-.payment-line-remove { border: none; background: transparent; color: var(--gray-400); width: 24px; height: 24px; border-radius: 50%; }
+.payment-line-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.payment-line-row { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.payment-line-method { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.payment-line-amount { font-family: var(--font-metric); font-size: 14px; font-weight: 600; color: var(--text-primary); font-variant-numeric: tabular-nums; flex-shrink: 0; }
+.payment-line-detail { font-size: 11.5px; color: var(--text-muted); }
+.payment-line-remove { flex-shrink: 0; border: none; background: transparent; color: var(--gray-400); width: 32px; height: 32px; border-radius: 50%; }
 .payment-line-remove:hover { background: var(--status-attention-bg); color: var(--danger-500); }
 
 /* ---- Split bill buckets ---- */
 
 .split-tabs { display: flex; gap: 6px; margin-bottom: 14px; }
-.split-tabs .chip { padding: 8px 14px; font-size: 12.5px; min-height: 38px; }
+.split-tabs .chip { padding: 8px 14px; font-size: 12.5px; min-height: 44px; }
 
 .split-buckets { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 10px; }
 .split-bucket { border: 1.5px solid var(--border-subtle); border-radius: var(--radius-md); padding: 10px; }
@@ -2641,7 +2710,7 @@ svg {
 }
 .precheck-preview .precheck-row { display: flex; justify-content: space-between; padding: 3px 0; }
 .precheck-preview hr { border: none; border-top: 1px dashed var(--border-subtle); margin: 10px 0; }
-.precheck-label { text-align: center; font-weight: 700; letter-spacing: 2px; font-size: 11px; color: var(--text-muted); margin-bottom: 8px; }
+.precheck-label { text-align: center; font-weight: 600; letter-spacing: 2px; font-size: 11px; color: var(--text-muted); margin-bottom: 8px; }
 
 /* ---- History / event log ---- */
 
@@ -2656,7 +2725,7 @@ svg {
 .history-item:last-child { border-bottom: none; }
 .history-time { color: var(--gray-400); white-space: nowrap; font-variant-numeric: tabular-nums; flex-shrink: 0; width: 64px; }
 .history-body { flex: 1; }
-.history-type { font-weight: 700; color: var(--text-primary); }
+.history-type { font-weight: 600; color: var(--text-primary); }
 .history-summary { color: var(--text-secondary); }
 .history-actor { color: var(--gray-400); font-size: 11px; }
 
@@ -2713,7 +2782,7 @@ svg {
 
 .search-overlay-header kbd {
   font-size: 11px;
-  font-weight: 700;
+  font-weight: 600;
   color: var(--text-secondary);
   background: var(--surface-muted);
   border: 1px solid var(--border-subtle);
@@ -2729,7 +2798,7 @@ svg {
 
 .search-group-label {
   font-size: 11px;
-  font-weight: 700;
+  font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.4px;
   color: var(--gray-400);
@@ -2782,7 +2851,7 @@ svg {
 .notif-icon.severity-info { background: var(--status-info); }
 
 .notif-body { flex: 1; min-width: 0; }
-.notif-title { font-size: 12.5px; font-weight: 700; color: var(--text-primary); }
+.notif-title { font-size: 12.5px; font-weight: 600; color: var(--text-primary); }
 .notif-sub { font-size: 11.5px; color: var(--text-muted); }
 .notif-time { font-size: 10.5px; color: var(--gray-400); margin-top: 2px; }
 .notif-mark-read { border: none; background: transparent; color: var(--gray-400); width: 24px; height: 24px; border-radius: 50%; flex-shrink: 0; }
@@ -2796,7 +2865,7 @@ svg {
   background: var(--gray-900);
   color: white;
   font-size: 10px;
-  font-weight: 700;
+  font-weight: 600;
   letter-spacing: 0.4px;
   padding: 2px 7px;
   border-radius: 999px;
@@ -2842,9 +2911,6 @@ svg {
   }
   .tables-grid {
     grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-  }
-  .account-actions {
-    grid-template-columns: 1fr;
   }
   .dashboard-columns {
     grid-template-columns: 1fr;
