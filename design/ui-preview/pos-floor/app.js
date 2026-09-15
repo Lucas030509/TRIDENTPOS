@@ -1,6 +1,9 @@
 /* ============================================================================
-   TRIDENTPOS — UI Preview V2 — Salón / Mesas / Cuenta / Navegación
+   TRIDENTPOS — UI Preview V3 — Visual System Reskin
    PREVIEW_FIXTURE_DATA / PREVIEW_UI_PREFERENCE
+   V3 is a VISUAL RESKIN ONLY — this file's UX logic is unchanged from V2
+   except where explicitly noted (product card markup for imagery, and two
+   new dev-only preview scenes: dashboard, design-system).
    ----------------------------------------------------------------------------
    Todo el estado de esta aplicación vive únicamente en memoria/localStorage
    del navegador. No hay red, no hay backend, no hay PostgreSQL/SQLite.
@@ -24,38 +27,38 @@
      --------------------------------------------------------------------- */
 
   var MENU = [
-    { id: "p01", cat: "Entradas", name: "Guacamole en Molcajete", price: 165 },
-    { id: "p02", cat: "Entradas", name: "Queso Fundido con Chorizo", price: 155 },
-    { id: "p03", cat: "Entradas", name: "Sopa Azteca", price: 120 },
-    { id: "p04", cat: "Entradas", name: "Tostadas de Atún", price: 175 },
-    { id: "p05", cat: "Entradas", name: "Aguachile Verde", price: 195 },
+    { id: "p01", cat: "Entradas", name: "Guacamole en Molcajete", price: 165, desc: "Aguacate · limón · chile serrano" },
+    { id: "p02", cat: "Entradas", name: "Queso Fundido con Chorizo", price: 155, desc: "Chorizo · tortilla de harina" },
+    { id: "p03", cat: "Entradas", name: "Sopa Azteca", price: 120, desc: "Tortilla · pasilla · queso panela" },
+    { id: "p04", cat: "Entradas", name: "Tostadas de Atún", price: 175, desc: "Atún sellado · aguacate · soya" },
+    { id: "p05", cat: "Entradas", name: "Aguachile Verde", price: 195, desc: "Camarón · limón · chile verde" },
 
-    { id: "p06", cat: "Tacos", name: "Taco Rib Eye", price: 148 },
-    { id: "p07", cat: "Tacos", name: "Taco Al Pastor", price: 42 },
-    { id: "p08", cat: "Tacos", name: "Taco de Camarón", price: 68 },
-    { id: "p09", cat: "Tacos", name: "Taco de Cochinita", price: 45 },
-    { id: "p10", cat: "Tacos", name: "Quesabirria (par)", price: 98 },
-    { id: "p11", cat: "Tacos", name: "Taco de Pescado", price: 62 },
+    { id: "p06", cat: "Tacos", name: "Taco Rib Eye", price: 148, desc: "Rib eye · salsa · tortilla" },
+    { id: "p07", cat: "Tacos", name: "Taco Al Pastor", price: 42, desc: "Piña · cilantro · cebolla" },
+    { id: "p08", cat: "Tacos", name: "Taco de Camarón", price: 68, desc: "Camarón · chipotle · col" },
+    { id: "p09", cat: "Tacos", name: "Taco de Cochinita", price: 45, desc: "Cochinita pibil · cebolla morada" },
+    { id: "p10", cat: "Tacos", name: "Quesabirria (par)", price: 98, desc: "Birria · consomé · queso" },
+    { id: "p11", cat: "Tacos", name: "Taco de Pescado", price: 62, desc: "Pescado capeado · slaw · chipotle" },
 
-    { id: "p12", cat: "Platos", name: "Arrachera a la Parrilla", price: 385 },
-    { id: "p13", cat: "Platos", name: "Mixiote de Res", price: 245 },
-    { id: "p14", cat: "Platos", name: "Costillas BBQ", price: 320 },
-    { id: "p15", cat: "Platos", name: "Enchiladas Suizas", price: 165 },
-    { id: "p16", cat: "Platos", name: "Pollo a la Parrilla", price: 210 },
-    { id: "p17", cat: "Platos", name: "Filete de Salmón", price: 345 },
+    { id: "p12", cat: "Platos", name: "Arrachera a la Parrilla", price: 385, desc: "300g · nopales · guacamole" },
+    { id: "p13", cat: "Platos", name: "Mixiote de Res", price: 245, desc: "Chile guajillo · penca de maguey" },
+    { id: "p14", cat: "Platos", name: "Costillas BBQ", price: 320, desc: "Salsa BBQ de la casa · papas" },
+    { id: "p15", cat: "Platos", name: "Enchiladas Suizas", price: 165, desc: "Pollo · crema · queso gratinado" },
+    { id: "p16", cat: "Platos", name: "Pollo a la Parrilla", price: 210, desc: "Hierbas finas · vegetales asados" },
+    { id: "p17", cat: "Platos", name: "Filete de Salmón", price: 345, desc: "Costra de ajonjolí · puré" },
 
-    { id: "p18", cat: "Bebidas", name: "Agua Mineral", price: 45 },
-    { id: "p19", cat: "Bebidas", name: "Limonada Natural", price: 55 },
-    { id: "p20", cat: "Bebidas", name: "Michelada", price: 95 },
-    { id: "p21", cat: "Bebidas", name: "Margarita Tamarindo", price: 135 },
-    { id: "p22", cat: "Bebidas", name: "Cerveza Artesanal", price: 85 },
-    { id: "p23", cat: "Bebidas", name: "Café de Olla", price: 48 },
+    { id: "p18", cat: "Bebidas", name: "Agua Mineral", price: 45, desc: "355 ml" },
+    { id: "p19", cat: "Bebidas", name: "Limonada Natural", price: 55, desc: "Limón recién exprimido" },
+    { id: "p20", cat: "Bebidas", name: "Michelada", price: 95, desc: "Cerveza · sal de chile · limón" },
+    { id: "p21", cat: "Bebidas", name: "Margarita Tamarindo", price: 135, desc: "Tequila · tamarindo · chamoy" },
+    { id: "p22", cat: "Bebidas", name: "Cerveza Artesanal", price: 85, desc: "Selección local rotativa" },
+    { id: "p23", cat: "Bebidas", name: "Café de Olla", price: 48, desc: "Canela · piloncillo" },
 
-    { id: "p24", cat: "Postres", name: "Cheesecake de Frutos Rojos", price: 95 },
-    { id: "p25", cat: "Postres", name: "Flan Napolitano", price: 75 },
-    { id: "p26", cat: "Postres", name: "Churros con Cajeta", price: 85 },
-    { id: "p27", cat: "Postres", name: "Pastel de Chocolate", price: 105 },
-    { id: "p28", cat: "Postres", name: "Nieve de Garrafa", price: 65 }
+    { id: "p24", cat: "Postres", name: "Cheesecake de Frutos Rojos", price: 95, desc: "Coulis de frutos rojos" },
+    { id: "p25", cat: "Postres", name: "Flan Napolitano", price: 75, desc: "Caramelo · vainilla" },
+    { id: "p26", cat: "Postres", name: "Churros con Cajeta", price: 85, desc: "Canela · azúcar · cajeta" },
+    { id: "p27", cat: "Postres", name: "Pastel de Chocolate", price: 105, desc: "Chocolate 70% · ganache" },
+    { id: "p28", cat: "Postres", name: "Nieve de Garrafa", price: 65, desc: "Sabor del día" }
   ];
 
   var CATEGORIES = ["Entradas", "Tacos", "Platos", "Bebidas", "Postres"];
@@ -689,6 +692,7 @@
       .map(function (p) {
         var qty = currentProductQtyInTicket(p.id);
         var badge = qty > 0 ? '<span class="product-card-qty-badge">' + qty + "</span>" : "";
+        var desc = p.desc ? '<div class="product-desc">' + escapeHtml(p.desc) + "</div>" : "";
         return (
           '<button class="product-card" data-product-id="' +
           p.id +
@@ -697,13 +701,17 @@
           '<span class="product-card-plus1" id="plus1-' +
           p.id +
           '">+1</span>' +
-          '<div class="product-thumb">' +
+          '<div class="product-thumb cat-' +
+          p.cat +
+          '">' +
           PRODUCT_ICONS[p.cat] +
-          '</div><div class="product-name">' +
+          '</div><div class="product-card-body"><div class="product-name">' +
           escapeHtml(p.name) +
-          '</div><div class="product-price">' +
+          "</div>" +
+          desc +
+          '<div class="product-price">' +
           fmtMoney(p.price) +
-          "</div></button>"
+          "</div></div></button>"
         );
       })
       .join("");
@@ -1055,6 +1063,153 @@
   }
 
   /* ---------------------------------------------------------------------
+     DASHBOARD — CONCEPT PREVIEW ONLY (section 26)
+     Fixture-only illustration of the future dashboard visual language.
+     Not a functional module, not reachable from the sidebar nav.
+     --------------------------------------------------------------------- */
+
+  function gaugeSvg(pct, color) {
+    var r = 22;
+    var c = 2 * Math.PI * r;
+    var offset = c * (1 - pct / 100);
+    return (
+      '<svg class="gauge-ring" width="56" height="56" viewBox="0 0 56 56">' +
+      '<circle cx="28" cy="28" r="' + r + '" fill="none" stroke="var(--surface-muted)" stroke-width="6"/>' +
+      '<circle cx="28" cy="28" r="' + r + '" fill="none" stroke="' + color + '" stroke-width="6" ' +
+      'stroke-linecap="round" stroke-dasharray="' + c + '" stroke-dashoffset="' + offset + '" ' +
+      'transform="rotate(-90 28 28)"/>' +
+      '</svg>'
+    );
+  }
+
+  function renderDashboardPreview() {
+    var el = document.getElementById("dashboard-grid");
+    if (!el) return;
+
+    var kpis = [
+      { label: "Mesas ocupadas", value: "12 / 40", trend: "+3 vs. ayer", dir: "up" },
+      { label: "Ventas del día", value: "$18,423", trend: "+8.4%", dir: "up" },
+      { label: "Órdenes activas", value: "34", trend: "sin cambio", dir: "flat" },
+      { label: "Ticket promedio", value: "$542", trend: "-2.1%", dir: "down" }
+    ];
+
+    var kpiHtml = kpis
+      .map(function (k) {
+        return (
+          '<div class="kpi-card"><span class="kpi-label">' + escapeHtml(k.label) + "</span>" +
+          '<span class="kpi-value">' + escapeHtml(k.value) + "</span>" +
+          '<span class="kpi-trend ' + k.dir + '">' + escapeHtml(k.trend) + "</span></div>"
+        );
+      })
+      .join("");
+
+    var insights = [
+      { title: "Cocina", value: "14 preparando", pct: 58, color: "var(--status-warning)" },
+      { title: "Mesas", value: "7 ocupadas de 20", pct: 35, color: "var(--status-info)" },
+      { title: "Ventas vs. meta", value: "65% de la meta diaria", pct: 65, color: "var(--status-success)" }
+    ];
+
+    var insightsHtml = insights
+      .map(function (i) {
+        return (
+          '<div class="insight-row">' + gaugeSvg(i.pct, i.color) +
+          '<div class="insight-body"><div class="insight-title">' + escapeHtml(i.title) + "</div>" +
+          '<div class="insight-value">' + escapeHtml(i.value) + "</div></div></div>"
+        );
+      })
+      .join("");
+
+    var feed = [
+      { dot: "attention", title: "Mesa 7", sub: "Mesero solicitado", time: "hace 1 min" },
+      { dot: "success", title: "KDS", sub: "Orden #12 lista", time: "hace 3 min" },
+      { dot: "warning", title: "Mesa 12", sub: "Cuenta por cobrar", time: "hace 6 min" },
+      { dot: "info", title: "Mesa 5", sub: "Productos agregados a la cuenta", time: "hace 9 min" }
+    ];
+
+    var feedHtml = feed
+      .map(function (f) {
+        return (
+          '<div class="feed-item"><span class="feed-dot ' + f.dot + '"></span>' +
+          '<div class="insight-body"><div class="feed-title">' + escapeHtml(f.title) + "</div>" +
+          '<div class="feed-sub">' + escapeHtml(f.sub) + "</div></div>" +
+          '<span class="feed-time">' + escapeHtml(f.time) + "</span></div>"
+        );
+      })
+      .join("");
+
+    el.innerHTML =
+      '<div class="kpi-row">' + kpiHtml + "</div>" +
+      '<div class="dashboard-columns">' +
+      '<div class="panel-card"><h3>Operational Feed</h3><div class="feed-list">' + feedHtml + "</div></div>" +
+      '<div class="panel-card"><h3>Quick Insights</h3>' + insightsHtml + "</div>" +
+      "</div>";
+  }
+
+  /* ---------------------------------------------------------------------
+     DESIGN SYSTEM — COMPONENT OVERVIEW (dev-only reference, section 29)
+     --------------------------------------------------------------------- */
+
+  function renderDesignSystemOverview() {
+    var el = document.getElementById("ds-grid");
+    if (!el) return;
+
+    var colors = [
+      ["Graphite (action-primary)", "var(--gray-900)"],
+      ["Warm White (surface-page)", "var(--surface-page)"],
+      ["Off White (surface-muted)", "var(--surface-muted)"],
+      ["Success", "var(--status-success)"],
+      ["Warning", "var(--status-warning)"],
+      ["Attention", "var(--status-attention)"],
+      ["Info", "var(--status-info)"]
+    ];
+
+    var colorHtml = colors
+      .map(function (c) {
+        return (
+          '<div class="ds-swatch"><div class="ds-swatch-color" style="background:' + c[1] +
+          '"></div><span class="ds-swatch-label">' + escapeHtml(c[0]) + "</span></div>"
+        );
+      })
+      .join("");
+
+    var radii = [
+      ["sm 10px", "var(--radius-sm)"],
+      ["md 16px", "var(--radius-md)"],
+      ["lg 22px", "var(--radius-lg)"],
+      ["xl 28px", "var(--radius-xl)"]
+    ];
+    var radiusHtml = radii
+      .map(function (r) {
+        return '<div class="ds-radius-demo" style="border-radius:' + r[1] + '">' + r[0] + "</div>";
+      })
+      .join("");
+
+    var buttonsHtml =
+      '<button class="btn-primary" style="padding:12px 22px;">Cobrar</button>' +
+      '<button class="btn-secondary" style="max-width:140px;padding:12px 22px;">Cancelar</button>' +
+      '<button class="chip active">Categoría activa</button>' +
+      '<button class="chip">Categoría</button>' +
+      '<button class="icon-btn"><svg viewBox="0 0 24 24"><path d="M6 8a6 6 0 0 1 12 0c0 5 2 6 2 6H4s2-1 2-6Z"/></svg></button>' +
+      '<span class="status-badge status-disponible">Disponible</span>' +
+      '<span class="status-badge status-ocupada">Ocupada</span>' +
+      '<span class="status-badge status-atencion">Atención</span>' +
+      '<span class="status-badge status-por_cobrar">Por cobrar</span>';
+
+    el.innerHTML =
+      '<div class="ds-section"><h3>Color</h3><div class="ds-row">' + colorHtml + "</div></div>" +
+      '<div class="ds-section"><h3>Radius</h3><div class="ds-row">' + radiusHtml + "</div></div>" +
+      '<div class="ds-section"><h3>Buttons · Badges · Chips</h3><div class="ds-row">' + buttonsHtml + "</div></div>" +
+      '<div class="ds-section"><h3>KPI Card</h3><div class="kpi-row" style="grid-template-columns:repeat(2,minmax(180px,1fr));">' +
+      '<div class="kpi-card"><span class="kpi-label">Ventas</span><span class="kpi-value">$18,423</span><span class="kpi-trend up">+8.4%</span></div>' +
+      '<div class="kpi-card"><span class="kpi-label">Mesas ocupadas</span><span class="kpi-value">12 / 40</span><span class="kpi-trend flat">sin cambio</span></div>' +
+      "</div></div>" +
+      '<div class="ds-section"><h3>Gauge</h3><div class="ds-row">' + gaugeSvg(65, "var(--status-success)") + gaugeSvg(35, "var(--status-info)") + "</div></div>" +
+      '<div class="ds-section"><h3>Activity Feed Item</h3><div class="feed-list">' +
+      '<div class="feed-item"><span class="feed-dot success"></span><div class="insight-body"><div class="feed-title">KDS</div><div class="feed-sub">Orden #12 lista</div></div><span class="feed-time">hace 3 min</span></div>' +
+      "</div></div>";
+  }
+
+  /* ---------------------------------------------------------------------
      CLOCK
      --------------------------------------------------------------------- */
 
@@ -1189,6 +1344,12 @@
         input.value = searchQuery;
         input.dispatchEvent(new Event("input"));
       }
+    } else if (scene === "dashboard") {
+      renderDashboardPreview();
+      switchView("dashboard");
+    } else if (scene === "design-system") {
+      renderDesignSystemOverview();
+      switchView("design-system");
     }
   }
 

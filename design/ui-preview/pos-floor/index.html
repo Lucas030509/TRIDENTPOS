@@ -9,7 +9,11 @@
 <body>
 <!--
   PREVIEW_FIXTURE_DATA / PREVIEW_UI_PREFERENCE
-  Este archivo es un PREVIEW VISUAL de UI/UX para TRIDENTPOS (V2).
+  Este archivo es un PREVIEW VISUAL de UI/UX para TRIDENTPOS (V3).
+  V3 es un VISUAL RESKIN ONLY sobre la UX aprobada en V2: misma navegación,
+  mismos flujos, mismos estados, mismo modelo de interacción — únicamente
+  cambia el sistema visual. Ver
+  docs/design/TRIDENTPOS_VISUAL_REFERENCE_SPEC.md para el detalle completo.
   Todos los datos (mesas, cuentas, productos, totales, modificadores) son
   ficticios, viven únicamente en memoria/localStorage del navegador, y NO
   representan datos canónicos, cálculos financieros autoritativos, ni
@@ -188,6 +192,32 @@
             <button class="btn-primary btn-large" id="btn-add-to-account">Agregar a la cuenta</button>
           </aside>
         </div>
+      </section>
+
+      <!-- VIEW: DASHBOARD CONCEPT PREVIEW (dev-only, ?scene=dashboard) —
+           not part of the approved navigation; illustrates the future
+           dashboard visual language per section 26. Not linked from the UI. -->
+      <section class="view view-dashboard" id="view-dashboard">
+        <div class="view-header">
+          <div>
+            <h1>Dashboard — Concept Preview</h1>
+            <p class="view-subtitle">Vista conceptual del lenguaje visual para KPIs y operación en vivo. No es un módulo funcional de este preview.</p>
+          </div>
+        </div>
+        <div class="dashboard-grid" id="dashboard-grid"><!-- rendered by app.js --></div>
+      </section>
+
+      <!-- VIEW: DESIGN SYSTEM COMPONENT OVERVIEW (dev-only, ?scene=design-system) —
+           documents the token/component inventory established by V3. Not
+           linked from the UI, not a navigable product screen. -->
+      <section class="view view-design-system" id="view-design-system">
+        <div class="view-header">
+          <div>
+            <h1>Design System — Component Overview</h1>
+            <p class="view-subtitle">Referencia de tokens y componentes de TRIDENTPOS_VISUAL_REFERENCE_SPEC.md.</p>
+          </div>
+        </div>
+        <div class="ds-grid" id="ds-grid"><!-- rendered by app.js --></div>
       </section>
 
     </div>

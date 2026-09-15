@@ -15,6 +15,13 @@ the overall shell → sidebar → table → drawer → product-selector flow; V2
 keeps that pattern and refines the sidebar (collapsible) and the product
 selector (search, favorites, modifier preview, larger touch targets).
 
+**V3** is a **visual reskin only** of the V2 UX/navigation/flows/states —
+same interaction model, entirely new visual system (warm hospitality
+palette, graphite action color, soft large-radius surfaces, photography-
+forward product cards). The visual system is now documented as the
+project's official reference at
+[`docs/design/TRIDENTPOS_VISUAL_REFERENCE_SPEC.md`](../../../docs/design/TRIDENTPOS_VISUAL_REFERENCE_SPEC.md).
+
 ## What this is
 
 - Plain HTML + CSS + vanilla JavaScript. No build step, no framework, no npm
@@ -143,6 +150,62 @@ Consolidated in `styles.css` `:root` for a future formal Design System:
 `--drawer-width`, `--ticket-width`, `--touch-target-min`, plus semantic
 aliases `--accent`, `--surface`, `--border`.
 
+## What's new in V3 (visual reskin only)
+
+Same UX, same navigation, same flows, same states, same interaction model
+as V2 — this section is exclusively about the visual system.
+
+- **Palette**: moved from the V2 dark-navy/teal SaaS look to a warm
+  hospitality palette — warm white/off-white page and muted surfaces,
+  graphite/near-black as the primary action color, with fresh green, warm
+  yellow, and soft coral reserved for operational status only.
+- **Sidebar**: still collapsible with the same preference persistence and
+  tooltip behavior as V2, now graphite instead of navy, with a thin green
+  accent bar (instead of a teal fill) marking the active item.
+- **Typography**: view titles, drawer/modal headings, table numbers, and
+  money/KPI values use a serif display face (`--font-display`, from the
+  system stack — no font was loaded over the network, preserving the
+  dependency-free/no-network-call guarantee from V1/V2); everything else
+  stays on the system sans stack.
+- **Cards/buttons**: table and product cards moved to a larger, softer
+  radius (`--radius-xl`, 28px) with much lighter shadows; all buttons and
+  chips are now full pills; primary actions (Agregar a la cuenta,
+  Confirmar) use the graphite action color, with Cobrar kept as a coral
+  high-attention primary.
+- **Product cards**: reworked to be photography-forward — a full-width
+  category-tinted image area on top (fixture-only gradient + glyph, no
+  photos copied from any external source), name, a new one-line optional
+  description, and price below.
+- **Status color mapping**: disponible→success (green), ocupada→info
+  (muted slate — there's no 4th hue in the green/yellow/coral accent set,
+  so a neutral "info" role was introduced), atención→warning (amber),
+  por cobrar→attention (coral). Still communicated via color **and** icon
+  **and** text label, unchanged from V2.
+- **Two new dev-only preview scenes** (not linked from the UI, same
+  pattern as the existing QA query parameters): `?scene=dashboard` (a
+  fixture-only KPI/operational-feed/gauge concept preview, illustrating a
+  *future* dashboard visual language — not a functional module) and
+  `?scene=design-system` (a live reference of the color/radius/button/
+  KPI/gauge tokens and components documented in
+  `TRIDENTPOS_VISUAL_REFERENCE_SPEC.md`).
+
+Three real layout bugs were found and fixed during this round's real-Chrome
+validation, all the same underlying class of issue: Chrome's CSS Grid
+row auto-sizing under-measuring a flex-column grid item with variable
+content, confirmed by measuring actual rendered rects (not assumed) before
+fixing:
+1. Occupied-table cards' total/attention-flag block spilling into the row
+   below on the Salón grid (`.table-card` moved from `min-height` to a
+   deterministic fixed `height`).
+2. Product cards silently losing their name/description/price entirely at
+   1024px width, clipped by the card's own `overflow: hidden` (same fix
+   pattern applied to `.product-card` and `.product-thumb`).
+3. Long-ticket product names truncating to a single letter at the
+   `--ticket-width: 300px` breakpoint because two 44×44px touch targets
+   plus the subtotal left almost no room on one row — fixed with a
+   responsive two-row grid for `.ticket-line` at ≤1100px, without shrinking
+   any touch target below 44×44px.
+
 ## What you can click
 
 - **Zone tabs** (`Todos | Salón | Terraza | Barra | Privado`) filter the
@@ -180,6 +243,8 @@ itself:
 | `?scene=pos&table=mesa-5&modifier=1` | ...with the Taco Rib Eye modifier modal pre-opened |
 | `?scene=pos&table=mesa-5&search=taco` | ...with the search box pre-filled and applied |
 | `?qaTooltip=disabled` | Force one collapsed-sidebar tooltip visible (headless screenshots can't simulate `:hover`) |
+| `?scene=dashboard` | (V3) Open the Dashboard concept-preview screen (KPI cards, quick insights, operational feed) |
+| `?scene=design-system` | (V3) Open the Design System component-overview screen (color, radius, buttons, badges, KPI card, gauge) |
 
 ## Fixture data summary
 
@@ -189,12 +254,15 @@ itself:
   Postres), plus a curated 6-item Favoritos list.
 - One product (`Taco Rib Eye`) wired to the modifier preview demo.
 
-## Design language (Light Mode, V1 → V2 evolution, not a redesign)
+## Design language (Light Mode — V3 visual reskin, see spec doc for full detail)
 
-- Cool, light neutral background; dark navy sidebar; white elevated cards;
-  soft shadows and 12–20px radii instead of heavy borders.
-- Single accent: teal/cyan (`#0ea5a4`), reserved for primary actions, active
-  states, and the Favoritos chip.
+- Warm white/off-white neutral background; graphite (near-black) sidebar;
+  white elevated cards; very soft shadows and 16–28px radii instead of
+  heavy borders — see
+  [`docs/design/TRIDENTPOS_VISUAL_REFERENCE_SPEC.md`](../../../docs/design/TRIDENTPOS_VISUAL_REFERENCE_SPEC.md)
+  for the full token set and rationale.
+- Graphite as the primary action color; fresh green, warm yellow, and soft
+  coral reserved for operational status, used with moderation.
 - Table/account status is communicated with **both** color and a text
   label + icon — never color alone.
 - Touch targets: all primary buttons, table cards, and ticket steppers meet
@@ -207,14 +275,19 @@ itself:
 
 Every screen listed above, at all three breakpoints, was rendered with a
 real headless Chrome (not just written and assumed correct) before this
-handoff. Two real defects were found and fixed this way: a horizontal
-scrollbar caused by a CSS `overflow-y`/`overflow-x` interaction with an
-absolutely-positioned product badge, and a text-overflow collision in the
-ticket line at the narrowest breakpoint. Console output was checked for
-JS errors on every scene; there are none.
+handoff. See "What's new in V3" above for the three real layout bugs found
+and fixed this round (all a Chrome CSS Grid row auto-sizing quirk with
+flex-column grid items of variable content height, confirmed by measuring
+actual rendered element rects before fixing, not assumed). Console output
+was checked for JS errors on every scene, including the two new dev-only
+V3 scenes; there are none.
+
+V2's real-browser findings (horizontal scrollbar from an `overflow-y`/
+`overflow-x` interaction, a ticket-line text-overflow collision) remain
+fixed and were re-verified as part of this round's screenshot pass.
 
 ## Screenshots
 
-See `screenshots_v2/` in this directory for captured evidence of all
-required V2 screens and breakpoints (the original V1 set remains in
-`screenshots/` for reference/comparison).
+See `screenshots_v3/` in this directory for captured evidence of all
+required V3 screens and breakpoints (the V1 and V2 sets remain in
+`screenshots/` and `screenshots_v2/` for reference/comparison).

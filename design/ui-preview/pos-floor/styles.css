@@ -1,68 +1,112 @@
 /* ============================================================================
-   TRIDENTPOS — UI Preview 01 — Design Tokens & Visual Language (Light Mode)
+   TRIDENTPOS — UI Preview V3 — Visual System Reskin (Warm Hospitality)
    PREVIEW_FIXTURE_DATA — visual/UX prototype only, not production styling.
+   ----------------------------------------------------------------------------
+   V3 is a VISUAL RESKIN ONLY: same UX, same navigation, same flows, same
+   states, same interaction model. See docs/design/TRIDENTPOS_VISUAL_REFERENCE_SPEC.md
+   for the full rationale behind every token below.
    ============================================================================ */
 
 :root {
-  /* ---- Color: neutrals ---- */
+  /* ---- Color: warm neutrals (page → card → muted) ---- */
   --gray-0: #ffffff;
-  --gray-50: #f6f8fa;
-  --gray-100: #eef1f4;
-  --gray-200: #e2e6eb;
-  --gray-300: #cdd3db;
-  --gray-400: #a6aeb9;
-  --gray-500: #7c8794;
-  --gray-600: #5c6672;
-  --gray-700: #414a56;
-  --gray-800: #2a323d;
-  --gray-900: #171d26;
+  --gray-50: #faf8f4;   /* warm white — page background */
+  --gray-100: #f3efe7;  /* off white — muted surfaces */
+  --gray-200: #e8e2d6;  /* soft gray — subtle borders */
+  --gray-300: #d8cfbe;
+  --gray-400: #b3a894;
+  --gray-500: #8c8371;
+  --gray-600: #695f4d;
+  --gray-700: #4a4336;
+  --gray-800: #2f2a21;
+  --gray-900: #1c1912;  /* graphite / near-black */
 
-  /* ---- Color: sidebar (deep navy) ---- */
-  --navy-900: #0b1220;
-  --navy-800: #121b2d;
-  --navy-700: #1a2740;
-  --navy-600: #263355;
+  /* ---- Color: sidebar (graphite, not navy) ---- */
+  --navy-900: #14120d;
+  --navy-800: #1e1b14;
+  --navy-700: #29251b;
+  --navy-600: #38321f;
 
-  /* ---- Color: brand / accent ---- */
-  --accent-500: #0ea5a4;
-  --accent-600: #0c8f8e;
-  --accent-700: #0a7877;
-  --accent-100: #e3fbfa;
-  --accent-50: #f0fdfc;
+  /* ---- Color: brand / accent (retained for focus rings + legacy hooks) ---- */
+  --accent-500: #3e8f5c;
+  --accent-600: #357850;
+  --accent-700: #2c6242;
+  --accent-100: #e2f2e7;
+  --accent-50: #f1f9f3;
 
-  /* ---- Color: status ---- */
-  --status-disponible: #16a34a;
-  --status-disponible-bg: #eafaf0;
-  --status-disponible-border: #b8ecc9;
+  /* ---- Color: semantic status roles (section 8/10) ---- */
+  --status-success: #3e8f5c;
+  --status-success-bg: #eaf5ee;
+  --status-success-border: #c7e6d1;
 
-  --status-ocupada: #2563eb;
-  --status-ocupada-bg: #eef3ff;
-  --status-ocupada-border: #c4d6fb;
+  --status-info: #5b6b7d;
+  --status-info-bg: #eef1f4;
+  --status-info-border: #ccd4dc;
 
-  --status-atencion: #d97706;
-  --status-atencion-bg: #fff6e8;
-  --status-atencion-border: #f8dfa8;
+  --status-warning: #c98a12;
+  --status-warning-bg: #fdf3de;
+  --status-warning-border: #f2dda0;
 
-  --status-por_cobrar: #7c3aed;
-  --status-por_cobrar-bg: #f5f0ff;
-  --status-por_cobrar-border: #ddc9fb;
+  --status-attention: #d9652f;
+  --status-attention-bg: #fdece2;
+  --status-attention-border: #f4c6a9;
 
-  --danger-500: #dc2626;
+  /* ---- Legacy status aliases (table/account states — unchanged mapping) ---- */
+  --status-disponible: var(--status-success);
+  --status-disponible-bg: var(--status-success-bg);
+  --status-disponible-border: var(--status-success-border);
 
-  /* ---- Typography ---- */
+  --status-ocupada: var(--status-info);
+  --status-ocupada-bg: var(--status-info-bg);
+  --status-ocupada-border: var(--status-info-border);
+
+  --status-atencion: var(--status-warning);
+  --status-atencion-bg: var(--status-warning-bg);
+  --status-atencion-border: var(--status-warning-border);
+
+  --status-por_cobrar: var(--status-attention);
+  --status-por_cobrar-bg: var(--status-attention-bg);
+  --status-por_cobrar-border: var(--status-attention-border);
+
+  --danger-500: #c23b2e;
+
+  /* ---- Typography (section 11) ----
+     No external font is loaded — same dependency-free / no-network-call
+     commitment as V1/V2 (see README). "Editorial" feel is achieved with a
+     serif display face for large numerals/headings (from the system font
+     stack, no @font-face) paired with the existing system sans for body
+     text, rather than a Google Fonts import. */
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-display: Georgia, "Iowan Old Style", "Palatino Linotype", "Book Antiqua", serif;
+  --font-metric: var(--font-display);
 
-  /* ---- Elevation ---- */
-  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
-  --shadow-md: 0 4px 12px rgba(15, 23, 42, 0.08);
-  --shadow-lg: 0 12px 32px rgba(15, 23, 42, 0.14);
-  --shadow-panel: -8px 0 32px rgba(15, 23, 42, 0.12);
+  /* ---- Elevation (soft, section 13) ---- */
+  --shadow-xs: 0 1px 2px rgba(28, 25, 18, 0.04);
+  --shadow-sm: 0 2px 6px rgba(28, 25, 18, 0.05);
+  --shadow-md: 0 8px 20px rgba(28, 25, 18, 0.07);
+  --shadow-lg: 0 20px 48px rgba(28, 25, 18, 0.12);
+  --shadow-panel: -12px 0 40px rgba(28, 25, 18, 0.10);
 
-  /* ---- Radius ---- */
-  --r-sm: 8px;
-  --r-md: 12px;
-  --r-lg: 16px;
-  --r-xl: 20px;
+  /* ---- Radius (section 13) ---- */
+  --radius-sm: 10px;
+  --radius-md: 16px;
+  --radius-lg: 22px;
+  --radius-xl: 28px;
+  /* Legacy aliases (still referenced by name across this file) */
+  --r-sm: var(--radius-sm);
+  --r-md: var(--radius-md);
+  --r-lg: var(--radius-lg);
+  --r-xl: var(--radius-xl);
+
+  /* ---- Spacing scale (section 28) ---- */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 40px;
+  --space-8: 48px;
 
   /* ---- Layout (Design Tokens — consolidated for future Design System) ---- */
   --sidebar-expanded-width: 220px;
@@ -72,13 +116,26 @@
   --ticket-width: 380px;
   --touch-target-min: 44px;
 
-  /* ---- Semantic aliases ---- */
+  /* ---- Semantic surface + action aliases ---- */
   --accent: var(--accent-500);
   --surface: var(--gray-0);
+  --surface-page: var(--gray-50);
+  --surface-card: var(--gray-0);
+  --surface-muted: var(--gray-100);
+  --surface-raised: var(--gray-0);
   --border: var(--gray-200);
+  --border-subtle: var(--gray-200);
+  --text-primary: var(--gray-900);
+  --text-secondary: var(--gray-700);
+  --text-muted: var(--gray-500);
+  --action-primary: var(--gray-900);
+  --action-primary-hover: #000000;
+  --action-secondary: var(--gray-0);
 
-  /* ---- Transitions ---- */
-  --transition-sidebar: 200ms cubic-bezier(0.4, 0, 0.2, 1);
+  /* ---- Motion (section 33) ---- */
+  --motion-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
+  --motion-normal: 200ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-sidebar: var(--motion-normal);
 }
 
 * { box-sizing: border-box; }
@@ -90,8 +147,8 @@ html, body {
 
 body {
   font-family: var(--font-sans);
-  background: var(--gray-50);
-  color: var(--gray-900);
+  background: var(--surface-page);
+  color: var(--text-primary);
   -webkit-font-smoothing: antialiased;
   overflow: hidden;
 }
@@ -122,13 +179,13 @@ svg {
   position: relative;
 }
 
-/* ---- Sidebar ---- */
+/* ---- Sidebar (graphite, premium — section 15) ---- */
 
 .sidebar {
   width: var(--sidebar-expanded-width);
   flex-shrink: 0;
   background: linear-gradient(180deg, var(--navy-900), var(--navy-800));
-  color: #cdd6e6;
+  color: #cbc4b4;
   display: flex;
   flex-direction: column;
   padding: 18px 12px;
@@ -173,14 +230,15 @@ svg {
 .brand-mark {
   width: 34px;
   height: 34px;
-  border-radius: 10px;
-  background: linear-gradient(135deg, var(--accent-500), #0a5f5e);
+  border-radius: var(--radius-sm);
+  background: linear-gradient(135deg, var(--accent-500), var(--accent-700));
   color: white;
   display: flex;
   align-items: center;
   justify-content: center;
   font-weight: 700;
-  font-size: 16px;
+  font-family: var(--font-display);
+  font-size: 17px;
   flex-shrink: 0;
 }
 
@@ -188,7 +246,7 @@ svg {
   font-weight: 700;
   font-size: 15px;
   letter-spacing: 0.3px;
-  color: #f4f7fb;
+  color: #f7f4ec;
   white-space: nowrap;
 }
 
@@ -209,15 +267,16 @@ svg {
   align-items: center;
   gap: 12px;
   padding: 11px 12px;
-  border-radius: var(--r-sm);
+  border-radius: var(--radius-sm);
   border: none;
   background: transparent;
-  color: #aab4c6;
+  color: #a79d87;
   font-size: 13.5px;
   font-weight: 500;
   text-align: left;
-  transition: background 0.15s ease, color 0.15s ease;
+  transition: background var(--motion-fast), color var(--motion-fast);
   white-space: nowrap;
+  position: relative;
 }
 
 .nav-item .nav-icon {
@@ -232,12 +291,27 @@ svg {
 
 .nav-item:hover {
   background: rgba(255, 255, 255, 0.06);
-  color: #eef2f8;
+  color: #f3efe6;
 }
 
 .nav-item.active {
-  background: rgba(14, 165, 164, 0.16);
+  background: rgba(255, 255, 255, 0.08);
   color: #ffffff;
+}
+
+.nav-item.active::before {
+  content: "";
+  position: absolute;
+  left: -12px;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--accent-500);
+}
+
+.sidebar.collapsed .nav-item.active::before {
+  left: -10px;
 }
 
 .nav-item.active .nav-icon {
@@ -275,7 +349,7 @@ svg {
   font-size: 12.5px;
   font-weight: 600;
   padding: 7px 12px;
-  border-radius: var(--r-sm);
+  border-radius: var(--radius-sm);
   white-space: nowrap;
   box-shadow: var(--shadow-md);
   opacity: 0;
@@ -310,8 +384,8 @@ svg {
 .topbar {
   height: var(--header-height);
   flex-shrink: 0;
-  background: var(--gray-0);
-  border-bottom: 1px solid var(--gray-200);
+  background: var(--surface-card);
+  border-bottom: 1px solid var(--border-subtle);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -327,7 +401,8 @@ svg {
 
 .topbar-brand {
   font-weight: 700;
-  color: var(--gray-900);
+  font-family: var(--font-display);
+  color: var(--text-primary);
   letter-spacing: 0.2px;
 }
 
@@ -336,7 +411,7 @@ svg {
 }
 
 .topbar-branch {
-  color: var(--gray-600);
+  color: var(--text-muted);
   font-weight: 500;
 }
 
@@ -350,22 +425,22 @@ svg {
   display: flex;
   align-items: center;
   gap: 7px;
-  padding: 6px 12px;
+  padding: 6px 14px;
   border-radius: 999px;
   font-size: 12.5px;
   font-weight: 600;
 }
 
 .status-online {
-  background: var(--status-disponible-bg);
-  color: var(--status-disponible);
-  border: 1px solid var(--status-disponible-border);
+  background: var(--status-success-bg);
+  color: var(--status-success);
+  border: 1px solid var(--status-success-border);
 }
 
 .status-offline {
-  background: var(--status-atencion-bg);
-  color: var(--status-atencion);
-  border: 1px solid var(--status-atencion-border);
+  background: var(--status-warning-bg);
+  color: var(--status-warning);
+  border: 1px solid var(--status-warning-border);
 }
 
 .status-dot {
@@ -378,7 +453,7 @@ svg {
 .topbar-clock {
   font-variant-numeric: tabular-nums;
   font-weight: 600;
-  color: var(--gray-700);
+  color: var(--text-secondary);
   font-size: 13.5px;
   min-width: 46px;
 }
@@ -387,18 +462,18 @@ svg {
   position: relative;
   width: 40px;
   height: 40px;
-  border-radius: var(--r-sm);
-  border: 1px solid var(--gray-200);
-  background: var(--gray-0);
-  color: var(--gray-600);
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-card);
+  color: var(--text-secondary);
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background 0.15s ease, border-color 0.15s ease;
+  transition: background var(--motion-fast), border-color var(--motion-fast);
 }
 
 .icon-btn:hover {
-  background: var(--gray-50);
+  background: var(--surface-muted);
   border-color: var(--gray-300);
 }
 
@@ -406,7 +481,7 @@ svg {
   position: absolute;
   top: -4px;
   right: -4px;
-  background: var(--danger-500);
+  background: var(--status-attention);
   color: white;
   font-size: 10px;
   font-weight: 700;
@@ -424,14 +499,14 @@ svg {
   display: flex;
   align-items: center;
   gap: 9px;
-  padding: 5px 12px 5px 5px;
+  padding: 5px 14px 5px 5px;
   border-radius: 999px;
-  border: 1px solid var(--gray-200);
-  background: var(--gray-0);
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-card);
 }
 
 .profile-chip:hover {
-  background: var(--gray-50);
+  background: var(--surface-muted);
 }
 
 .avatar {
@@ -458,12 +533,12 @@ svg {
 .profile-name {
   font-size: 12.5px;
   font-weight: 600;
-  color: var(--gray-900);
+  color: var(--text-primary);
 }
 
 .profile-role {
   font-size: 11px;
-  color: var(--gray-500);
+  color: var(--text-muted);
 }
 
 /* ============================================================================
@@ -481,7 +556,7 @@ svg {
   inset: 0;
   display: none;
   flex-direction: column;
-  padding: 22px 28px 28px 28px;
+  padding: 26px 32px 32px 32px;
   overflow: hidden;
 }
 
@@ -493,21 +568,22 @@ svg {
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
-  margin-bottom: 16px;
+  margin-bottom: 20px;
   flex-shrink: 0;
 }
 
 .view-header h1 {
-  font-size: 22px;
+  font-family: var(--font-display);
+  font-size: 26px;
   font-weight: 700;
-  margin: 0 0 4px 0;
-  color: var(--gray-900);
+  margin: 0 0 5px 0;
+  color: var(--text-primary);
 }
 
 .view-subtitle {
   margin: 0;
   font-size: 13px;
-  color: var(--gray-500);
+  color: var(--text-muted);
   font-weight: 500;
 }
 
@@ -521,7 +597,7 @@ svg {
   align-items: center;
   gap: 6px;
   font-size: 12.5px;
-  color: var(--gray-600);
+  color: var(--text-secondary);
   font-weight: 500;
 }
 
@@ -537,12 +613,12 @@ svg {
 .dot-atencion { background: var(--status-atencion); }
 .dot-por_cobrar { background: var(--status-por_cobrar); }
 
-/* ---- Zone tabs / chips ---- */
+/* ---- Zone tabs / chips (premium pill navigation — section 23) ---- */
 
 .zone-tabs, .category-tabs {
   display: flex;
   gap: 8px;
-  margin-bottom: 18px;
+  margin-bottom: 20px;
   flex-shrink: 0;
   flex-wrap: wrap;
 }
@@ -550,23 +626,23 @@ svg {
 .chip {
   padding: 9px 18px;
   border-radius: 999px;
-  border: 1px solid var(--gray-200);
-  background: var(--gray-0);
-  color: var(--gray-600);
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-card);
+  color: var(--text-secondary);
   font-size: 13.5px;
   font-weight: 600;
-  transition: all 0.15s ease;
+  transition: all var(--motion-fast);
   min-height: 44px;
 }
 
 .chip:hover {
   border-color: var(--gray-300);
-  background: var(--gray-50);
+  background: var(--surface-muted);
 }
 
 .chip.active {
-  background: var(--gray-900);
-  border-color: var(--gray-900);
+  background: var(--action-primary);
+  border-color: var(--action-primary);
   color: white;
 }
 
@@ -574,8 +650,8 @@ svg {
 
 .tables-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 18px;
   overflow-y: auto;
   overflow-x: hidden;
   padding-bottom: 16px;
@@ -583,19 +659,36 @@ svg {
 }
 
 .table-card {
-  background: var(--gray-0);
-  border-radius: var(--r-lg);
-  border: 1px solid var(--gray-200);
-  padding: 16px;
+  background: var(--surface-card);
+  border-radius: var(--radius-xl);
+  border: 1px solid var(--border-subtle);
+  padding: 20px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  min-height: 148px;
+  gap: 12px;
+  /* Fixed (not min-) height, deliberately: with cards of genuinely
+     different natural heights (an open account renders 2 more content
+     rows than an empty table) in the same CSS Grid row, Chrome's "auto"
+     row-track sizing can measure the row using the SHORTER card and let
+     the taller one overflow into the row below — confirmed by measuring
+     rendered rects, not assumed. A fixed height makes every row-track
+     computation trivial (all items the same size) and removes the
+     ambiguity entirely. */
+  height: 204px;
   text-align: left;
   box-shadow: var(--shadow-sm);
-  transition: transform 0.12s ease, box-shadow 0.12s ease, border-color 0.12s ease;
-  border-top: 3px solid var(--gray-200);
+  transition: transform var(--motion-fast), box-shadow var(--motion-fast), border-color var(--motion-fast);
   position: relative;
+}
+
+.table-card::before {
+  content: "";
+  position: absolute;
+  left: 20px;
+  top: 20px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
 }
 
 .table-card:hover {
@@ -607,10 +700,10 @@ svg {
   transform: translateY(0);
 }
 
-.table-card.status-disponible { border-top-color: var(--status-disponible); }
-.table-card.status-ocupada { border-top-color: var(--status-ocupada); }
-.table-card.status-atencion { border-top-color: var(--status-atencion); }
-.table-card.status-por_cobrar { border-top-color: var(--status-por_cobrar); }
+.table-card.status-disponible::before { background: var(--status-disponible); }
+.table-card.status-ocupada::before { background: var(--status-ocupada); }
+.table-card.status-atencion::before { background: var(--status-atencion); }
+.table-card.status-por_cobrar::before { background: var(--status-por_cobrar); }
 
 .table-card-top {
   display: flex;
@@ -618,21 +711,23 @@ svg {
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 6px 8px;
+  padding-left: 18px;
 }
 
 .table-number {
-  font-size: 19px;
+  font-family: var(--font-display);
+  font-size: 21px;
   font-weight: 700;
-  color: var(--gray-900);
+  color: var(--text-primary);
   line-height: 1.1;
   white-space: nowrap;
 }
 
 .table-capacity {
   font-size: 12px;
-  color: var(--gray-500);
+  color: var(--text-muted);
   font-weight: 500;
-  margin-top: 2px;
+  margin-top: 3px;
   display: flex;
   align-items: center;
   gap: 4px;
@@ -648,7 +743,7 @@ svg {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 4px 9px;
+  padding: 4px 10px;
   border-radius: 999px;
   font-size: 11px;
   font-weight: 700;
@@ -665,22 +760,24 @@ svg {
 .status-badge.status-por_cobrar { background: var(--status-por_cobrar-bg); color: var(--status-por_cobrar); }
 
 .table-card-mid {
+  /* Safe again now that .table-card has a fixed height (see .table-card
+     comment) instead of an auto/min-height the grid had to measure. */
   flex: 1;
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 3px;
+  gap: 4px;
 }
 
 .table-waiter {
   font-size: 13px;
   font-weight: 600;
-  color: var(--gray-700);
+  color: var(--text-secondary);
 }
 
 .table-time {
   font-size: 12px;
-  color: var(--gray-500);
+  color: var(--text-muted);
   display: flex;
   align-items: center;
   gap: 4px;
@@ -688,7 +785,8 @@ svg {
 
 .table-time svg { width: 12px; height: 12px; }
 
-.table-time.time-warn { color: var(--status-atencion); font-weight: 600; }
+.table-time.time-warn { color: var(--status-warning); font-weight: 600; }
+.table-time.time-critical { color: #a8590f; font-weight: 700; }
 
 .table-available-label {
   font-size: 13px;
@@ -700,14 +798,15 @@ svg {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding-top: 8px;
-  border-top: 1px dashed var(--gray-200);
+  padding-top: 10px;
+  border-top: 1px dashed var(--border-subtle);
 }
 
 .table-total {
-  font-size: 16px;
+  font-family: var(--font-metric);
+  font-size: 17px;
   font-weight: 700;
-  color: var(--gray-900);
+  color: var(--text-primary);
   font-variant-numeric: tabular-nums;
 }
 
@@ -717,17 +816,17 @@ svg {
   gap: 4px;
   font-size: 11px;
   font-weight: 700;
-  color: var(--status-atencion);
+  color: var(--status-warning);
 }
 
 /* ============================================================================
-   ACCOUNT SIDE PANEL
+   ACCOUNT SIDE PANEL — premium operational panel (section 19)
    ============================================================================ */
 
 .backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(15, 23, 42, 0.28);
+  background: rgba(28, 25, 18, 0.24);
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.2s ease;
@@ -746,13 +845,14 @@ svg {
   bottom: 0;
   width: var(--drawer-width);
   max-width: 92vw;
-  background: var(--gray-0);
+  background: var(--surface-card);
+  border-radius: var(--radius-lg) 0 0 var(--radius-lg);
   box-shadow: var(--shadow-panel);
   z-index: 31;
   display: flex;
   flex-direction: column;
   transform: translateX(100%);
-  transition: transform 0.22s cubic-bezier(0.32, 0.72, 0, 1);
+  transition: transform 0.24s cubic-bezier(0.32, 0.72, 0, 1);
 }
 
 .account-panel.open {
@@ -763,13 +863,13 @@ svg {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  padding: 22px 22px 14px 22px;
-  border-bottom: 1px solid var(--gray-100);
+  padding: 24px 24px 16px 24px;
+  border-bottom: 1px solid var(--surface-muted);
   flex-shrink: 0;
 }
 
 .account-eyebrow {
-  margin: 0 0 2px 0;
+  margin: 0 0 3px 0;
   font-size: 11.5px;
   font-weight: 700;
   text-transform: uppercase;
@@ -779,17 +879,18 @@ svg {
 
 .account-panel-header h2 {
   margin: 0;
-  font-size: 20px;
+  font-family: var(--font-display);
+  font-size: 22px;
   font-weight: 700;
-  color: var(--gray-900);
+  color: var(--text-primary);
 }
 
 .account-meta {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
-  padding: 14px 22px;
-  border-bottom: 1px solid var(--gray-100);
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--surface-muted);
   flex-shrink: 0;
 }
 
@@ -818,7 +919,7 @@ svg {
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 16px 22px;
+  padding: 18px 24px;
 }
 
 .account-section h3 {
@@ -826,26 +927,33 @@ svg {
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.4px;
-  color: var(--gray-500);
-  margin: 0 0 12px 0;
+  color: var(--text-muted);
+  margin: 0 0 14px 0;
 }
 
 .order-lines {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 16px;
 }
 
 .order-line {
   display: flex;
   gap: 12px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--surface-muted);
+}
+
+.order-line:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
 }
 
 .order-line-qty {
   flex-shrink: 0;
   width: 30px;
   height: 30px;
-  border-radius: var(--r-sm);
+  border-radius: var(--radius-sm);
   background: var(--accent-50);
   color: var(--accent-700);
   font-weight: 700;
@@ -863,7 +971,7 @@ svg {
 .order-line-name {
   font-size: 14px;
   font-weight: 600;
-  color: var(--gray-900);
+  color: var(--text-primary);
   display: flex;
   justify-content: space-between;
   gap: 8px;
@@ -871,7 +979,7 @@ svg {
 
 .order-line-subtotal {
   font-variant-numeric: tabular-nums;
-  color: var(--gray-700);
+  color: var(--text-secondary);
   font-weight: 600;
   flex-shrink: 0;
 }
@@ -885,15 +993,15 @@ svg {
 
 .order-line-mods span {
   font-size: 12px;
-  color: var(--gray-500);
+  color: var(--text-muted);
 }
 
 .order-line-mods span.mod-remove::before { content: "– "; }
 .order-line-mods span.mod-add::before { content: "+ "; }
 
 .account-summary {
-  padding: 14px 22px;
-  border-top: 1px solid var(--gray-100);
+  padding: 16px 24px;
+  border-top: 1px solid var(--surface-muted);
   flex-shrink: 0;
 }
 
@@ -901,25 +1009,26 @@ svg {
   display: flex;
   justify-content: space-between;
   font-size: 13.5px;
-  color: var(--gray-600);
+  color: var(--text-secondary);
   padding: 4px 0;
   font-variant-numeric: tabular-nums;
 }
 
 .summary-total {
-  border-top: 1px solid var(--gray-200);
+  border-top: 1px solid var(--border-subtle);
   margin-top: 6px;
-  padding-top: 10px;
-  font-size: 17px;
+  padding-top: 12px;
+  font-family: var(--font-metric);
+  font-size: 19px;
   font-weight: 700;
-  color: var(--gray-900);
+  color: var(--text-primary);
 }
 
 .account-actions {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 8px;
-  padding: 14px 22px 22px 22px;
+  padding: 16px 24px 24px 24px;
   flex-shrink: 0;
 }
 
@@ -930,43 +1039,42 @@ svg {
   gap: 7px;
   padding: 12px 10px;
   min-height: 46px;
-  border-radius: var(--r-md);
-  border: 1px solid var(--gray-200);
-  background: var(--gray-0);
-  color: var(--gray-700);
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-card);
+  color: var(--text-secondary);
   font-size: 13px;
   font-weight: 600;
-  transition: background 0.15s ease, border-color 0.15s ease;
+  transition: background var(--motion-fast), border-color var(--motion-fast);
 }
 
 .btn-action svg { width: 17px; height: 17px; flex-shrink: 0; }
 
 .btn-action:hover {
-  background: var(--gray-50);
+  background: var(--surface-muted);
   border-color: var(--gray-300);
 }
 
 .btn-action.btn-primary {
   grid-column: 1 / -1;
-  background: var(--accent-500);
-  border-color: var(--accent-500);
+  background: var(--action-primary);
+  border-color: var(--action-primary);
   color: white;
 }
 
 .btn-action.btn-primary:hover {
-  background: var(--accent-600);
-  border-color: var(--accent-600);
+  background: var(--action-primary-hover);
 }
 
 .btn-action.btn-cobrar {
   grid-column: 1 / -1;
-  background: var(--gray-900);
-  border-color: var(--gray-900);
+  background: var(--status-attention);
+  border-color: var(--status-attention);
   color: white;
 }
 
 .btn-action.btn-cobrar:hover {
-  background: #000;
+  filter: brightness(0.93);
 }
 
 /* ============================================================================
@@ -977,7 +1085,7 @@ svg {
   display: flex;
   align-items: center;
   gap: 18px;
-  margin-bottom: 16px;
+  margin-bottom: 18px;
   flex-shrink: 0;
 }
 
@@ -985,25 +1093,26 @@ svg {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 10px 16px;
+  padding: 10px 18px;
   min-height: 44px;
-  border-radius: var(--r-md);
-  border: 1px solid var(--gray-200);
-  background: var(--gray-0);
-  color: var(--gray-700);
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-card);
+  color: var(--text-secondary);
   font-weight: 600;
   font-size: 13.5px;
 }
 
 .btn-back:hover {
-  background: var(--gray-50);
+  background: var(--surface-muted);
 }
 
 .btn-back svg { width: 16px; height: 16px; }
 
 .pos-header-title h1 {
   margin: 0 0 2px 0;
-  font-size: 20px;
+  font-family: var(--font-display);
+  font-size: 22px;
   font-weight: 700;
 }
 
@@ -1011,7 +1120,7 @@ svg {
   flex: 1;
   display: grid;
   grid-template-columns: 1fr var(--ticket-width);
-  gap: 20px;
+  gap: 22px;
   min-height: 0;
 }
 
@@ -1023,26 +1132,37 @@ svg {
 
 .product-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-  gap: 14px;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 16px;
   overflow-y: auto;
   overflow-x: hidden;
   padding-bottom: 16px;
   align-content: start;
 }
 
+/* ---- Product card — photography-forward (section 20) ---- */
+
 .product-card {
-  background: var(--gray-0);
-  border: 1px solid var(--gray-200);
-  border-radius: var(--r-md);
-  padding: 14px;
+  position: relative;
+  background: var(--surface-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  min-height: 108px;
+  gap: 0;
+  /* Fixed height, same reasoning as .table-card: a min-height alone left
+     this as a flex-column grid item with genuinely ambiguous intrinsic
+     sizing, which Chrome's CSS Grid row auto-sizing under-measured at
+     1024px — .product-card-body (name/desc/price) was being clipped
+     entirely by this element's own overflow:hidden (needed to clip the
+     photo's top corners), even after the thumb itself got a fixed height.
+     Confirmed by screenshot: card rendered as image-only, no text. */
+  height: 224px;
   text-align: left;
   box-shadow: var(--shadow-sm);
-  transition: transform 0.12s ease, box-shadow 0.12s ease;
+  transition: transform var(--motion-fast), box-shadow var(--motion-fast);
+  overflow: hidden;
 }
 
 .product-card:hover {
@@ -1053,38 +1173,81 @@ svg {
 
 .product-thumb {
   width: 100%;
-  height: 44px;
-  border-radius: var(--r-sm);
-  background: linear-gradient(135deg, var(--accent-50), var(--gray-100));
+  /* Fixed height, not aspect-ratio: an aspect-ratio here scales with the
+     grid column's width, which varies by breakpoint/column-count — the
+     same class of bug as .table-card (see its comment) can then make
+     Chrome's CSS Grid row auto-sizing under-measure this flex-column card
+     at some widths, and .product-card's overflow:hidden (needed to clip
+     the image's top corners) silently clips the name/price below it
+     instead of visibly overflowing. A fixed height keeps this
+     deterministic at every breakpoint — confirmed by removing this and
+     seeing product names disappear entirely at 1024px width. */
+  height: 132px;
+  border-radius: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--accent-600);
-  font-size: 20px;
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 30px;
   flex-shrink: 0;
+  position: relative;
+}
+
+.product-thumb::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0) 55%, rgba(0, 0, 0, 0.18) 100%);
+}
+
+.product-card-body {
+  padding: 12px 14px 14px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
 }
 
 .product-name {
   font-size: 13.5px;
-  font-weight: 600;
-  color: var(--gray-900);
+  font-weight: 700;
+  color: var(--text-primary);
   line-height: 1.3;
-  flex: 1;
+}
+
+.product-desc {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .product-price {
-  font-size: 15px;
+  margin-top: 4px;
+  font-family: var(--font-metric);
+  font-size: 15.5px;
   font-weight: 700;
-  color: var(--accent-700);
+  color: var(--text-primary);
   font-variant-numeric: tabular-nums;
 }
+
+/* Category → imagery palette (fixture-only stand-in for real food photography;
+   see docs/design/TRIDENTPOS_VISUAL_REFERENCE_SPEC.md section 21). */
+.product-thumb.cat-Entradas { background: linear-gradient(135deg, #6fa26a, #3e7a4c); }
+.product-thumb.cat-Tacos { background: linear-gradient(135deg, #d98a3d, #b85c22); }
+.product-thumb.cat-Platos { background: linear-gradient(135deg, #b5542f, #7d2f1c); }
+.product-thumb.cat-Bebidas { background: linear-gradient(135deg, #5b8a8f, #345d63); }
+.product-thumb.cat-Postres { background: linear-gradient(135deg, #c77b96, #94435f); }
 
 /* ---- Ticket panel ---- */
 
 .ticket-panel {
-  background: var(--gray-0);
-  border: 1px solid var(--gray-200);
-  border-radius: var(--r-lg);
+  background: var(--surface-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xl);
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -1095,19 +1258,20 @@ svg {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  padding: 18px 20px 12px 20px;
-  border-bottom: 1px solid var(--gray-100);
+  padding: 20px 22px 14px 22px;
+  border-bottom: 1px solid var(--surface-muted);
 }
 
 .ticket-header h2 {
   margin: 0;
-  font-size: 15.5px;
+  font-family: var(--font-display);
+  font-size: 16.5px;
   font-weight: 700;
 }
 
 .ticket-count {
   font-size: 12px;
-  color: var(--gray-500);
+  color: var(--text-muted);
   font-weight: 600;
 }
 
@@ -1115,10 +1279,10 @@ svg {
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 14px 20px;
+  padding: 16px 22px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 14px;
 }
 
 .ticket-empty {
@@ -1133,38 +1297,45 @@ svg {
   display: flex;
   align-items: center;
   gap: 10px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--surface-muted);
+}
+
+.ticket-line:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
 }
 
 .qty-stepper {
   display: flex;
   align-items: center;
-  gap: 6px;
-  background: var(--gray-50);
-  border-radius: var(--r-sm);
-  padding: 3px;
+  gap: 2px;
+  background: var(--surface-muted);
+  border-radius: 999px;
+  padding: 4px;
   flex-shrink: 0;
 }
 
 .qty-stepper button {
-  width: 24px;
-  height: 24px;
-  border-radius: 6px;
+  width: var(--touch-target-min);
+  height: var(--touch-target-min);
+  border-radius: 50%;
   border: none;
   background: var(--gray-0);
-  color: var(--gray-700);
+  color: var(--text-secondary);
   font-weight: 700;
-  font-size: 14px;
+  font-size: 17px;
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--shadow-xs);
 }
 
 .qty-stepper span {
-  min-width: 16px;
+  min-width: 22px;
   text-align: center;
   font-weight: 700;
-  font-size: 13px;
+  font-size: 14px;
 }
 
 .ticket-line-body {
@@ -1175,7 +1346,7 @@ svg {
 .ticket-line-name {
   font-size: 13.5px;
   font-weight: 600;
-  color: var(--gray-900);
+  color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1183,7 +1354,7 @@ svg {
 
 .ticket-line-price {
   font-size: 12px;
-  color: var(--gray-500);
+  color: var(--text-muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1202,15 +1373,15 @@ svg {
 .ticket-line-subtotal {
   font-size: 13.5px;
   font-weight: 700;
-  color: var(--gray-900);
+  color: var(--text-primary);
   flex-shrink: 0;
   font-variant-numeric: tabular-nums;
 }
 
 .ticket-line-remove {
   flex-shrink: 0;
-  width: 26px;
-  height: 26px;
+  width: 32px;
+  height: 32px;
   border-radius: 50%;
   border: none;
   background: transparent;
@@ -1221,27 +1392,27 @@ svg {
 }
 
 .ticket-line-remove:hover {
-  background: #fdeceb;
+  background: var(--status-attention-bg);
   color: var(--danger-500);
 }
 
 .ticket-line-remove svg { width: 15px; height: 15px; }
 
 .ticket-summary {
-  padding: 12px 20px;
-  border-top: 1px solid var(--gray-100);
+  padding: 14px 22px;
+  border-top: 1px solid var(--surface-muted);
 }
 
 .btn-primary {
-  background: var(--accent-500);
-  border: 1px solid var(--accent-500);
+  background: var(--action-primary);
+  border: 1px solid var(--action-primary);
   color: white;
   font-weight: 700;
-  border-radius: var(--r-md);
+  border-radius: 999px;
 }
 
 .btn-primary:hover {
-  background: var(--accent-600);
+  background: var(--action-primary-hover);
 }
 
 .btn-primary:disabled {
@@ -1254,8 +1425,8 @@ svg {
 .btn-large {
   min-height: 52px;
   font-size: 14.5px;
-  margin: 0 20px 20px 20px;
-  width: calc(100% - 40px);
+  margin: 0 22px 22px 22px;
+  width: calc(100% - 44px);
 }
 
 /* ============================================================================
@@ -1270,7 +1441,7 @@ svg {
   background: var(--gray-900);
   color: white;
   padding: 13px 22px;
-  border-radius: var(--r-md);
+  border-radius: 999px;
   font-size: 13.5px;
   font-weight: 600;
   box-shadow: var(--shadow-lg);
@@ -1287,7 +1458,7 @@ svg {
 }
 
 /* ============================================================================
-   V2 — SIDEBAR TOGGLE ROW
+   SIDEBAR TOGGLE ROW
    ============================================================================ */
 
 .sidebar-toggle {
@@ -1299,7 +1470,7 @@ svg {
 }
 
 /* ============================================================================
-   V2 — SELECTED TABLE STATE
+   SELECTED TABLE STATE
    ============================================================================ */
 
 .table-card.selected {
@@ -1311,26 +1482,19 @@ svg {
   color: var(--accent-700);
 }
 
-/* ---- Elevated time hierarchy (subtle — not an alarm) ---- */
-
-.table-time.time-critical {
-  color: #b45309;
-  font-weight: 700;
-}
-
 /* ============================================================================
-   V2 — PRODUCT SEARCH
+   PRODUCT SEARCH — pill search field (section 22)
    ============================================================================ */
 
 .pos-search {
   position: relative;
-  margin-bottom: 14px;
+  margin-bottom: 16px;
   flex-shrink: 0;
 }
 
 .pos-search-icon {
   position: absolute;
-  left: 16px;
+  left: 18px;
   top: 50%;
   transform: translateY(-50%);
   width: 18px;
@@ -1341,15 +1505,15 @@ svg {
 
 .pos-search-input {
   width: 100%;
-  height: 50px;
-  border-radius: var(--r-md);
-  border: 1.5px solid var(--gray-200);
-  background: var(--gray-0);
-  padding: 0 44px 0 46px;
+  height: 52px;
+  border-radius: 999px;
+  border: 1.5px solid var(--border-subtle);
+  background: var(--surface-card);
+  padding: 0 46px 0 48px;
   font-size: 14.5px;
   font-family: inherit;
-  color: var(--gray-900);
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  color: var(--text-primary);
+  transition: border-color var(--motion-fast), box-shadow var(--motion-fast);
 }
 
 .pos-search-input::placeholder {
@@ -1364,15 +1528,15 @@ svg {
 
 .pos-search-kbd {
   position: absolute;
-  right: 14px;
+  right: 16px;
   top: 50%;
   transform: translateY(-50%);
   font-family: inherit;
   font-size: 11.5px;
   font-weight: 700;
-  color: var(--gray-500);
-  background: var(--gray-100);
-  border: 1px solid var(--gray-200);
+  color: var(--text-secondary);
+  background: var(--surface-muted);
+  border: 1px solid var(--border-subtle);
   border-radius: 6px;
   padding: 3px 7px;
   pointer-events: none;
@@ -1391,7 +1555,7 @@ svg {
 }
 
 /* ============================================================================
-   V2 — CATEGORY CHIPS (touch-friendly + favorites)
+   CATEGORY CHIPS (touch-friendly + favorites)
    ============================================================================ */
 
 .category-tabs .chip {
@@ -1411,27 +1575,23 @@ svg {
 }
 
 .chip.active.chip-favorite {
-  background: var(--accent-500);
-  border-color: var(--accent-500);
+  background: var(--status-success);
+  border-color: var(--status-success);
 }
 
 /* ============================================================================
-   V2 — PRODUCT CARD FEEDBACK
+   PRODUCT CARD FEEDBACK
    ============================================================================ */
-
-.product-card {
-  position: relative;
-}
 
 .product-card-qty-badge {
   position: absolute;
-  top: -8px;
-  right: -8px;
+  top: 10px;
+  right: 10px;
   min-width: 22px;
   height: 22px;
   padding: 0 6px;
   border-radius: 999px;
-  background: var(--accent-500);
+  background: var(--status-success);
   color: white;
   font-size: 11.5px;
   font-weight: 700;
@@ -1440,11 +1600,12 @@ svg {
   justify-content: center;
   box-shadow: var(--shadow-sm);
   border: 2px solid var(--gray-0);
+  z-index: 2;
 }
 
 @keyframes product-pulse {
   0% { transform: scale(1); }
-  35% { transform: scale(0.94); }
+  35% { transform: scale(0.96); }
   100% { transform: scale(1); }
 }
 
@@ -1455,8 +1616,8 @@ svg {
 
 .product-card-plus1 {
   position: absolute;
-  top: 6px;
-  right: 6px;
+  top: 10px;
+  left: 10px;
   background: var(--gray-900);
   color: white;
   font-size: 11px;
@@ -1466,6 +1627,7 @@ svg {
   opacity: 0;
   transform: translateY(0);
   pointer-events: none;
+  z-index: 2;
 }
 
 .product-card-plus1.show {
@@ -1480,33 +1642,7 @@ svg {
 }
 
 /* ============================================================================
-   V2 — TICKET QUANTITY STEPPER (larger touch targets)
-   ============================================================================ */
-
-.qty-stepper {
-  padding: 4px;
-  gap: 2px;
-}
-
-.qty-stepper button {
-  width: var(--touch-target-min);
-  height: var(--touch-target-min);
-  font-size: 17px;
-  border-radius: 8px;
-}
-
-.qty-stepper span {
-  min-width: 22px;
-  font-size: 14px;
-}
-
-.ticket-line-remove {
-  width: 32px;
-  height: 32px;
-}
-
-/* ============================================================================
-   V2 — ACCOUNT DRAWER: PARTIDAS COUNT BADGE
+   ACCOUNT DRAWER: PARTIDAS COUNT BADGE
    ============================================================================ */
 
 .order-lines-count {
@@ -1517,13 +1653,13 @@ svg {
 }
 
 /* ============================================================================
-   V2 — MODIFIER MODAL (UX preview only — not canonical modifier rules)
+   MODIFIER MODAL (UX preview only — not canonical modifier rules)
    ============================================================================ */
 
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(15, 23, 42, 0.4);
+  background: rgba(28, 25, 18, 0.36);
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.18s ease;
@@ -1543,8 +1679,8 @@ svg {
   width: 420px;
   max-width: 92vw;
   max-height: 82vh;
-  background: var(--gray-0);
-  border-radius: var(--r-lg);
+  background: var(--surface-card);
+  border-radius: var(--radius-xl);
   box-shadow: var(--shadow-lg);
   z-index: 61;
   display: flex;
@@ -1564,14 +1700,15 @@ svg {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  padding: 20px 20px 14px 20px;
-  border-bottom: 1px solid var(--gray-100);
+  padding: 22px 22px 16px 22px;
+  border-bottom: 1px solid var(--surface-muted);
   flex-shrink: 0;
 }
 
 .modifier-modal-header h3 {
   margin: 0;
-  font-size: 18px;
+  font-family: var(--font-display);
+  font-size: 19px;
   font-weight: 700;
 }
 
@@ -1579,7 +1716,7 @@ svg {
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 18px 20px;
+  padding: 18px 22px;
   display: flex;
   flex-direction: column;
   gap: 20px;
@@ -1591,16 +1728,16 @@ svg {
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.4px;
-  color: var(--gray-500);
+  color: var(--text-muted);
 }
 
 .modifier-option {
   display: flex;
   align-items: center;
   gap: 11px;
-  padding: 11px 12px;
-  border-radius: var(--r-sm);
-  border: 1px solid var(--gray-200);
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
   margin-bottom: 8px;
   min-height: var(--touch-target-min);
   transition: border-color 0.12s ease, background 0.12s ease;
@@ -1608,7 +1745,7 @@ svg {
 
 .modifier-option:hover {
   border-color: var(--gray-300);
-  background: var(--gray-50);
+  background: var(--surface-muted);
 }
 
 .modifier-option input {
@@ -1634,30 +1771,270 @@ svg {
 .modifier-modal-actions {
   display: flex;
   gap: 10px;
-  padding: 16px 20px 20px 20px;
-  border-top: 1px solid var(--gray-100);
+  padding: 16px 22px 22px 22px;
+  border-top: 1px solid var(--surface-muted);
   flex-shrink: 0;
 }
 
 .btn-secondary {
   flex: 1;
   min-height: var(--touch-target-min);
-  border-radius: var(--r-md);
-  border: 1px solid var(--gray-200);
-  background: var(--gray-0);
-  color: var(--gray-700);
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-card);
+  color: var(--text-secondary);
   font-weight: 700;
   font-size: 14px;
 }
 
 .btn-secondary:hover {
-  background: var(--gray-50);
+  background: var(--surface-muted);
 }
 
 .modifier-modal-actions .btn-primary {
   flex: 2;
   min-height: var(--touch-target-min);
   font-size: 14px;
+}
+
+/* ============================================================================
+   DASHBOARD VISUAL LANGUAGE — concept preview only (section 26)
+   Reachable only via ?scene=dashboard (dev/QA helper), not linked from nav —
+   the real Dashboard module is out of scope for this preview (section 26).
+   ============================================================================ */
+
+.dashboard-grid {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-bottom: var(--space-6);
+}
+
+.kpi-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--space-5);
+}
+
+.kpi-card {
+  background: var(--surface-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xl);
+  padding: var(--space-5);
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.kpi-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.kpi-value {
+  font-family: var(--font-metric);
+  font-size: 32px;
+  font-weight: 700;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.kpi-trend {
+  font-size: 12.5px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.kpi-trend.up { color: var(--status-success); }
+.kpi-trend.down { color: var(--status-attention); }
+.kpi-trend.flat { color: var(--text-muted); }
+
+.dashboard-columns {
+  display: grid;
+  grid-template-columns: 1.1fr 1fr;
+  gap: var(--space-5);
+  align-items: start;
+}
+
+.panel-card {
+  background: var(--surface-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xl);
+  padding: var(--space-5);
+  box-shadow: var(--shadow-sm);
+}
+
+.panel-card h3 {
+  margin: 0 0 var(--space-4) 0;
+  font-family: var(--font-display);
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.insight-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--surface-muted);
+}
+
+.insight-row:last-child { border-bottom: none; padding-bottom: 0; }
+
+.gauge-ring {
+  flex-shrink: 0;
+}
+
+.insight-body { flex: 1; min-width: 0; }
+
+.insight-title {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.insight-value {
+  font-size: 12.5px;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.progress-bar-track {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--surface-muted);
+  overflow: hidden;
+  margin-top: 6px;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--status-success);
+}
+
+.feed-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.feed-item {
+  display: flex;
+  gap: var(--space-3);
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--surface-muted);
+}
+
+.feed-item:last-child { border-bottom: none; padding-bottom: 0; }
+
+.feed-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-top: 6px;
+  flex-shrink: 0;
+}
+
+.feed-dot.success { background: var(--status-success); }
+.feed-dot.warning { background: var(--status-warning); }
+.feed-dot.info { background: var(--status-info); }
+.feed-dot.attention { background: var(--status-attention); }
+
+.feed-title {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.feed-sub {
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+.feed-time {
+  font-size: 11.5px;
+  color: var(--gray-400);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* ============================================================================
+   DESIGN SYSTEM COMPONENT OVERVIEW — reachable via ?scene=design-system only.
+   Documents the token/component inventory for future modules (section 29).
+   ============================================================================ */
+
+.ds-grid {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-bottom: var(--space-7);
+}
+
+.ds-section {
+  background: var(--surface-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xl);
+  padding: var(--space-5);
+  box-shadow: var(--shadow-sm);
+}
+
+.ds-section h3 {
+  margin: 0 0 var(--space-4) 0;
+  font-family: var(--font-display);
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.ds-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  align-items: center;
+}
+
+.ds-swatch {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 96px;
+}
+
+.ds-swatch-color {
+  width: 96px;
+  height: 56px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+}
+
+.ds-swatch-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.ds-radius-demo {
+  width: 72px;
+  height: 72px;
+  background: var(--surface-muted);
+  border: 1px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-secondary);
 }
 
 /* ============================================================================
@@ -1683,6 +2060,27 @@ svg {
   .account-actions {
     grid-template-columns: 1fr;
   }
+  .dashboard-columns {
+    grid-template-columns: 1fr;
+  }
+
+  /* At --ticket-width: 300px, the qty-stepper (2× 44px touch targets) and
+     the remove button leave too little width for the product name on a
+     single row (measured: as little as ~12px — the name truncated to one
+     letter). Rather than shrinking the touch targets below 44px, give the
+     name/price their own full-width row and move the subtotal below it,
+     using explicit grid placement (DOM order is unchanged). */
+  .ticket-line {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    column-gap: 10px;
+    row-gap: 2px;
+    align-items: center;
+  }
+  .qty-stepper { grid-row: 1 / 3; grid-column: 1; }
+  .ticket-line-body { grid-row: 1; grid-column: 2; }
+  .ticket-line-subtotal { grid-row: 2; grid-column: 2; justify-self: start; }
+  .ticket-line-remove { grid-row: 1 / 3; grid-column: 3; }
 }
 
 @media (max-width: 900px) {
