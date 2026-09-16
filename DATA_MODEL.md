@@ -1,27 +1,32 @@
 # DATA MODEL SPECIFICATION — ERP RESTAURANTES / TRIDENTPOS
 
 > [!NOTE]
-> **ACR-2026-014 PROPOSED ARCHITECTURE CHANGE — PENDING GOVERNANCE APPROVAL**
-> 
-> Proposed amendment under `ACR-2026-014` / `ADR-014`: Materialization of tenant-safe relational integrity for Platform Core Master Catalog (`categories` candidate key `(organization_id, id)` and `products` composite foreign key `fk_products_category`). Pending formal independent review and Product Owner approval.
+> **ACR-2026-016 PROPOSED ARCHITECTURE CHANGE — PENDING GOVERNANCE APPROVAL**
+>
+> Proposed amendment under `ACR-2026-016`: KDS Contract & Data Authority Reconciliation. Establishes `kds_tickets` and `kds_ticket_partidas` as the sole authoritative Edge runtime schema for KDS production orders, classifies historical `kds_ordenes` as superseded/non-writable, standardizes `kds_estaciones` and `impresoras_red`, integrates `preparation_time_minutes` (INTEGER NULL `>= 0`), and enforces `ADR-012` Scale 4 integer quantity representation. Pending formal independent review and Product Owner approval.
 
 > [!NOTE]
-> **ACR-2026-013 PROPOSED ARCHITECTURE CHANGE — PENDING GOVERNANCE APPROVAL**
-> 
-> Proposed amendment under `ACR-2026-013`: Harmonization of Edge SQLite monetary and numerical representation from `REAL` to exact signed 64-bit `INTEGER` (Fixed-Point Escala 4: factor $10^4 = 10,000$). Pending formal review and Product Owner approval.
+> **ACR-2026-014 APPROVED / MERGED / CANONICAL ON MAIN** (PR `#41`, merge commit `d102f5296c9175c485aeb1a4bf7b5af3a93173b5`)
+>
+> Materialization of tenant-safe relational integrity for Platform Core Master Catalog (`categories` candidate key `(organization_id, id)` and `products` composite foreign key `fk_products_category`).
+
+> [!NOTE]
+> **ACR-2026-013 APPROVED / MERGED / CANONICAL ON MAIN** (PR `#42`, merge commit `b68019b7a42145b2bb50c822394747aa1f79cbb6`)
+>
+> Harmonization of Edge SQLite monetary and numerical representation from `REAL` to exact signed 64-bit `INTEGER` (Fixed-Point Escala 4: factor $10^4 = 10,000$).
 
 > [!NOTE]
 > **ACR-2026-011 APPROVED / MERGED / CANONICAL ON MAIN — G9**
-> 
+>
 > The additions in this document relating to WP-009 (`enrollment_tokens`, `station_credentials`, `edge_security_audit`) represent governance overlays formally approved and merged into canonical main under G9 (`0e50fe12ba7a95638c8efe57d4cd9c598b56daa9`). The underlying baseline remains `APPROVED / FROZEN — 2026-09-01`.
 
-**Document ID:** `ARCH-MDL-001`  
-**Version:** `1.1 PROPOSED OVERLAY — ACR-2026-013` (Underlying baseline: `1.0 APPROVED / FROZEN — 2026-09-01` with ACR-2026-011 Canonical Overlay — G9)  
-**Status:** `PROPOSED ARCHITECTURE CHANGE — PENDING GOVERNANCE APPROVAL`  
-**Date:** 2026-09-13  
-**Framework:** `EAAF v1.2.0 @ 7e036f43240b3dc28ccb996e350263598275b2cd`  
-**Author Agent:** `01_Solution_Architect` (Original author: `03_Data_Architect`)  
-**Approved Solution Baseline:** `e35205906055a8425ab875d05789652b3c3497b7` (Tag `solution-architecture-v1.3-approved`)  
+**Document ID:** `ARCH-MDL-001`
+**Version:** `1.3 PROPOSED OVERLAY — ACR-2026-016` (Underlying baseline: `1.0 APPROVED / FROZEN — 2026-09-01` with ACR-2026-011, ACR-2026-013, and ACR-2026-014 Canonical Overlays)
+**Status:** `PROPOSED ARCHITECTURE CHANGE — PENDING GOVERNANCE APPROVAL`
+**Date:** 2026-09-16
+**Framework:** `EAAF v1.2.0 @ 7e036f43240b3dc28ccb996e350263598275b2cd`
+**Author Agent:** `01_Solution_Architect` & `03_Data_Architect`
+**Approved Solution Baseline:** `e35205906055a8425ab875d05789652b3c3497b7` (Tag `solution-architecture-v1.3-approved`)
 
 ---
 
@@ -930,7 +935,68 @@ CREATE TABLE cuenta_item_modificadores (
     modifier_price_applied INTEGER NOT NULL DEFAULT 0 -- Cents4 (ADR-012)
 );
 
--- Órdenes y Comandas de KDS (Cocina / Barra)
+-- ============================================================
+-- Kitchen Display System (KDS) & Network Printing (WP-015, ACR-2026-016)
+-- Authoritative Edge SQLite Schema for Kitchen Production & Dispatch
+-- ============================================================
+
+-- Catálogo de Estaciones KDS Locales
+CREATE TABLE kds_estaciones (
+    id TEXT PRIMARY KEY,
+    nombre TEXT NOT NULL,
+    tipo TEXT NOT NULL, -- COCINA_CALIENTE, COCINA_FRIA, BARRA, REPOSTERIA, EXPO
+    is_active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+-- Catálogo de Impresoras de Red ESC/POS
+CREATE TABLE impresoras_red (
+    id TEXT PRIMARY KEY,
+    nombre TEXT NOT NULL,
+    ip_address TEXT NOT NULL,
+    port INTEGER NOT NULL DEFAULT 9100,
+    protocolo TEXT NOT NULL DEFAULT 'RAW_TCP', -- RAW_TCP, ESC_POS
+    is_active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+-- Tickets de Producción KDS (Authoritative Aggregate Root)
+CREATE TABLE kds_tickets (
+    id TEXT PRIMARY KEY,
+    cuenta_id TEXT NOT NULL,
+    mesa_reference TEXT NOT NULL,
+    kds_estacion_id TEXT NOT NULL REFERENCES kds_estaciones(id),
+    urgency_level TEXT NOT NULL DEFAULT 'NORMAL', -- NORMAL, URGENTE, VIP
+    status TEXT NOT NULL, -- PENDIENTE, EN_PREPARACION, LISTO, ENTREGADO
+    print_status TEXT NOT NULL DEFAULT 'PENDIENTE', -- PENDIENTE, IMPRESO, ERROR
+    print_attempts INTEGER NOT NULL DEFAULT 0,
+    printer_id TEXT NULL REFERENCES impresoras_red(id),
+    last_print_error TEXT NULL,
+    aggregate_sequence_number INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    completed_at TEXT NULL,
+    preparation_time_minutes INTEGER NULL CHECK (preparation_time_minutes IS NULL OR preparation_time_minutes >= 0) -- Populated on completion (ACR-2026-016)
+);
+
+-- Partidas de Ticket KDS (Authoritative Child Items)
+CREATE TABLE kds_ticket_partidas (
+    id TEXT PRIMARY KEY,
+    kds_ticket_id TEXT NOT NULL REFERENCES kds_tickets(id) ON DELETE CASCADE,
+    product_id TEXT NOT NULL,
+    product_name_snapshot TEXT NOT NULL,
+    quantity INTEGER NOT NULL, -- Fixed-Point Escala 4: factor 10,000 (ADR-012, ACR-2026-016)
+    comments TEXT NULL,
+    modifiers_snapshot TEXT NULL, -- JSON array string of modifiers snapshot
+    status TEXT NOT NULL DEFAULT 'PENDIENTE', -- PENDIENTE, EN_PREPARACION, LISTO, ENTREGADO
+    created_at TEXT NOT NULL
+);
+
+-- [SUPERSEDED / HISTORICAL — DO NOT WRITE]
+-- Predates WP-015 reconciled model; materially overlaps kds_tickets.
+-- Retained solely for schema compatibility; new runtime implementation MUST NOT write to this table.
 CREATE TABLE kds_ordenes (
     id TEXT PRIMARY KEY,
     cuenta_id TEXT NOT NULL,
@@ -1004,4 +1070,5 @@ CREATE TABLE local_audit_trail (
 
 ---
 
-DOCUMENT STATUS: APPROVED / FROZEN — 2026-09-01 (ACR-2026-011 APPROVED / MERGED / CANONICAL ON MAIN — G9)
+DOCUMENT STATUS: PROPOSED ARCHITECTURE CHANGE — PENDING GOVERNANCE APPROVAL (ACR-2026-016)
+(Underlying baseline: APPROVED / FROZEN — 2026-09-01; ACR-2026-011, ACR-2026-013, ACR-2026-014 APPROVED / MERGED / CANONICAL ON MAIN)

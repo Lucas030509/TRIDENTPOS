@@ -1,11 +1,16 @@
 # FUNCTIONAL ARCHITECTURE — ERP RESTAURANTES
 
-**Document ID:** `ARCH-FUNC-001`  
-**Version:** `1.3 NORMALIZED / REMEDIATED`  
-**Status:** `APPROVED / FROZEN`  
-**Date:** 2026-09-01  
-**Baseline:** `EAAF v1.2.0 @ 7e036f43240b3dc28ccb996e350263598275b2cd`  
-**Supersedes:** `FUNCTIONAL_ARCHITECTURE.md v1.2`  
+> [!NOTE]
+> **ACR-2026-016 PROPOSED ARCHITECTURE CHANGE — PENDING GOVERNANCE APPROVAL**
+>
+> Proposed amendment under `ACR-2026-016`: Clarification of KDS functional contracts, formalization of `RecuperarOrdenRecall(ordenProduccionId, ventanaMaxMinutos = 120)` as an id-keyed query anchored on `completed_at`, and inclusion of operational `tiempoPreparacionMinutos` persistence and event propagation in `OrdenProduccionConfirmadaEnKDS`. Pending independent review and Product Owner approval.
+
+**Document ID:** `ARCH-FUNC-001`
+**Version:** `1.4 PROPOSED OVERLAY — ACR-2026-016` (Underlying baseline: `1.3 NORMALIZED / REMEDIATED — 2026-09-01`)
+**Status:** `PROPOSED ARCHITECTURE CHANGE — PENDING GOVERNANCE APPROVAL`
+**Date:** 2026-09-16
+**Baseline:** `EAAF v1.2.0 @ 7e036f43240b3dc28ccb996e350263598275b2cd`
+**Supersedes:** `FUNCTIONAL_ARCHITECTURE.md v1.2`
 
 **Rol:** `02_Functional / Business Architect`
 
@@ -282,26 +287,34 @@ graph TD
 Los contratos funcionales definen los puntos de integración e intercambio de datos entre Bounded Contexts. Las capacidades receptoras pueden ser provistas por un módulo interno de la suite o por un sistema externo conectado mediante adaptadores.
 
 ### 6.1 Contrato TRIDENTPOS ↔ KDS (Restaurant Operations)
-- **Alcance:** Coordinación de producción en cocina.
+- **Alcance:** Coordinación de producción en cocina, enrutamiento a estaciones y despacho de impresión.
 - **Comandos Funcionales:**
-  - `EnviarComandaACocina(cuentaId, mesaId, items[], modificadores[], comentarios, urgencia)`
-  - `IniciarPreparacionOrden(ordenProduccionId, kdsEstacionId)`
-  - `ConfirmarOrdenSurtida(ordenProduccionId, kdsEstacionId, tiempoPreparacionMinutos)`
+  - `EnviarComandaACocina(cuentaId, mesaId, items[], modificadores[], comentarios, urgencia)`: Crea un ticket de producción (`kds_tickets`) en estado `PENDIENTE` y sus partidas asociadas (`kds_ticket_partidas`) con cantidades en formato Fixed-Point Escala 4 (`ADR-012`). Enruta a la estación correspondiente y encola el trabajo de impresión en red.
+  - `IniciarPreparacionOrden(ordenProduccionId, kdsEstacionId)`: Realiza la transición del ticket de `PENDIENTE` a `EN_PREPARACION` para la estación indicada.
+  - `ConfirmarOrdenSurtida(ordenProduccionId, kdsEstacionId, tiempoPreparacionMinutos)`:
+    * **Propósito:** Hito operacional formal de finalización de preparación.
+    * **Parámetro `tiempoPreparacionMinutos`:** Medición operacional de duración (entero `>= 0`). No debe ser descartada; se persiste en `kds_tickets.preparation_time_minutes` y se propaga en el evento de dominio.
+    * **Efecto:** Transición del ticket a `LISTO` (o `ENTREGADO`), registra `completed_at` (timestamp UTC) y emite `OrdenProduccionConfirmadaEnKDS`.
 - **Consultas Funcionales:**
-  - `ConsultarOrdenesActivas(kdsEstacionId)`
-  - `RecuperarOrdenRecall(ordenProduccionId, ventanaMaxMinutos = 120)`
+  - `ConsultarOrdenesActivas(kdsEstacionId)`: Retorna la lista de tickets activos (`PENDIENTE`, `EN_PREPARACION`) asignados a la estación KDS solicitada.
+  - `RecuperarOrdenRecall(ordenProduccionId, ventanaMaxMinutos = 120)`:
+    * **Semántica:** Búsqueda puntual por identificador específico de orden (`ordenProduccionId`). No es una enumeración general por estación.
+    * **Condición de Elegibilidad:** Aplica exclusivamente a órdenes previamente completadas (`completed_at IS NOT NULL`).
+    * **Ancla de Ventana Temporal:** Se evalúa contra el timestamp canónico `completed_at`.
+    * **Comportamiento:** Si la orden no existe, no está completada o el tiempo transcurrido desde `completed_at` excede `ventanaMaxMinutos` (por defecto 120 minutos), retorna `null` (o equivalente de no encontrado). Es una consulta de solo lectura (cero mutación de estado).
 - **Eventos de Dominio Emitidos:**
   - `ComandaEnviadaACocina`
   - `OrdenProduccionIniciadaEnKDS`
-  - `OrdenProduccionConfirmadaEnKDS` *(Hito operacional formal de confirmación de producción)*
+  - `OrdenProduccionConfirmadaEnKDS`:
+    * **Campos del Payload:** `ordenProduccionId`, `kdsEstacionId`, `cuentaId`, `mesaReference`, `tiempoPreparacionMinutos` (medición explícita, sin requerir reconstrucción por timestamps), `completedAt`, `partidas[]`.
 
 ---
 
 ### 6.2 Contrato TRIDENTPOS ↔ Inventory (Consumo de Insumos)
 - **Evento Disparador:** `OrdenProduccionConfirmadaEnKDS`.
 - **Parámetros del Contrato Funcional:**
-  - `organizacionId`, `sucursalId`, `centroConsumoId`, `ordenId`, `fechaHora`
-  - `items[]`: `{ productoId, cantidad, selectedModifiers[] }`
+  - `organizacionId`, `sucursalId`, `centroConsumoId`, `ordenId`, `fechaHora`, `tiempoPreparacionMinutos`
+  - `items[]`: `{ productoId, cantidad, selectedModifiers[] }` (cantidades en Fixed-Point Escala 4 `ADR-012`).
 - **Comportamiento Condicionado a Disponibilidad de Capability:**
   - *Si Inventory está habilitado (interno):* Procesa la descarga de insumos en el Centro de Consumo correspondiente a la receta del producto y emite `InventarioDescontadoPorReceta`.
   - *Si Inventory es externo:* El evento es canalizado por el Hub de Integraciones hacia el ERP corporativo (ej. SAP, Odoo).

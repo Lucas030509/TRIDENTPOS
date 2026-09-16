@@ -1,9 +1,14 @@
 # ADR-005: Protocolo de Comunicación en Red Local (LAN) para TRIDENTPOS
 
-**Status:** `ACCEPTED WITH VALIDATION REQUIRED`  
-**Date:** 2026-09-01  
-**Owners:** `01_Solution Architect`  
-**Related documents:** `SOLUTION_ARCHITECTURE.md`, `DEPLOYMENT_TOPOLOGY.md`  
+> [!NOTE]
+> **ACR-2026-016 PROPOSED ARCHITECTURE CHANGE — PENDING GOVERNANCE APPROVAL**
+>
+> Proposed amendment under `ACR-2026-016`: KDS Contract & Data Authority Reconciliation. Reaffirms the physical LAN 20-client saturation benchmark requirement (`< 5 ms` target latency) and formalizes performance validation debt `PERF-VAL-015-01`, owned for empirical hardware discharge by `WP-028` (Hardware Benchmarking & Release Packaging). Software loopback tests in `WP-015` qualify as software-only evidence and do not discharge physical LAN validation. Pending formal independent review and Product Owner approval.
+
+**Status:** `ACCEPTED WITH VALIDATION REQUIRED` (Validation Debt `PERF-VAL-015-01` tracked for discharge in `WP-028`)
+**Date:** 2026-09-01
+**Owners:** `01_Solution Architect`
+**Related documents:** `SOLUTION_ARCHITECTURE.md`, `DEPLOYMENT_TOPOLOGY.md`, `IMPLEMENTATION_PLAN.md` (`WP-015`, `WP-028`)
 
 ---
 
@@ -57,11 +62,22 @@ La combinación de HTTP para mutaciones y WebSockets para notificaciones push ga
 - Registro de conexiones y desconexiones de clientes WebSocket en el log del Edge Server.
 
 ## 11. Validation / Evidence Required
-- Pruebas de latencia y saturación con 20 clientes WebSocket conectados concurrentemente en red local.
+- Pruebas de latencia y saturación con 20 clientes WebSocket conectados concurrentemente en red local física dedicada (Wi-Fi/Ethernet).
+- **Formal Validation Debt (`PERF-VAL-015-01`):** Tracking formal de deuda no relacionada a seguridad originada en `WP-015` y delegada para descargo empírico obligatorio en `WP-028` (Hardware Benchmarking & Release Packaging).
+- **Criterios de Descargo en `WP-028`:**
+  1. Topología física de LAN documentada.
+  2. Inventario de hardware/dispositivos bajo prueba.
+  3. Condiciones reales de red Wi-Fi y Ethernet.
+  4. 20 clientes WebSocket conectados y recibiendo eventos KDS concurrentemente.
+  5. Metodología rigurosa de muestreo de latencia.
+  6. Distribución de latencias (p50, p95, max) frente al objetivo canónico `< 5 ms`.
+  7. Comportamiento ante saturación y reconexión masiva.
+  8. Veredicto PASS/FAIL formal emitido en `EVIDENCE_PERF_VAL_015_01_KDS_LAN_BENCHMARK.md`.
 
 ## 12. Revisit Triggers
 - Degradación de rendimiento o desconexiones recurrentes de WebSockets en redes locales no optimizadas.
 
 ## 13. Traceability
 - Atiende: REM-05, REM-08.
+- Validation Debt: `PERF-VAL-015-01` (descargo en `WP-028`).
 - SSOT: `SOLUTION_ARCHITECTURE.md v1.3`.

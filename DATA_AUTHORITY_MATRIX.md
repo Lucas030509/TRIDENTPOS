@@ -1,17 +1,22 @@
 # DATA AUTHORITY MATRIX — ERP RESTAURANTES / TRIDENTPOS
 
 > [!NOTE]
+> **ACR-2026-016 PROPOSED ARCHITECTURE CHANGE — PENDING GOVERNANCE APPROVAL**
+>
+> Proposed amendment under `ACR-2026-016`: KDS Contract & Data Authority Reconciliation. Formalizes `kds_tickets` + `kds_ticket_partidas` as the sole authoritative Edge runtime entities for KDS production orders, `kds_estaciones` for station config, `impresoras_red` for printer config, and designates historical `kds_ordenes` as superseded and non-writable. Pending formal independent review and Product Owner approval.
+
+> [!NOTE]
 > **ACR-2026-011 APPROVED / MERGED / CANONICAL ON MAIN — G9**
-> 
+>
 > The additions in this document relating to WP-009 (`enrollment_tokens`, `station_credentials`, `edge_security_audit`) represent governance overlays formally approved and merged into canonical main under G9 (`0e50fe12ba7a95638c8efe57d4cd9c598b56daa9`). The underlying baseline remains `APPROVED / FROZEN — 2026-09-01`.
 
-**Document ID:** `ARCH-AUT-001`  
-**Version:** `1.0 APPROVED / FROZEN` (with ACR-2026-011 Canonical Overlay — G9)  
-**Status:** `APPROVED / FROZEN — 2026-09-01` (`ACR-2026-011 APPROVED / MERGED / CANONICAL ON MAIN — G9`)  
-**Date:** 2026-09-01  
-**Framework:** `EAAF v1.2.0 @ 7e036f43240b3dc28ccb996e350263598275b2cd`  
-**Author Agent:** `03_Data_Architect` (Overlay Synthesis: `01_Solution_Architect`)  
-**Approved Solution Baseline:** `e35205906055a8425ab875d05789652b3c3497b7` (Tag `solution-architecture-v1.3-approved`)  
+**Document ID:** `ARCH-AUT-001`
+**Version:** `1.2 PROPOSED OVERLAY — ACR-2026-016` (Underlying baseline: `1.0 APPROVED / FROZEN — 2026-09-01` with ACR-2026-011 Canonical Overlay — G9)
+**Status:** `PROPOSED ARCHITECTURE CHANGE — PENDING GOVERNANCE APPROVAL`
+**Date:** 2026-09-16
+**Framework:** `EAAF v1.2.0 @ 7e036f43240b3dc28ccb996e350263598275b2cd`
+**Author Agent:** `01_Solution_Architect` & `03_Data_Architect`
+**Approved Solution Baseline:** `e35205906055a8425ab875d05789652b3c3497b7` (Tag `solution-architecture-v1.3-approved`)
 
 ---
 
@@ -31,7 +36,7 @@
 | **Branch Overrides (Precios Locales)**| 1. Full Suite | Cloud PostgreSQL | Cloud | Edge SQLite | Cloud → Edge (Deltas) | Cloud Wins | Cloud Platform Core |
 | **Salones & Mesas** | 1. Full Suite | Edge SQLite | Edge Host Local | Cloud (Analytics Read Replica)| Edge → Cloud (Outbox) | OCC (`expectedVersion` on Edge) | Edge TRIDENTPOS |
 | **Cuentas & Comandas Activas** | 1. Full Suite | Edge SQLite | Edge Host Local | Cloud (Consolidación) | Edge → Cloud (Outbox) | OCC (`expectedVersion` on Edge) | Edge TRIDENTPOS |
-| **KDS (Preparación Cocina/Barra)** | 1. Full Suite | Edge SQLite | Edge Host Local | Cloud (Analytics) | Edge → Cloud (Outbox) | Causal Sequence Number | Edge TRIDENTPOS |
+| **KDS & Impresión (`kds_tickets` + `kds_ticket_partidas`, `kds_estaciones`, `impresoras_red`; `kds_ordenes` SUPERSEDED/HISTORICAL non-writable)** | 1. Full Suite | Edge SQLite | Edge Host Local | Cloud (Analytics) | Edge → Cloud (Outbox) | Causal Sequence Number | Edge TRIDENTPOS |
 | **Turnos de Caja & Arqueos** | 1. Full Suite | Edge SQLite | Edge Host Local | Cloud (Finance) | Edge → Cloud (Outbox) | OCC + Fencing Token | Edge TRIDENTPOS |
 | **Pagos & Transacciones de Cobro** | 1. Full Suite | Edge SQLite | Edge Host Local | Cloud (Finance) | Edge → Cloud (Outbox) | Append-Only + Idempotency Key | Edge TRIDENTPOS |
 | **Cortes X y Z Diarios** | 1. Full Suite | Edge SQLite | Edge Host Local | Cloud (Finance SoR) | Edge → Cloud (Outbox) | Lease Preasignado + Época | Edge TRIDENTPOS |
@@ -49,4 +54,5 @@
 
 ---
 
-DOCUMENT STATUS: APPROVED / FROZEN — 2026-09-01 (ACR-2026-011 APPROVED / MERGED / CANONICAL ON MAIN — G9)
+DOCUMENT STATUS: PROPOSED ARCHITECTURE CHANGE — PENDING GOVERNANCE APPROVAL (ACR-2026-016)
+(Underlying baseline: APPROVED / FROZEN — 2026-09-01; ACR-2026-011 APPROVED / MERGED / CANONICAL ON MAIN — G9)
