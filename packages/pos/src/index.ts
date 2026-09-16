@@ -26,3 +26,8 @@ export * from './errors.js';
 export * from './policies.js';
 export * from './ports.js';
 export * from './dining-service.js';
+
+// Re-export Kitchen Display System (KDS) domain model (WP-015)
+export * from './kds-types.js';
+export * from './kds-ports.js';
+export * from './kds-service.js';
