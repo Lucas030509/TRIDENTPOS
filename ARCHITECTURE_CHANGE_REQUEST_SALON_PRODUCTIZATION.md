@@ -563,17 +563,28 @@ As author, I am not authorized to declare this Quick Integrity binding — the a
 
 ## AA. Product Owner Approval Block
 
-**Decision:** `PENDING` — not decided by this document.
+**Decision:** `APPROVED BY PRODUCT OWNER`. *(Corrected by `ACR-2026-015` Canonical Amendment R3 — CA-QI-015-31/`GOV-BLK-015-R2-01`: this section previously and incorrectly read `Decision: PENDING` with all checkboxes unchecked, contradicting the document's own top banner and the canonical amendment's actual governance status. The Product Owner approval is real and already recorded as durable evidence; this section previously failed to reflect it.)*
 
-- [ ] `WP-014A — Dining Operations Expansion` (including the merge-table caveat, Section H.5)
-- [ ] `WP-016C — POS Payment Orchestration & Account Settlement` (including the RESTCARD/CXC exclusion, Section G.5)
-- [ ] `WP-026` decomposition into `WP-026A`–`WP-026D`
-- [ ] Reservations excluded from current Salón productization
-- [ ] Effective executable roadmap change 29 → 34
-- [ ] `WP-027` lifecycle update (Section U)
-- [ ] Visual-system canonicalization as a hard prerequisite for `WP-026A`–`D` implementation, but not for `05_Frontend_Architect`'s architecture work (Section R, I.1) — **added/clarified in R1**
-- [ ] Frontend Architecture Gate (`FRONTEND_ARCHITECTURE.md`, authored by `05_Frontend_Architect`, independently reviewed) required before `WP-026A` implementation START (Section I.0) — **added in R1**
-- [ ] `ARCH-ADV-013-01` reconfirmed OPEN, blocking `WP-016` START only, not this ACR (Section N.1) — **added in R1**
+**Approval Evidence:** `3808c25285018888d5f31113cab64cdca4192c31:evidence/ACR-2026-015_R1_PRODUCT_OWNER_APPROVAL.md` (sidecar commit, not present in this candidate's tree).
+
+- [x] `WP-014A — Dining Operations Expansion` (including the merge-table caveat, Section H.5)
+- [x] `WP-016C — POS Payment Orchestration & Account Settlement` (including the RESTCARD/CXC exclusion, Section G.5)
+- [x] `WP-026` decomposition into `WP-026A`–`WP-026D`
+- [x] Reservations excluded from current Salón productization
+- [x] Effective executable roadmap change 29 → 34
+- [x] `WP-027` lifecycle update (Section U)
+- [x] Visual-system canonicalization as a hard prerequisite for `WP-026A`–`D` implementation, but not for `05_Frontend_Architect`'s architecture work (Section R, I.1) — **added/clarified in R1**
+- [x] Frontend Architecture Gate (`FRONTEND_ARCHITECTURE.md`, authored by `05_Frontend_Architect`, independently reviewed) required before `WP-026A` implementation START (Section I.0) — **added in R1**
+- [x] 11 mandatory downstream conditions (`FE`/`DATA`/`UX`/`SEC-COND-015-0x`), binding, carried forward as Acceptance Criteria on their named WP entries
+
+**Explicitly NOT approved / NOT closed by this approval** — all remain separate, OPEN Product Owner decisions:
+- `OQ-SSOT-01`
+- `OQ-SSOT-02`
+- `OQ-SSOT-06`
+- `OQ-SSOT-07`
+- `OQ-ARCH-01`
+
+**`ARCH-ADV-013-01`:** `REMEDIATION CANDIDATE — NOT CLOSED UNTIL MERGE` (unchanged by this approval; see Section N.1).
 
 Protected functional questions (`OQ-SSOT-01/02/06/07`, `OQ-ARCH-01`) are not approved through this block and remain separate PO decisions.
 
@@ -581,31 +592,61 @@ Protected functional questions (`OQ-SSOT-01/02/06/07`, `OQ-ARCH-01`) are not app
 
 ## AB. Current Draft Verdict
 
+*(Corrected by `ACR-2026-015` Canonical Amendment R3 — CA-QI-015-32/`GOV-BLK-015-R2-01`: this section previously described a pre-review draft state ("PROPOSED — PENDING INDEPENDENT REVIEW", "Ready for: INDEPENDENT ARCHITECTURE REVIEW"), which contradicted the document's own top banner and the canonical amendment candidate's actual current lifecycle state — the R1 sidecar review panel already ran and passed, the Product Owner already approved, and the Architecture Change Gate already passed, all before this candidate was prepared. The block below reflects the current canonical-amendment candidate lifecycle instead.)*
+
 ```text
-ACR-2026-015 (R1)
-SALÓN PRODUCTIZATION, POS SETTLEMENT & FRONTEND EXECUTION DECOMPOSITION
+ACR-2026-015
+CANONICAL AMENDMENT CANDIDATE R3
 
-Status:
-PROPOSED — PENDING INDEPENDENT REVIEW
+Product Owner:
+APPROVED
 
-Superseded subject (DO NOT REVIEW):
-7117308df6db9e0a1f9fcb87aa365da541549695
+Architecture Change Gate:
+PASS
+
+Prior Canonical-Amendment R2 Reviews:
+5 / 5 PASS
+0 blockers
+
+Coordinator R2 Synthesis:
+HOLD — GOVERNANCE METADATA REMEDIATION REQUIRED (this R3 remediation)
+
+Current R3:
+PENDING NEW INDEPENDENT REVIEW
+
+Canonical:
+NO
+
+PR:
+NOT CREATED
+
+Merge:
+NOT AUTHORIZED
+
+Superseded subjects (DO NOT REVIEW):
+7117308df6db9e0a1f9fcb87aa365da541549695 (pre-R1)
+269ca1eddd8b2fecd124b3b337e7d88c4018f254 (canonical-amendment, pre-R1-remediation)
+214b68054daf60c78a28434fd42106f0fab1dae3 (canonical-amendment R1)
+67970cfdcf5971ae2a1f41386d0a253268705083 (canonical-amendment R2)
 
 Canonical main mutated:
 NO
 
 Implementation Plan / Module Catalog / Capability Map / Product Scope /
 Product Decisions / Open Questions / ADRs mutated:
-NO
+NO (Implementation Plan is amended by this candidate branch only, not
+mutated on canonical main)
 
 Protected PO decisions closed:
 NO
 
 ARCH-ADV-013-01:
-OPEN — blocks WP-016 START, does not block this ACR's review
+REMEDIATION CANDIDATE — NOT CLOSED UNTIL MERGE
 
 Ready for:
-INDEPENDENT ARCHITECTURE REVIEW (01_Solution_Architect, 03_Data_Architect,
-05_Frontend_Architect, 06_UX_UI_Design_Architect, 08_Security_Architect —
-fresh sidecar instances)
+INDEPENDENT CANONICAL AMENDMENT R3 REVIEW (01_Solution_Architect,
+03_Data_Architect, 05_Frontend_Architect, 06_UX_UI_Design_Architect,
+08_Security_Architect — fresh sidecar instances, direct children of the
+R3 Frozen Subject; R2 review PASSes are historical evidence only and do
+not authorize R3)
 ```
