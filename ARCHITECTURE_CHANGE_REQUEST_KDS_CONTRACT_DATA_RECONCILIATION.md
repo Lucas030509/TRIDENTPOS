@@ -11,7 +11,7 @@
 **Authoring Roles:** `01_Solution_Architect`, `03_Data_Architect`
 **Originating WP-015 Frozen Subject:** `21f99d901c0b19a99d1a18bcec780055822805e8` (`HOLD — QUICK INTEGRITY REMEDIATION REQUIRED`)
 **Canonical Base:** `f0e21e51c86cb3c0bcdfdce1953dc616ad4169bc`
-**Authoring Branch:** `architecture/acr-2026-016-kds-contract-data-reconciliation`
+**Authoring Branch:** `architecture/acr-2026-016-kds-contract-data-reconciliation-r2`
 
 ---
 
@@ -34,7 +34,7 @@ This Architecture Change Request (`ACR-2026-016`) provides the formal, binding r
 |---|---|---|---|
 | **`QI-BLK-015-01`** | **Recall Contract Ambiguity:** Implementation defined `RecuperarOrdenRecall` keyed by station id with array return, contradicting the functional SSOT signature `RecuperarOrdenRecall(ordenProduccionId, ventanaMaxMinutos)`. | Explicitly formalizes `RecuperarOrdenRecall(ordenProduccionId, ventanaMaxMinutos = 120)` as an id-keyed lookup returning a single ticket or null, using `completed_at` as the window anchor without mutation. | `FUNCTIONAL_ARCHITECTURE.md` Sec. 6.1, `IMPLEMENTATION_PLAN.md` WP-015 |
 | **`QI-BLK-015-02`** | **Preparation Time Parameter Discarded:** `ConfirmarOrdenSurtida` accepted `tiempoPreparacionMinutos` in the contract, but the value was silently discarded by the service and omitted from `kds_tickets` and domain events. | Canonicalizes `preparation_time_minutes INTEGER NULL` (with domain validation `>= 0`) on `kds_tickets` and mandates its propagation in the `OrdenProduccionConfirmadaEnKDS` domain event. | `DATA_MODEL.md` Sec. 3, `DATA_DICTIONARY.md` Sec. 1.2, `FUNCTIONAL_ARCHITECTURE.md` Sec. 6.1, `IMPLEMENTATION_PLAN.md` WP-015 |
-| **`QI-BLK-015-03`** | **Quantity Representation Non-Conformance:** `kds_ticket_partidas.quantity` was modeled as `TEXT` in SQLite and converted via JS float arithmetic, violating `ADR-012` exact fixed-point standard. | Establishes `kds_ticket_partidas.quantity` as SQLite `INTEGER NOT NULL` (Scale 4, factor 10,000), TypeScript domain `bigint`, and wire transport as canonical decimal string (`"1.0000"`), reusing `@trident/core` primitives. | `DATA_MODEL.md` Sec. 3, `DATA_DICTIONARY.md` Sec. 1.2, `IMPLEMENTATION_PLAN.md` WP-015 |
+| **`QI-BLK-015-03`** | **Quantity Representation Non-Conformance:** `kds_ticket_partidas.quantity` was represented as `TEXT` in SQLite and `string` in TypeScript domain (wire transport representation leaking into domain/persistence layers), failing to implement the canonical `ADR-012` three-layer model. | Establishes `kds_ticket_partidas.quantity` as SQLite `INTEGER NOT NULL` (Scale 4, factor 10,000), TypeScript domain `bigint`, and wire transport as canonical decimal string (`"1.0000"`), reusing `@trident/core` primitives. | `DATA_MODEL.md` Sec. 3, `DATA_DICTIONARY.md` Sec. 1.2, `IMPLEMENTATION_PLAN.md` WP-015 |
 | **`QI-BLK-015-04`** | **KDS Data Authority & Second-SoR Risk:** Historical table `kds_ordenes` in `DATA_MODEL.md` overlapped `kds_tickets` with identical status enums and no declared structural relationship or authority hierarchy. | Declares `kds_tickets` + `kds_ticket_partidas` as the sole authoritative Edge runtime entity for KDS production orders; classifies `kds_ordenes` as `SUPERSEDED / HISTORICAL — DO NOT WRITE`. | `DATA_MODEL.md` Sec. 3, `DATA_DICTIONARY.md` Sec. 1.2, `DATA_AUTHORITY_MATRIX.md` |
 | **`QI-BLK-015-05`** | **ADR-005 Physical LAN Validation Debt:** Software loopback latency test was presented as satisfying the physical LAN 20-client saturation benchmark (`< 5 ms`) required by `ADR-005` Sec. 11. | Formalizes non-security performance validation debt `PERF-VAL-015-01` owned by `WP-028: Hardware Benchmarking & Release Packaging` (Wave 9), clarifying that loopback software tests do not substitute physical LAN benchmarks. | `ADR-005` Sec. 11 & 13, `IMPLEMENTATION_PLAN.md` WP-015 & WP-028 |
 | **`Evidence Advisory 015-A`** | **Changed-Files Triage Count Self-Exclusion:** Builder evidence stated 23 files changed, excluding itself from the tally (actual git diff: 24 files). | Establishes the governing rule that all future remediation evidence files must state the total inclusive of the evidence file itself. | `IMPLEMENTATION_PLAN.md` WP-015 Evidence Required |
@@ -48,8 +48,8 @@ This Architecture Change Request (`ACR-2026-016`) provides the formal, binding r
 1. **Authoritative Runtime Objects:**
    - `kds_tickets`: Sole authoritative Edge-local table representing KDS production orders / kitchen tickets for `WP-015` and downstream consumers.
    - `kds_ticket_partidas`: Authoritative child line items belonging to `kds_tickets`.
-   - `kds_estaciones`: Authoritative configuration and operational state of KDS physical stations (e.g., Cocina, Barra, Postres).
-   - `impresoras_red`: Authoritative configuration and connectivity state of network receipt and order printers (ESC/POS on port 9100).
+   - `kds_estaciones`: Authoritative configuration and operational state of KDS physical stations (`name`, `station_type` [`COCINA`, `BARRA`], `status` [`ACTIVA`, `INACTIVA`]).
+   - `impresoras_red`: Authoritative configuration and connectivity state of network receipt and order printers (`name`, `host`, `port` default 9100, `kds_estacion_id`, `status` [`ONLINE`, `OFFLINE`, `UNKNOWN`]).
 2. **Superseded Historical Object (`kds_ordenes`):**
    - The entity `kds_ordenes` defined in the baseline `DATA_MODEL.md` Sec. 3 is formally classified as **`SUPERSEDED / HISTORICAL — DO NOT WRITE`**.
    - **Rationale:** `kds_ordenes` predated the comprehensive multi-station and printing requirements implemented by WP-015. It materially overlaps `kds_tickets` in lifecycle statuses (`PENDIENTE`, `EN_PREPARACION`, `LISTO`, `ENTREGADO`) and aggregate sequence tracking.
@@ -102,17 +102,34 @@ This Architecture Change Request (`ACR-2026-016`) provides the formal, binding r
    - Repository adapters and transport boundaries MUST reuse the canonical conversion functions from `@trident/core` (`scaledBigIntToDecimalString`, `decimalStringToScaledBigInt`).
    - No custom conversion arithmetic or floating-point conversions (`parseFloat`, `Number()`) are permitted.
 
-### 3.5 Status Enumerations & Separation of Concerns
-1. **KDS Ticket Production Statuses:**
+### 3.5 Status Enumerations & Canonical Vocabularies
+1. **KDS Ticket Production Statuses (`KdsTicketStatus`):**
    - `PENDIENTE`: Ticket created from comanda, awaiting preparation.
    - `EN_PREPARACION`: Preparation initiated at station.
    - `LISTO`: Preparation complete; ready for service/delivery.
    - `ENTREGADO`: Order delivered to dining room or dispatch.
-2. **Printer Dispatch Statuses (Disjoint from Production State):**
-   - `PENDING`: Awaiting print job dispatch.
-   - `PRINTED`: Successfully printed to physical ESC/POS device.
-   - `FAILED`: Print job failed after retries (does not block order production flow).
-3. **Untouched Enums:**
+2. **KDS Ticket Partida Statuses (`KdsTicketPartidaStatus`):**
+   - `PENDIENTE`: Line item awaiting preparation.
+   - `EN_PREPARACION`: Line item currently in preparation.
+   - `LISTO`: Line item completed.
+3. **Urgency Levels (`UrgencyLevel`):**
+   - `NORMAL`: Standard preparation priority.
+   - `ALTA`: High priority preparation.
+   - `URGENTE`: Maximum priority (e.g. urgent order, re-fire, or expedited comanda).
+4. **Printer Queue Job Statuses (`PrintJobStatus`):**
+   - `PENDING`: Initial state upon ticket creation before submission to queue runner.
+   - `QUEUED`: Enqueued in memory for asynchronous network dispatch.
+   - `PRINTING`: Active raw socket transmission in progress to ESC/POS port 9100.
+   - `PRINTED`: Successfully acknowledged/sent to printer device.
+   - `FAILED`: Print job failed after exhaustion of retries (does not block kitchen workflow).
+5. **Printer Hardware Statuses (`PrinterStatus`):**
+   - `ONLINE`: Socket connectivity verified.
+   - `OFFLINE`: Socket unreachable or connection refused.
+   - `UNKNOWN`: Default status before initial discovery / heartbeat check.
+6. **Station Types & Statuses:**
+   - `KdsEstacionType`: `COCINA`, `BARRA`.
+   - `KdsEstacionStatus`: `ACTIVA`, `INACTIVA`.
+7. **Untouched Business Enums:**
    - `Cuenta.status` (`ABIERTA`, `IMPRESA`, `PAGADA`, `ANULADA`) and `Mesa.status` (`DISPONIBLE`, `OCUPADA`, `EN_CUENTA`, `BLOQUEADA`) remain strictly untouched.
 
 ### 3.6 ADR-005 Performance Validation Debt (`PERF-VAL-015-01`)

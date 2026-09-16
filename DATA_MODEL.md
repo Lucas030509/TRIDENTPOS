@@ -943,23 +943,22 @@ CREATE TABLE cuenta_item_modificadores (
 -- Catálogo de Estaciones KDS Locales
 CREATE TABLE kds_estaciones (
     id TEXT PRIMARY KEY,
-    nombre TEXT NOT NULL,
-    tipo TEXT NOT NULL, -- COCINA_CALIENTE, COCINA_FRIA, BARRA, REPOSTERIA, EXPO
-    is_active INTEGER NOT NULL DEFAULT 1,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    name TEXT NOT NULL,
+    station_type TEXT NOT NULL, -- COCINA, BARRA
+    status TEXT NOT NULL, -- ACTIVA, INACTIVA
+    created_at TEXT NOT NULL
 );
 
 -- Catálogo de Impresoras de Red ESC/POS
 CREATE TABLE impresoras_red (
     id TEXT PRIMARY KEY,
-    nombre TEXT NOT NULL,
-    ip_address TEXT NOT NULL,
+    name TEXT NOT NULL,
+    host TEXT NOT NULL,
     port INTEGER NOT NULL DEFAULT 9100,
-    protocolo TEXT NOT NULL DEFAULT 'RAW_TCP', -- RAW_TCP, ESC_POS
-    is_active INTEGER NOT NULL DEFAULT 1,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    kds_estacion_id TEXT NULL REFERENCES kds_estaciones(id),
+    status TEXT NOT NULL DEFAULT 'UNKNOWN', -- ONLINE, OFFLINE, UNKNOWN
+    last_seen_at TEXT NULL,
+    created_at TEXT NOT NULL
 );
 
 -- Tickets de Producción KDS (Authoritative Aggregate Root)
@@ -968,9 +967,9 @@ CREATE TABLE kds_tickets (
     cuenta_id TEXT NOT NULL,
     mesa_reference TEXT NOT NULL,
     kds_estacion_id TEXT NOT NULL REFERENCES kds_estaciones(id),
-    urgency_level TEXT NOT NULL DEFAULT 'NORMAL', -- NORMAL, URGENTE, VIP
+    urgency_level TEXT NOT NULL DEFAULT 'NORMAL', -- NORMAL, ALTA, URGENTE
     status TEXT NOT NULL, -- PENDIENTE, EN_PREPARACION, LISTO, ENTREGADO
-    print_status TEXT NOT NULL DEFAULT 'PENDIENTE', -- PENDIENTE, IMPRESO, ERROR
+    print_status TEXT NOT NULL DEFAULT 'PENDING', -- PENDING, QUEUED, PRINTING, PRINTED, FAILED
     print_attempts INTEGER NOT NULL DEFAULT 0,
     printer_id TEXT NULL REFERENCES impresoras_red(id),
     last_print_error TEXT NULL,
@@ -989,8 +988,8 @@ CREATE TABLE kds_ticket_partidas (
     product_name_snapshot TEXT NOT NULL,
     quantity INTEGER NOT NULL, -- Fixed-Point Escala 4: factor 10,000 (ADR-012, ACR-2026-016)
     comments TEXT NULL,
-    modifiers_snapshot TEXT NULL, -- JSON array string of modifiers snapshot
-    status TEXT NOT NULL DEFAULT 'PENDIENTE', -- PENDIENTE, EN_PREPARACION, LISTO, ENTREGADO
+    modifiers_snapshot TEXT NOT NULL DEFAULT '[]', -- JSON array string of modifiers snapshot
+    status TEXT NOT NULL DEFAULT 'PENDIENTE', -- PENDIENTE, EN_PREPARACION, LISTO
     created_at TEXT NOT NULL
 );
 
