@@ -1,6 +1,6 @@
 # ACR-2026-015 — CANONICALIZATION EVIDENCE
 
-> This is durable candidate governance evidence for the `ACR-2026-015` canonical amendment candidate. It references the full governance lineage by exact commit SHA. **It is not merged governance evidence.** There is no PR and no merge for this candidate as of this writing. It becomes merged governance evidence only if this candidate passes independent review, PR Gate, required checks, merge authorization, merge, and post-merge validation. It does not itself canonicalize anything — canonicalization occurs only when the candidate branch this file lives on is independently reviewed and merged into `main`. *(Corrected by `ACR-2026-015` Canonical Amendment R2 — CA-QI-015-28: the prior wording "durable, merged governance evidence" falsely asserted a current-state merged status this candidate does not have.)*
+> This is durable **merged** governance evidence for the `ACR-2026-015` canonical amendment. It references the full governance lineage by exact commit SHA. **Canonicalization is COMPLETE.** PR `#43` merged this amendment into canonical `main` at merge commit `456f75e854d62012af899cd2a467446375e5d65f`; post-merge CI (`PASS` — run `35118372527`) and post-merge Security Scan (`PASS` — run `35118372536`) both passed against that exact merge commit; an independent Post-Merge Validation sidecar (`PASS`, evidence commit `0242f5db5f368ef9b4110b40c0fb227af880f188`) confirmed the merge topology, scope, and roadmap result. *(Corrected by `ACR-2026-015` Canonical Amendment R2 — CA-QI-015-28: the prior wording "durable, merged governance evidence" falsely asserted a current-state merged status this candidate did not yet have at that time. That correction is preserved as history; the statement is now true as current-state fact, post-merge — GOV-HYGIENE-015-POST-01.)*
 
 ## Governance Lineage (Exact SHAs)
 
@@ -69,11 +69,11 @@ None of these 11 conditions is downgraded to optional anywhere in this candidate
 
 ## `ARCH-ADV-013-01` Disposition
 
-**Status: `REMEDIATED BY CANONICAL AMENDMENT CANDIDATE — NOT CLOSED YET.`**
+**Status: `CLOSED BY CANONICAL MERGE.`** *(Current disposition corrected post-merge — GOV-HYGIENE-015-POST-01; previously read "REMEDIATED BY CANONICAL AMENDMENT CANDIDATE — NOT CLOSED YET", which was correct prior to merge and is preserved as history below.)*
 
-The prior-authority verification for this correction: `evidence/ACR-2026-013_R1_PLATFORM_ARCHITECTURE_REVIEW.md` (commit `09f034b3749148ba1fb4a812b01e9f7dc365eb45`, branch `review/acr-2026-013-r1-platform-architecture`, reviewer `10_DevOps_Platform_Architect`), Section 2.8, which explicitly required: *"Prior to launching `WP-016`, the line in `IMPLEMENTATION_PLAN.md` must be updated to: `Bounded Context: TRIDENTPOS (Downstream Event Consumer: Finance)`."* This candidate branch applies exactly that correction to `WP-016`'s entry in `IMPLEMENTATION_PLAN.md`.
+The prior-authority verification for this correction: `evidence/ACR-2026-013_R1_PLATFORM_ARCHITECTURE_REVIEW.md` (commit `09f034b3749148ba1fb4a812b01e9f7dc365eb45`, branch `review/acr-2026-013-r1-platform-architecture`, reviewer `10_DevOps_Platform_Architect`), Section 2.8, which explicitly required: *"Prior to launching `WP-016`, the line in `IMPLEMENTATION_PLAN.md` must be updated to: `Bounded Context: TRIDENTPOS (Downstream Event Consumer: Finance)`."* This candidate branch applied exactly that correction to `WP-016`'s entry in `IMPLEMENTATION_PLAN.md`.
 
-This is **remediation on the candidate branch**, not closure of the advisory. `ARCH-ADV-013-01` is formally closed only if and when this candidate becomes canonical (merges to `main`) through its own independent review and approval — not by virtue of this evidence file existing. Until then, `ARCH-ADV-013-01` remains OPEN against canonical `main`, and `WP-016` START remains blocked against canonical `main` exactly as it was before this candidate existed.
+This was **remediation on the candidate branch**, and `ARCH-ADV-013-01` is now formally closed: the candidate became canonical through PR `#43`'s independent review and approval, merging at `456f75e854d62012af899cd2a467446375e5d65f` — not by virtue of this evidence file existing. `WP-016`'s `Bounded Context: TRIDENTPOS (Downstream Event Consumer: Finance)` correction is present and canonical on `main` as of that merge, so `WP-016` START is no longer blocked by this advisory.
 
 ## Protected Product Owner Decisions — Confirmed Untouched
 
