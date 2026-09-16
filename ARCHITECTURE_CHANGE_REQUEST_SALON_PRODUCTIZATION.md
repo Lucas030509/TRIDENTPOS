@@ -1,9 +1,9 @@
 # ARCHITECTURE CHANGE REQUEST: SALÓN PRODUCTIZATION, POS SETTLEMENT & FRONTEND EXECUTION DECOMPOSITION
 
 > [!NOTE]
-> **ACR-2026-015 — R1 — PRODUCT OWNER APPROVED / ARCHITECTURE CHANGE GATE PASSED — PENDING CANONICAL MERGE**
+> **ACR-2026-015 — MERGED / CANONICAL ON MAIN** (PR `#43`, canonical merge commit `456f75e854d62012af899cd2a467446375e5d65f`)
 >
-> *(Status metadata updated during canonical-amendment candidate preparation; architecture substance below is unchanged from the frozen, reviewed, and approved subject `2c90a43c5dcfe0b01a80f60bf4c0ca529c1d13d9`.)* This document was independently reviewed by five specialist reviewers (`01_Solution_Architect`, `03_Data_Architect`, `05_Frontend_Architect`, `06_UX_UI_Design_Architect`, `08_Security_Architect` — 5/5 PASS WITH ADVISORIES, 0 blockers), synthesized by the Coordinator (`8fc490f3df1945c21f3a651767618d6cf133e1ad:evidence/ACR-2026-015_R1_COORDINATOR_SYNTHESIS.md`, sidecar commit), approved by the Product Owner (`3808c25285018888d5f31113cab64cdca4192c31:evidence/ACR-2026-015_R1_PRODUCT_OWNER_APPROVAL.md`, sidecar commit), and passed the Architecture Change Gate (`5ccce65262c8e98b82fc6ae08466da4b9de288f8:evidence/ACR-2026-015_R1_ARCHITECTURE_CHANGE_GATE.md`, sidecar commit). None of these three sidecar files is present in this candidate's tree; the only `ACR-2026-015` evidence file carried here is `evidence/ACR-2026-015_CANONICALIZATION_EVIDENCE.md`. It is not yet canonical — canonicalization occurs only when this amendment candidate is itself reviewed and merged. See `evidence/ACR-2026-015_CANONICALIZATION_EVIDENCE.md` for full governance provenance.
+> *(Current-state banner corrected post-merge — GOV-HYGIENE-015-POST-01. Historical preparation note, preserved: architecture substance below was unchanged from the frozen, reviewed, and approved R1 subject `2c90a43c5dcfe0b01a80f60bf4c0ca529c1d13d9` through candidate preparation.)* This document was independently reviewed by five specialist reviewers (`01_Solution_Architect`, `03_Data_Architect`, `05_Frontend_Architect`, `06_UX_UI_Design_Architect`, `08_Security_Architect` — 5/5 PASS WITH ADVISORIES, 0 blockers), synthesized by the Coordinator (`8fc490f3df1945c21f3a651767618d6cf133e1ad:evidence/ACR-2026-015_R1_COORDINATOR_SYNTHESIS.md`, sidecar commit), approved by the Product Owner (`3808c25285018888d5f31113cab64cdca4192c31:evidence/ACR-2026-015_R1_PRODUCT_OWNER_APPROVAL.md`, sidecar commit), and passed the Architecture Change Gate (`5ccce65262c8e98b82fc6ae08466da4b9de288f8:evidence/ACR-2026-015_R1_ARCHITECTURE_CHANGE_GATE.md`, sidecar commit). None of these three sidecar files is present in this document's tree; the only `ACR-2026-015` evidence file carried here is `evidence/ACR-2026-015_CANONICALIZATION_EVIDENCE.md`. Canonicalization occurred when the R3 candidate (`38bf3449b2ebd5b03a86911996918ada343cd951`) was independently reviewed and merged via PR `#43`. See `evidence/ACR-2026-015_CANONICALIZATION_EVIDENCE.md` for full governance provenance.
 >
 > The prior candidate subject `7117308df6db9e0a1f9fcb87aa365da541549695` was placed on HOLD by the Coordinator after independent Quick Integrity review and remains superseded — see Section 0-R1 for exactly what changed and why.
 
@@ -13,7 +13,7 @@
 **Author (non-approving):** `01_Solution_Architect`
 **Design Input Reviewed:** `06_UX_UI_Design_Architect` scope (visual/UX evidence only, not authored by this session)
 **Date:** `2026-09-15`
-**Status:** `PRODUCT OWNER APPROVED / ARCHITECTURE CHANGE GATE PASSED — PENDING CANONICAL MERGE` (frozen reviewed subject: `2c90a43c5dcfe0b01a80f60bf4c0ca529c1d13d9`)
+**Status:** `MERGED / CANONICAL ON MAIN` (merged R3 subject: `38bf3449b2ebd5b03a86911996918ada343cd951`; canonical merge: `456f75e854d62012af899cd2a467446375e5d65f`; PR `#43`) *(current-state corrected post-merge — GOV-HYGIENE-015-POST-01; historical R1 frozen reviewed subject was `2c90a43c5dcfe0b01a80f60bf4c0ca529c1d13d9`)*
 **Canonical Base:** `f655551085dea3cff887a411adec4026842aed07` (`main`, verified via `git fetch origin` + `git rev-parse origin/main` immediately before branching)
 **Classification:** `ROADMAP DECOMPOSITION + DOMAIN CAPABILITY EXPANSION + PRESENTATION ARCHITECTURE FORMALIZATION`
 **Input Drafts (non-canonical, supplied by Coordinator/PO):** `ACR-2026-015_SALON_PRODUCTIZATION_DRAFT.md`, `TRIDENTPOS_SALON_PRODUCTIZATION_MATRIX_DRAFT.md`
@@ -584,7 +584,7 @@ As author, I am not authorized to declare this Quick Integrity binding — the a
 - `OQ-SSOT-07`
 - `OQ-ARCH-01`
 
-**`ARCH-ADV-013-01`:** `REMEDIATION CANDIDATE — NOT CLOSED UNTIL MERGE` (unchanged by this approval; see Section N.1).
+**`ARCH-ADV-013-01`:** `CLOSED BY CANONICAL MERGE` (unchanged by this approval block itself, which predates the merge; current disposition corrected post-merge — GOV-HYGIENE-015-POST-01; the required `WP-016` `Bounded Context` correction is present on canonical `main` as of merge `456f75e854d62012af899cd2a467446375e5d65f`; see Section N.1 and Section AB).
 
 Protected functional questions (`OQ-SSOT-01/02/06/07`, `OQ-ARCH-01`) are not approved through this block and remain separate PO decisions.
 
@@ -592,11 +592,11 @@ Protected functional questions (`OQ-SSOT-01/02/06/07`, `OQ-ARCH-01`) are not app
 
 ## AB. Current Draft Verdict
 
-*(Corrected by `ACR-2026-015` Canonical Amendment R3 — CA-QI-015-32/`GOV-BLK-015-R2-01`: this section previously described a pre-review draft state ("PROPOSED — PENDING INDEPENDENT REVIEW", "Ready for: INDEPENDENT ARCHITECTURE REVIEW"), which contradicted the document's own top banner and the canonical amendment candidate's actual current lifecycle state — the R1 sidecar review panel already ran and passed, the Product Owner already approved, and the Architecture Change Gate already passed, all before this candidate was prepared. The block below reflects the current canonical-amendment candidate lifecycle instead.)*
+*(Corrected by `ACR-2026-015` Canonical Amendment R3 — CA-QI-015-32/`GOV-BLK-015-R2-01`: this section previously described a pre-review draft state ("PROPOSED — PENDING INDEPENDENT REVIEW", "Ready for: INDEPENDENT ARCHITECTURE REVIEW"), which contradicted the document's own top banner and the canonical amendment candidate's actual then-current lifecycle state. That R3 correction is preserved as history below. The lifecycle block itself has since been updated a second time, post-merge — GOV-HYGIENE-015-POST-01 — to reflect that R3 was independently reviewed, gated, and actually merged.)*
 
 ```text
 ACR-2026-015
-CANONICAL AMENDMENT CANDIDATE R3
+CURRENT LIFECYCLE STATUS: MERGED / CANONICAL ON MAIN
 
 Product Owner:
 APPROVED
@@ -604,49 +604,70 @@ APPROVED
 Architecture Change Gate:
 PASS
 
-Prior Canonical-Amendment R2 Reviews:
-5 / 5 PASS
+R3 Independent Specialist Reviews:
+PASSED
+5 / 5 PASS WITH ADVISORIES
 0 blockers
 
-Coordinator R2 Synthesis:
-HOLD — GOVERNANCE METADATA REMEDIATION REQUIRED (this R3 remediation)
+Coordinator Synthesis:
+PASS
 
-Current R3:
-PENDING NEW INDEPENDENT REVIEW
+Code Review Gate:
+PASS
 
-Canonical:
-NO
+PR Gate:
+PASS
 
 PR:
-NOT CREATED
+#43
 
-Merge:
-NOT AUTHORIZED
+PR State:
+MERGED
 
-Superseded subjects (DO NOT REVIEW):
+Merge Authorized:
+YES
+
+Merge Executed:
+YES
+
+Merge SHA:
+456f75e854d62012af899cd2a467446375e5d65f
+
+Post-Merge CI:
+PASS — Run 35118372527
+
+Post-Merge Security:
+PASS — Run 35118372536
+
+Independent Post-Merge Validation:
+PASS
+
+Post-Merge Validation Sidecar:
+0242f5db5f368ef9b4110b40c0fb227af880f188
+
+Final Lifecycle Status:
+DONE / CANONICAL
+
+Superseded subjects (historical, DO NOT REVIEW):
 7117308df6db9e0a1f9fcb87aa365da541549695 (pre-R1)
 269ca1eddd8b2fecd124b3b337e7d88c4018f254 (canonical-amendment, pre-R1-remediation)
 214b68054daf60c78a28434fd42106f0fab1dae3 (canonical-amendment R1)
 67970cfdcf5971ae2a1f41386d0a253268705083 (canonical-amendment R2)
+38bf3449b2ebd5b03a86911996918ada343cd951 (canonical-amendment R3 — merged Frozen Subject, superseded by the merge commit above as the tip of history, preserved here as the exact PR #43 head)
 
 Canonical main mutated:
-NO
+YES — by the merge above (456f75e854d62012af899cd2a467446375e5d65f)
 
-Implementation Plan / Module Catalog / Capability Map / Product Scope /
-Product Decisions / Open Questions / ADRs mutated:
-NO (Implementation Plan is amended by this candidate branch only, not
-mutated on canonical main)
+Implementation Plan mutated:
+YES, as part of this canonical merge (see `IMPLEMENTATION_PLAN.md`
+current ACR-2026-015 status). Module Catalog / Capability Map /
+Product Scope / Product Decisions / Open Questions / ADRs: NOT
+mutated by this merge.
 
 Protected PO decisions closed:
-NO
+NO — all five (`OQ-SSOT-01`, `OQ-SSOT-02`, `OQ-SSOT-06`, `OQ-SSOT-07`,
+`OQ-ARCH-01`) remain OPEN, unchanged by this merge.
 
 ARCH-ADV-013-01:
-REMEDIATION CANDIDATE — NOT CLOSED UNTIL MERGE
-
-Ready for:
-INDEPENDENT CANONICAL AMENDMENT R3 REVIEW (01_Solution_Architect,
-03_Data_Architect, 05_Frontend_Architect, 06_UX_UI_Design_Architect,
-08_Security_Architect — fresh sidecar instances, direct children of the
-R3 Frozen Subject; R2 review PASSes are historical evidence only and do
-not authorize R3)
+CLOSED BY CANONICAL MERGE
 ```
