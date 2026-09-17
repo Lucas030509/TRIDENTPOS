@@ -69,6 +69,13 @@ describe('TRIDENTPOS WP-012 Cloud Transactional Outbox & Ingested Idempotency En
       if (!orgCheck.rows[0]?.reg) {
         await prepClient.query(`
           DROP TABLE IF EXISTS
+            inventory_quarantine_records,
+            inventory_waste_records,
+            stock_ledger,
+            recipe_items,
+            recipes,
+            ingredients,
+            warehouses,
             products,
             categories,
             sync_telemetry,

@@ -48,3 +48,31 @@ export class RecipeNotFoundError extends InventoryDomainError {
     this.recipeId = recipeId;
   }
 }
+
+export class InvalidWasteCommandError extends InventoryDomainError {
+  constructor(message: string) {
+    super(message, 'INVALID_WASTE_COMMAND', 400);
+  }
+}
+
+export class InvalidMovementTypeError extends InventoryDomainError {
+  constructor(movementType: string) {
+    super(
+      `Invalid stock movement type '${movementType}'. Allowed: COMPRA, CONSUMO_KDS, MERMA, AJUSTE_FISICO, TRANSFERENCIA`,
+      'INVALID_MOVEMENT_TYPE',
+      400,
+    );
+  }
+}
+
+export class InvalidQuantityDeltaError extends InventoryDomainError {
+  constructor(message: string) {
+    super(message, 'INVALID_QUANTITY_DELTA', 400);
+  }
+}
+
+export class ModifierQuarantineError extends InventoryDomainError {
+  constructor(message: string) {
+    super(message, 'MODIFIER_QUARANTINE_ERROR', 422);
+  }
+}

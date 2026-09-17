@@ -6,7 +6,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import dotenv from 'dotenv';
 import { getPool, migrateUp, withTenantTransaction } from '@trident/database';
-import { RecipeNotFoundError } from '@trident/inventory';
+import {
+  RecipeNotFoundError,
+  type KdsOrderProducedEventDTO,
+  type ModifierRecipeResolver,
+} from '@trident/inventory';
 import { PostgresCloudInventoryService } from './index.js';
 
 dotenv.config();
@@ -389,5 +393,741 @@ describe('TRIDENTPOS WP-017 Cloud Server Composition & Transaction Boundary Suit
     assert.equal(costResult.totalCost, '14.2000');
     assert.equal(costResult.unitCost, '14.2000');
     assert.equal(costResult.lineItems.length, 2);
+  });
+});
+
+describe('TRIDENTPOS WP-018 Cloud Server Composition, Kárdex & KDS Depletion Suite', () => {
+  const pool = getPool();
+  const service = new PostgresCloudInventoryService(pool);
+
+  const tenantAId = crypto.randomUUID();
+  const tenantBId = crypto.randomUUID();
+  const branchAId = crypto.randomUUID();
+  const branchBId = crypto.randomUUID();
+  const whAId = crypto.randomUUID();
+  const whBId = crypto.randomUUID();
+  const ingMeatId = crypto.randomUUID();
+  const ingBunId = crypto.randomUUID();
+  const ingCheeseId = crypto.randomUUID();
+  const prodBurgerId = crypto.randomUUID();
+  const recipeBurgerId = crypto.randomUUID();
+  const categoryId = crypto.randomUUID();
+  const taxSchemeId = crypto.randomUUID();
+  const userAId = crypto.randomUUID();
+
+  before(async () => {
+    await migrateUp(pool);
+
+    const client = await pool.connect();
+    try {
+      await client.query(`
+        INSERT INTO organizations (id, legal_name, trade_name, tax_id)
+        VALUES
+          ('${tenantAId}', 'WP018 Cloud Org A', 'Cloud Org A', 'TAX-WP018-CA-${tenantAId.slice(0, 8)}'),
+          ('${tenantBId}', 'WP018 Cloud Org B', 'Cloud Org B', 'TAX-WP018-CB-${tenantBId.slice(0, 8)}')
+        ON CONFLICT (id) DO NOTHING;
+
+        INSERT INTO branches (id, organization_id, code, name)
+        VALUES
+          ('${branchAId}', '${tenantAId}', 'BR-018-CA1', 'Cloud Branch 18 A1'),
+          ('${branchBId}', '${tenantBId}', 'BR-018-CB1', 'Cloud Branch 18 B1')
+        ON CONFLICT (organization_id, id) DO NOTHING;
+
+        INSERT INTO users (id, organization_id, email, full_name)
+        VALUES
+          ('${userAId}', '${tenantAId}', 'user-cloud-a@wp018.local', 'User Cloud A')
+        ON CONFLICT (organization_id, id) DO NOTHING;
+
+        INSERT INTO categories (id, organization_id, code, name)
+        VALUES
+          ('${categoryId}', '${tenantAId}', 'CAT-018-C1', 'Category 18 A1')
+        ON CONFLICT (organization_id, id) DO NOTHING;
+
+        INSERT INTO products (id, organization_id, category_id, code, name, product_type, base_price, tax_scheme_id)
+        VALUES
+          ('${prodBurgerId}', '${tenantAId}', '${categoryId}', 'PROD-BURGER-18', 'Classic Burger 18', 'COMPOSITE', 120.0000, '${taxSchemeId}')
+        ON CONFLICT (organization_id, id) DO NOTHING;
+
+        INSERT INTO warehouses (id, organization_id, branch_id, code, name, warehouse_type)
+        VALUES
+          ('${whAId}', '${tenantAId}', '${branchAId}', 'WH-018-CA1', 'Warehouse 18 A1', 'PRINCIPAL'),
+          ('${whBId}', '${tenantBId}', '${branchBId}', 'WH-018-CB1', 'Warehouse 18 B1', 'PRINCIPAL')
+        ON CONFLICT (organization_id, id) DO NOTHING;
+
+        INSERT INTO ingredients (id, organization_id, code, name, unit_of_measure, current_average_cost)
+        VALUES
+          ('${ingMeatId}', '${tenantAId}', 'ING-MEAT-18', 'Ground Beef 18', 'KG', 100.0000),
+          ('${ingBunId}', '${tenantAId}', 'ING-BUN-18', 'Burger Bun 18', 'PZ', 10.0000),
+          ('${ingCheeseId}', '${tenantAId}', 'ING-CHS-18', 'Cheddar Cheese 18', 'KG', 80.0000)
+        ON CONFLICT (organization_id, id) DO NOTHING;
+
+        INSERT INTO recipes (id, organization_id, product_id, code, name, yield_quantity, yield_unit)
+        VALUES
+          ('${recipeBurgerId}', '${tenantAId}', '${prodBurgerId}', 'REC-BURGER-18', 'Burger Recipe 18', 1.0000, 'PZ')
+        ON CONFLICT (organization_id, id) DO NOTHING;
+
+        INSERT INTO recipe_items (id, organization_id, recipe_id, ingredient_id, sub_recipe_id, quantity, gross_quantity, unit_cost_snapshot)
+        VALUES
+          ('${crypto.randomUUID()}', '${tenantAId}', '${recipeBurgerId}', '${ingMeatId}', NULL, 0.2000, 0.2200, 100.0000),
+          ('${crypto.randomUUID()}', '${tenantAId}', '${recipeBurgerId}', '${ingBunId}', NULL, 1.0000, 1.0000, 10.0000)
+        ON CONFLICT DO NOTHING;
+      `);
+    } finally {
+      client.release();
+    }
+  });
+
+  after(async () => {
+    // Note: stock_ledger entries are append-only and remain partitioned under test tenant UUIDs
+  });
+
+  it('WP018-CLOUD-01: getCurrentStock returns 0.0000 for uninitialized aggregate and exact derived sum after purchase', async () => {
+    const initialStock = await service.getCurrentStock(tenantAId, branchAId, whAId, ingMeatId);
+    assert.equal(initialStock, '0.0000');
+
+    // Seed a COMPRA movement
+    await withTenantTransaction(pool, tenantAId, async (client) => {
+      await client.query(
+        `INSERT INTO stock_ledger (
+          organization_id, branch_id, warehouse_id, ingredient_id,
+          movement_type, reference_event_id, quantity_delta, unit_cost, total_cost,
+          balance_after, movement_sequence_number
+        ) VALUES ($1, $2, $3, $4, 'COMPRA', 'PO-001', 50.0000, 100.0000, 5000.0000, 50.0000, 1);`,
+        [tenantAId, branchAId, whAId, ingMeatId],
+      );
+    });
+
+    const stockAfterPurchase = await service.getCurrentStock(
+      tenantAId,
+      branchAId,
+      whAId,
+      ingMeatId,
+    );
+    assert.equal(stockAfterPurchase, '50.0000');
+  });
+
+  it('WP018-CLOUD-02: registerWaste records MERMA movement, links waste evidence, and updates derived balance', async () => {
+    const cmdId = `CMD-WASTE-${crypto.randomUUID()}`;
+    const result = await service.registerWaste({
+      organizationId: tenantAId,
+      branchId: branchAId,
+      warehouseId: whAId,
+      ingredientId: ingMeatId,
+      commandId: cmdId,
+      quantity: '2.5000',
+      reasonCode: 'EXPIRED',
+      photoAttachmentUrl: 'https://storage.local/waste/photo1.jpg',
+      notes: 'Expired batch during morning prep',
+      actorId: userAId,
+    });
+
+    assert.equal(result.movement.movementType, 'MERMA');
+    assert.equal(result.movement.quantityDelta, '-2.5000');
+    assert.equal(result.movement.balanceAfter, '47.5000');
+    assert.equal(result.wasteRecord.commandId, cmdId);
+    assert.equal(result.wasteRecord.reasonCode, 'EXPIRED');
+    assert.equal(result.wasteRecord.photoAttachmentUrl, 'https://storage.local/waste/photo1.jpg');
+    assert.equal(result.negativeStockAlert, null);
+
+    const stock = await service.getCurrentStock(tenantAId, branchAId, whAId, ingMeatId);
+    assert.equal(stock, '47.5000');
+  });
+
+  it('WP018-CLOUD-03: registerWaste emits NegativeStockSignal when derived balance becomes negative', async () => {
+    const cmdId = `CMD-WASTE-NEG-${crypto.randomUUID()}`;
+    const result = await service.registerWaste({
+      organizationId: tenantAId,
+      branchId: branchAId,
+      warehouseId: whAId,
+      ingredientId: ingMeatId,
+      commandId: cmdId,
+      quantity: '100.0000', // Greater than available 47.5000 -> balance becomes -52.5000
+      reasonCode: 'CONTAMINATED',
+      photoAttachmentUrl: 'https://storage.local/waste/spill.jpg',
+    });
+
+    assert.equal(result.movement.movementType, 'MERMA');
+    assert.equal(result.movement.quantityDelta, '-100.0000');
+    assert.equal(result.movement.balanceAfter, '-52.5000');
+    assert.ok(result.negativeStockAlert !== null);
+    assert.equal(result.negativeStockAlert.balanceAfter, '-52.5000');
+    assert.equal(result.negativeStockAlert.ingredientId, ingMeatId);
+  });
+
+  it('WP018-CLOUD-04: registerWaste is idempotent on commandId', async () => {
+    const cmdId = `CMD-WASTE-IDEMP-${crypto.randomUUID()}`;
+    const firstCall = await service.registerWaste({
+      organizationId: tenantAId,
+      branchId: branchAId,
+      warehouseId: whAId,
+      ingredientId: ingBunId,
+      commandId: cmdId,
+      quantity: '5.0000',
+      reasonCode: 'STALE',
+      photoAttachmentUrl: 'https://storage.local/waste/bun.jpg',
+    });
+
+    const secondCall = await service.registerWaste({
+      organizationId: tenantAId,
+      branchId: branchAId,
+      warehouseId: whAId,
+      ingredientId: ingBunId,
+      commandId: cmdId,
+      quantity: '5.0000',
+      reasonCode: 'STALE',
+      photoAttachmentUrl: 'https://storage.local/waste/bun.jpg',
+    });
+
+    assert.equal(firstCall.movement.id, secondCall.movement.id);
+    assert.equal(firstCall.wasteRecord.id, secondCall.wasteRecord.id);
+
+    // Verify only 1 movement in stock_ledger for this command
+    const stock = await service.getCurrentStock(tenantAId, branchAId, whAId, ingBunId);
+    assert.equal(stock, '-5.0000');
+  });
+
+  it('WP018-CLOUD-05: onKdsOrderProduced explodes recipe, deducts gross quantities, and enqueues outbox event', async () => {
+    // Seed stock for buns
+    await withTenantTransaction(pool, tenantAId, async (client) => {
+      await client.query(
+        `INSERT INTO stock_ledger (
+          organization_id, branch_id, warehouse_id, ingredient_id,
+          movement_type, reference_event_id, quantity_delta, unit_cost, total_cost,
+          balance_after, movement_sequence_number
+        ) VALUES ($1, $2, $3, $4, 'COMPRA', 'PO-BUNS', 20.0000, 10.0000, 200.0000, 15.0000, 2);`,
+        [tenantAId, branchAId, whAId, ingBunId],
+      );
+    });
+
+    const orderId = `ORD-PROD-${crypto.randomUUID()}`;
+    const event: KdsOrderProducedEventDTO = {
+      organizacionId: tenantAId,
+      sucursalId: branchAId,
+      centroConsumoId: whAId,
+      ordenId: orderId,
+      fechaHora: new Date().toISOString(),
+      tiempoPreparacionMinutos: 5,
+      items: [
+        {
+          productoId: prodBurgerId,
+          cantidad: '2.0000', // 2 Burgers => 2 * 0.2200 KG meat = 0.4400 KG, 2 * 1.0000 PZ buns = 2.0000 PZ
+        },
+      ],
+    };
+
+    const depletionResult = await service.onKdsOrderProduced(event);
+
+    assert.equal(depletionResult.status, 'APPLIED');
+    assert.equal(depletionResult.ordenId, orderId);
+    assert.equal(depletionResult.movements.length, 2);
+
+    const meatMovement = depletionResult.movements.find((m) => m.ingredientId === ingMeatId)!;
+    assert.ok(meatMovement);
+    assert.equal(meatMovement.movementType, 'CONSUMO_KDS');
+    assert.equal(meatMovement.quantityDelta, '-0.4400');
+    assert.equal(meatMovement.referenceEventId, orderId);
+
+    const bunMovement = depletionResult.movements.find((m) => m.ingredientId === ingBunId)!;
+    assert.ok(bunMovement);
+    assert.equal(bunMovement.movementType, 'CONSUMO_KDS');
+    assert.equal(bunMovement.quantityDelta, '-2.0000');
+    assert.equal(bunMovement.referenceEventId, orderId);
+
+    // Verify outbox record created
+    assert.ok(depletionResult.outboxEventId);
+    const outboxCheck = await pool.query<{ event_type: string; payload: any }>(
+      `SELECT event_type, payload FROM cloud_integration_outbox WHERE id = $1;`,
+      [depletionResult.outboxEventId],
+    );
+    assert.equal(outboxCheck.rows.length, 1);
+    assert.equal(outboxCheck.rows[0]!.event_type, 'InventarioDescontadoPorReceta');
+    assert.equal(outboxCheck.rows[0]!.payload.ordenId, orderId);
+    assert.equal(outboxCheck.rows[0]!.payload.movements.length, 2);
+  });
+
+  it('WP018-CLOUD-06: onKdsOrderProduced duplicate order produces DUPLICATE_ACCEPTED with zero new deductions', async () => {
+    const orderId = `ORD-PROD-DUP-${crypto.randomUUID()}`;
+    const event: KdsOrderProducedEventDTO = {
+      organizacionId: tenantAId,
+      sucursalId: branchAId,
+      centroConsumoId: whAId,
+      ordenId: orderId,
+      fechaHora: new Date().toISOString(),
+      tiempoPreparacionMinutos: 5,
+      items: [
+        {
+          productoId: prodBurgerId,
+          cantidad: '1.0000',
+        },
+      ],
+    };
+
+    const firstRun = await service.onKdsOrderProduced(event);
+    assert.equal(firstRun.status, 'APPLIED');
+
+    const secondRun = await service.onKdsOrderProduced(event);
+    assert.equal(secondRun.status, 'DUPLICATE_ACCEPTED');
+    assert.equal(secondRun.ordenId, orderId);
+    assert.equal(secondRun.movements.length, 2);
+  });
+
+  it('WP018-CLOUD-07: onKdsOrderProduced quarantines modifier-bearing event when no resolver is provided', async () => {
+    const orderId = `ORD-MOD-${crypto.randomUUID()}`;
+    const event: KdsOrderProducedEventDTO = {
+      organizacionId: tenantAId,
+      sucursalId: branchAId,
+      centroConsumoId: whAId,
+      ordenId: orderId,
+      fechaHora: new Date().toISOString(),
+      tiempoPreparacionMinutos: 5,
+      items: [
+        {
+          productoId: prodBurgerId,
+          cantidad: '1.0000',
+          selectedModifiers: [
+            {
+              modifierId: 'mod-extra-cheese',
+              quantity: '1.0000',
+            },
+          ],
+        },
+      ],
+    };
+
+    const res = await service.onKdsOrderProduced(event);
+
+    assert.equal(res.status, 'QUARANTINED');
+    assert.equal(res.ordenId, orderId);
+    assert.ok(res.quarantineId);
+    assert.equal(res.reason, 'MODIFIER_RECIPE_RESOLUTION_PENDING');
+
+    // Verify persisted in inventory_quarantine_records with PENDING status
+    const qCheck = await pool.query<{ status: string; reason: string }>(
+      `SELECT status, reason FROM inventory_quarantine_records WHERE id = $1;`,
+      [res.quarantineId],
+    );
+    assert.equal(qCheck.rows.length, 1);
+    assert.equal(qCheck.rows[0]!.status, 'PENDING');
+    assert.equal(qCheck.rows[0]!.reason, 'MODIFIER_RECIPE_RESOLUTION_PENDING');
+  });
+
+  it('WP018-CLOUD-08: replayQuarantinedDepletion executes depletion and marks quarantine record REPLAYED', async () => {
+    const orderId = `ORD-REPLAY-${crypto.randomUUID()}`;
+    const event: KdsOrderProducedEventDTO = {
+      organizacionId: tenantAId,
+      sucursalId: branchAId,
+      centroConsumoId: whAId,
+      ordenId: orderId,
+      fechaHora: new Date().toISOString(),
+      tiempoPreparacionMinutos: 5,
+      items: [
+        {
+          productoId: prodBurgerId,
+          cantidad: '1.0000',
+          selectedModifiers: [
+            {
+              modifierId: 'mod-extra-cheese',
+              quantity: '1.0000',
+            },
+          ],
+        },
+      ],
+    };
+
+    // 1. Initial execution quarantines the event
+    const qResult = await service.onKdsOrderProduced(event);
+    assert.equal(qResult.status, 'QUARANTINED');
+    const quarantineId = qResult.quarantineId!;
+
+    // 2. Define custom modifier recipe resolver
+    const testResolver: ModifierRecipeResolver = {
+      resolveModifierImpact: async (req) => {
+        if (req.modifierId === 'mod-extra-cheese') {
+          return {
+            modifierId: req.modifierId,
+            additionalIngredients: [
+              {
+                ingredientId: ingCheeseId,
+                quantity: '0.0500',
+                grossQuantity: '0.0500', // 50g extra cheese
+              },
+            ],
+            removedIngredients: [],
+          };
+        }
+        return null;
+      },
+    };
+
+    // 3. Replay quarantined depletion
+    const replayResult = await service.replayQuarantinedDepletion(
+      tenantAId,
+      quarantineId,
+      testResolver,
+    );
+
+    assert.equal(replayResult.status, 'APPLIED');
+    assert.equal(replayResult.movements.length, 3); // meat + bun + extra cheese!
+
+    const cheeseMov = replayResult.movements.find((m) => m.ingredientId === ingCheeseId);
+    assert.ok(cheeseMov);
+    assert.equal(cheeseMov.quantityDelta, '-0.0500');
+
+    // Verify quarantine record transitioned to REPLAYED
+    const qAfter = await pool.query<{ status: string; replayed_at: string | null }>(
+      `SELECT status, replayed_at FROM inventory_quarantine_records WHERE id = $1;`,
+      [quarantineId],
+    );
+    assert.equal(qAfter.rows[0]!.status, 'REPLAYED');
+    assert.ok(qAfter.rows[0]!.replayed_at !== null);
+  });
+
+  it('WP018-CLOUD-10: resolver supplied but returns null -> QUARANTINED, zero ledger movements, zero outbox effect', async () => {
+    const orderId = `ORD-MOD-NULL-${crypto.randomUUID()}`;
+    const event: KdsOrderProducedEventDTO = {
+      organizacionId: tenantAId,
+      sucursalId: branchAId,
+      centroConsumoId: whAId,
+      ordenId: orderId,
+      fechaHora: new Date().toISOString(),
+      tiempoPreparacionMinutos: 5,
+      items: [
+        {
+          productoId: prodBurgerId,
+          cantidad: '1.0000',
+          selectedModifiers: [
+            {
+              modifierId: 'mod-unresolvable',
+              quantity: '1.0000',
+            },
+          ],
+        },
+      ],
+    };
+
+    const nullResolver: ModifierRecipeResolver = {
+      resolveModifierImpact: async () => null,
+    };
+
+    const res = await service.onKdsOrderProduced(event, nullResolver);
+
+    assert.equal(res.status, 'QUARANTINED');
+    assert.equal(res.ordenId, orderId);
+    assert.ok(res.quarantineId);
+    assert.equal(res.reason, 'MODIFIER_RECIPE_RESOLUTION_PENDING');
+
+    // Verify ZERO stock movements created for this order
+    const movementsCheck = await pool.query(
+      `SELECT id FROM stock_ledger WHERE organization_id = $1 AND reference_event_id = $2;`,
+      [tenantAId, orderId],
+    );
+    assert.equal(movementsCheck.rows.length, 0);
+
+    // Verify ZERO outbox events created for this order
+    const outboxCheck = await pool.query(
+      `SELECT id FROM cloud_integration_outbox WHERE organization_id = $1 AND aggregate_id = $2;`,
+      [tenantAId, orderId],
+    );
+    assert.equal(outboxCheck.rows.length, 0);
+  });
+
+  it('WP018-CLOUD-11: multiple modifiers with one returning null -> entire event quarantined, zero partial depletion', async () => {
+    const orderId = `ORD-MOD-PARTIAL-${crypto.randomUUID()}`;
+    const event: KdsOrderProducedEventDTO = {
+      organizacionId: tenantAId,
+      sucursalId: branchAId,
+      centroConsumoId: whAId,
+      ordenId: orderId,
+      fechaHora: new Date().toISOString(),
+      tiempoPreparacionMinutos: 5,
+      items: [
+        {
+          productoId: prodBurgerId,
+          cantidad: '1.0000',
+          selectedModifiers: [
+            {
+              modifierId: 'mod-valid-cheese',
+              quantity: '1.0000',
+            },
+            {
+              modifierId: 'mod-unresolvable-onion',
+              quantity: '1.0000',
+            },
+          ],
+        },
+      ],
+    };
+
+    const partialResolver: ModifierRecipeResolver = {
+      resolveModifierImpact: async (ctx) => {
+        if (ctx.modifierId === 'mod-valid-cheese') {
+          return {
+            modifierId: ctx.modifierId,
+            additionalIngredients: [
+              {
+                ingredientId: ingCheeseId,
+                quantity: '0.0500',
+                grossQuantity: '0.0500',
+              },
+            ],
+            removedIngredients: [],
+          };
+        }
+        return null; // mod-unresolvable-onion cannot be resolved
+      },
+    };
+
+    const res = await service.onKdsOrderProduced(event, partialResolver);
+
+    assert.equal(res.status, 'QUARANTINED');
+    assert.equal(res.ordenId, orderId);
+    assert.ok(res.quarantineId);
+
+    // Verify ZERO stock movements created (no partial base or cheese depletion)
+    const movementsCheck = await pool.query(
+      `SELECT id FROM stock_ledger WHERE organization_id = $1 AND reference_event_id = $2;`,
+      [tenantAId, orderId],
+    );
+    assert.equal(movementsCheck.rows.length, 0);
+
+    // Verify ZERO outbox events created
+    const outboxCheck = await pool.query(
+      `SELECT id FROM cloud_integration_outbox WHERE organization_id = $1 AND aggregate_id = $2;`,
+      [tenantAId, orderId],
+    );
+    assert.equal(outboxCheck.rows.length, 0);
+  });
+
+  it('WP018-CLOUD-12: complete resolver result handling with removedIngredients and additionalIngredients', async () => {
+    const orderId = `ORD-MOD-REMOVED-${crypto.randomUUID()}`;
+    const event: KdsOrderProducedEventDTO = {
+      organizacionId: tenantAId,
+      sucursalId: branchAId,
+      centroConsumoId: whAId,
+      ordenId: orderId,
+      fechaHora: new Date().toISOString(),
+      tiempoPreparacionMinutos: 5,
+      items: [
+        {
+          productoId: prodBurgerId,
+          cantidad: '2.0000', // 2 Burgers
+          selectedModifiers: [
+            {
+              modifierId: 'mod-no-meat',
+              quantity: '1.0000',
+            },
+            {
+              modifierId: 'mod-extra-cheese',
+              quantity: '1.0000',
+            },
+          ],
+        },
+      ],
+    };
+
+    // Resolver removes meat and adds cheese
+    const fullResolver: ModifierRecipeResolver = {
+      resolveModifierImpact: async (ctx) => {
+        if (ctx.modifierId === 'mod-no-meat') {
+          return {
+            modifierId: ctx.modifierId,
+            additionalIngredients: [],
+            removedIngredients: [
+              {
+                ingredientId: ingMeatId,
+              },
+            ],
+          };
+        }
+        if (ctx.modifierId === 'mod-extra-cheese') {
+          return {
+            modifierId: ctx.modifierId,
+            additionalIngredients: [
+              {
+                ingredientId: ingCheeseId,
+                quantity: '0.1000',
+                grossQuantity: '0.1000',
+              },
+            ],
+            removedIngredients: [],
+          };
+        }
+        return null;
+      },
+    };
+
+    const res = await service.onKdsOrderProduced(event, fullResolver);
+
+    assert.equal(res.status, 'APPLIED');
+    assert.equal(res.ordenId, orderId);
+
+    // Meat should be completely excluded because removedIngredients specified ingMeatId!
+    const meatMovement = res.movements.find((m) => m.ingredientId === ingMeatId);
+    assert.equal(meatMovement, undefined, 'Meat must be omitted when removed by modifier');
+
+    // Bun should be deducted normally: 2.0000 PZ
+    const bunMovement = res.movements.find((m) => m.ingredientId === ingBunId);
+    assert.ok(bunMovement);
+    assert.equal(bunMovement.quantityDelta, '-2.0000');
+
+    // Cheese should be added: 2 * 0.1000 = 0.2000 KG
+    const cheeseMovement = res.movements.find((m) => m.ingredientId === ingCheeseId);
+    assert.ok(cheeseMovement);
+    assert.equal(cheeseMovement.quantityDelta, '-0.2000');
+  });
+
+  it('WP018-CLOUD-13: controlled failure in replay transaction rolls back depletion and leaves quarantine PENDING', async () => {
+    const orderId = `ORD-FAIL-ATOMIC-${crypto.randomUUID()}`;
+    const event: KdsOrderProducedEventDTO = {
+      organizacionId: tenantAId,
+      sucursalId: branchAId,
+      centroConsumoId: whAId,
+      ordenId: orderId,
+      fechaHora: new Date().toISOString(),
+      tiempoPreparacionMinutos: 5,
+      items: [
+        {
+          productoId: prodBurgerId,
+          cantidad: '1.0000',
+          selectedModifiers: [
+            {
+              modifierId: 'mod-extra-cheese',
+              quantity: '1.0000',
+            },
+          ],
+        },
+      ],
+    };
+
+    // 1. Initial execution quarantines the event
+    const qResult = await service.onKdsOrderProduced(event);
+    assert.equal(qResult.status, 'QUARANTINED');
+    const quarantineId = qResult.quarantineId!;
+
+    const testResolver: ModifierRecipeResolver = {
+      resolveModifierImpact: async (req) => {
+        if (req.modifierId === 'mod-extra-cheese') {
+          return {
+            modifierId: req.modifierId,
+            additionalIngredients: [
+              {
+                ingredientId: ingCheeseId,
+                quantity: '0.0500',
+                grossQuantity: '0.0500',
+              },
+            ],
+            removedIngredients: [],
+          };
+        }
+        return null;
+      },
+    };
+
+    // 2. Simulate transaction failure after depletion logic by executing in tenant transaction that rolls back
+    await assert.rejects(async () => {
+      await withTenantTransaction(pool, tenantAId, async (client) => {
+        // Lock quarantine
+        const qRes = await client.query<{ payload: any }>(
+          `SELECT payload FROM inventory_quarantine_records WHERE organization_id = $1 AND id = $2 FOR UPDATE;`,
+          [tenantAId, quarantineId],
+        );
+        const payload =
+          typeof qRes.rows[0]!.payload === 'string'
+            ? JSON.parse(qRes.rows[0]!.payload)
+            : qRes.rows[0]!.payload;
+
+        // Apply depletion on client
+        await service.applyKdsDepletionWithClient(client, payload, testResolver);
+
+        // Force deliberate failure BEFORE reconciliation commit
+        throw new Error('SIMULATED_REPLAY_TRANSACTION_FAILURE');
+      });
+    }, /SIMULATED_REPLAY_TRANSACTION_FAILURE/);
+
+    // 3. Verify ZERO stock movements persisted for this order
+    const movementsCheck = await pool.query(
+      `SELECT id FROM stock_ledger WHERE organization_id = $1 AND reference_event_id = $2;`,
+      [tenantAId, orderId],
+    );
+    assert.equal(movementsCheck.rows.length, 0, 'Zero stock movements must exist after rollback');
+
+    // 4. Verify ZERO outbox events persisted for this order
+    const outboxCheck = await pool.query(
+      `SELECT id FROM cloud_integration_outbox WHERE organization_id = $1 AND aggregate_id = $2;`,
+      [tenantAId, orderId],
+    );
+    assert.equal(outboxCheck.rows.length, 0, 'Zero outbox events must exist after rollback');
+
+    // 5. Verify quarantine record is still safely PENDING
+    const qCheck = await pool.query<{ status: string; replayed_at: string | null }>(
+      `SELECT status, replayed_at FROM inventory_quarantine_records WHERE id = $1;`,
+      [quarantineId],
+    );
+    assert.equal(qCheck.rows[0]!.status, 'PENDING');
+    assert.equal(qCheck.rows[0]!.replayed_at, null);
+  });
+
+  it('WP018-CLOUD-14: replay retry on already replayed order produces DUPLICATE_ACCEPTED with zero new effects', async () => {
+    const orderId = `ORD-REPLAY-RETRY-${crypto.randomUUID()}`;
+    const event: KdsOrderProducedEventDTO = {
+      organizacionId: tenantAId,
+      sucursalId: branchAId,
+      centroConsumoId: whAId,
+      ordenId: orderId,
+      fechaHora: new Date().toISOString(),
+      tiempoPreparacionMinutos: 5,
+      items: [
+        {
+          productoId: prodBurgerId,
+          cantidad: '1.0000',
+          selectedModifiers: [
+            {
+              modifierId: 'mod-extra-cheese',
+              quantity: '1.0000',
+            },
+          ],
+        },
+      ],
+    };
+
+    const qResult = await service.onKdsOrderProduced(event);
+    assert.equal(qResult.status, 'QUARANTINED');
+    const quarantineId = qResult.quarantineId!;
+
+    const testResolver: ModifierRecipeResolver = {
+      resolveModifierImpact: async (req) => {
+        if (req.modifierId === 'mod-extra-cheese') {
+          return {
+            modifierId: req.modifierId,
+            additionalIngredients: [
+              {
+                ingredientId: ingCheeseId,
+                quantity: '0.0500',
+                grossQuantity: '0.0500',
+              },
+            ],
+            removedIngredients: [],
+          };
+        }
+        return null;
+      },
+    };
+
+    // First replay succeeds
+    const replay1 = await service.replayQuarantinedDepletion(tenantAId, quarantineId, testResolver);
+    assert.equal(replay1.status, 'APPLIED');
+    assert.equal(replay1.movements.length, 3);
+
+    // Second replay on the same quarantine record returns DUPLICATE_ACCEPTED
+    const replay2 = await service.replayQuarantinedDepletion(tenantAId, quarantineId, testResolver);
+    assert.equal(replay2.status, 'DUPLICATE_ACCEPTED');
+    assert.equal(replay2.ordenId, orderId);
+
+    // Total movements in ledger for this order remains exactly 3
+    const movementsCheck = await pool.query(
+      `SELECT id FROM stock_ledger WHERE organization_id = $1 AND reference_event_id = $2;`,
+      [tenantAId, orderId],
+    );
+    assert.equal(movementsCheck.rows.length, 3);
   });
 });
