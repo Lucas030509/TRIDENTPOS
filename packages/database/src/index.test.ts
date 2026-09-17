@@ -61,6 +61,9 @@ describe('TRIDENTPOS WP-003 PostgreSQL Migration Engine Integration Suite', () =
     try {
       await client.query(`
         DROP TABLE IF EXISTS
+          inventory_quarantine_records,
+          inventory_waste_records,
+          stock_ledger,
           recipe_items,
           recipes,
           ingredients,
@@ -469,7 +472,7 @@ describe('TRIDENTPOS WP-004 Organization & Branch Multi-Tenant RLS Foundation Su
     try {
       // Ensure clean state before running migrateUp on wp004SuiteDir
       await client.query(`
-        DROP TABLE IF EXISTS recipe_items, recipes, ingredients, warehouses, products, categories, user_branch_credentials, user_roles, roles, users, test_composite_ref, branches, organizations CASCADE;
+        DROP TABLE IF EXISTS inventory_quarantine_records, inventory_waste_records, stock_ledger, recipe_items, recipes, ingredients, warehouses, products, categories, user_branch_credentials, user_roles, roles, users, test_composite_ref, branches, organizations CASCADE;
         DELETE FROM _migrations WHERE id IN ('${wp004Id}', '20260904180000');
       `);
       // Ensure test role exists with NOSUPERUSER and NOBYPASSRLS
@@ -503,7 +506,7 @@ describe('TRIDENTPOS WP-004 Organization & Branch Multi-Tenant RLS Foundation Su
     const client = await pool.connect();
     try {
       await client.query(`
-        DROP TABLE IF EXISTS recipe_items, recipes, ingredients, warehouses, products, categories, test_composite_ref, branches, organizations CASCADE;
+        DROP TABLE IF EXISTS inventory_quarantine_records, inventory_waste_records, stock_ledger, recipe_items, recipes, ingredients, warehouses, products, categories, test_composite_ref, branches, organizations CASCADE;
         DELETE FROM _migrations WHERE id = '${wp004Id}';
         DROP OWNED BY ${testRole};
         DROP ROLE ${testRole};
@@ -939,7 +942,7 @@ describe('TRIDENTPOS WP-004 Organization & Branch Multi-Tenant RLS Foundation Su
     const client = await pool.connect();
     try {
       await client.query(`
-        DROP TABLE IF EXISTS recipe_items, recipes, ingredients, warehouses, products, categories, user_branch_credentials, user_roles, roles, users, branches, organizations, _migrations CASCADE;
+        DROP TABLE IF EXISTS inventory_quarantine_records, inventory_waste_records, stock_ledger, recipe_items, recipes, ingredients, warehouses, products, categories, user_branch_credentials, user_roles, roles, users, branches, organizations, _migrations CASCADE;
         DROP EXTENSION IF EXISTS pgcrypto, "uuid-ossp" CASCADE;
         DROP FUNCTION IF EXISTS current_app_org_id() CASCADE;
       `);
@@ -1336,7 +1339,7 @@ describe('TRIDENTPOS WP-005 Cloud IAM & Administrative Authentication Suite', ()
     const client = await pool.connect();
     try {
       await client.query(`
-        DROP TABLE IF EXISTS recipe_items, recipes, ingredients, warehouses, products, categories, user_branch_credentials, user_roles, roles, users, test_composite_ref, branches, organizations CASCADE;
+        DROP TABLE IF EXISTS inventory_quarantine_records, inventory_waste_records, stock_ledger, recipe_items, recipes, ingredients, warehouses, products, categories, user_branch_credentials, user_roles, roles, users, test_composite_ref, branches, organizations CASCADE;
         DELETE FROM _migrations WHERE id IN ('${wp004Id}', '${wp005Id}');
       `);
       await client.query(`
@@ -1374,7 +1377,7 @@ describe('TRIDENTPOS WP-005 Cloud IAM & Administrative Authentication Suite', ()
     const client = await pool.connect();
     try {
       await client.query(`
-        DROP TABLE IF EXISTS recipe_items, recipes, ingredients, warehouses, products, categories, user_branch_credentials, user_roles, roles, users, test_composite_ref, branches, organizations CASCADE;
+        DROP TABLE IF EXISTS inventory_quarantine_records, inventory_waste_records, stock_ledger, recipe_items, recipes, ingredients, warehouses, products, categories, user_branch_credentials, user_roles, roles, users, test_composite_ref, branches, organizations CASCADE;
         DELETE FROM _migrations WHERE id IN ('${wp004Id}', '${wp005Id}');
         DROP OWNED BY ${testRole};
         DROP ROLE ${testRole};
@@ -2137,7 +2140,7 @@ describe('TRIDENTPOS WP-005 Cloud IAM & Administrative Authentication Suite', ()
     const client = await pool.connect();
     try {
       await client.query(`
-        DROP TABLE IF EXISTS recipe_items, recipes, ingredients, warehouses, products, categories, user_branch_credentials, user_roles, roles, users, test_composite_ref, branches, organizations, _migrations CASCADE;
+        DROP TABLE IF EXISTS inventory_quarantine_records, inventory_waste_records, stock_ledger, recipe_items, recipes, ingredients, warehouses, products, categories, user_branch_credentials, user_roles, roles, users, test_composite_ref, branches, organizations, _migrations CASCADE;
         DROP EXTENSION IF EXISTS pgcrypto, "uuid-ossp" CASCADE;
         DROP FUNCTION IF EXISTS current_app_org_id() CASCADE;
       `);
@@ -2313,7 +2316,7 @@ describe('TRIDENTPOS WP-006 Tamper-Evident Security Logging & Cloud Audit Trail 
     const client = await pool.connect();
     try {
       await client.query(`
-        DROP TABLE IF EXISTS recipe_items, recipes, ingredients, warehouses, products, categories, folio_leases, security_telemetry_events, audit_log_events, stations, user_branch_credentials, user_roles, roles, users, test_composite_ref, branches, organizations, _migrations CASCADE;
+        DROP TABLE IF EXISTS inventory_quarantine_records, inventory_waste_records, stock_ledger, recipe_items, recipes, ingredients, warehouses, products, categories, folio_leases, security_telemetry_events, audit_log_events, stations, user_branch_credentials, user_roles, roles, users, test_composite_ref, branches, organizations, _migrations CASCADE;
         DROP EXTENSION IF EXISTS pgcrypto, "uuid-ossp" CASCADE;
         DROP FUNCTION IF EXISTS current_app_org_id() CASCADE;
         DROP FUNCTION IF EXISTS trg_audit_log_append_only() CASCADE;
@@ -2348,7 +2351,7 @@ describe('TRIDENTPOS WP-006 Tamper-Evident Security Logging & Cloud Audit Trail 
     const client = await pool.connect();
     try {
       await client.query(`
-        DROP TABLE IF EXISTS recipe_items, recipes, ingredients, warehouses, products, categories, folio_leases, security_telemetry_events, audit_log_events, stations, user_branch_credentials, user_roles, roles, users, test_composite_ref, branches, organizations CASCADE;
+        DROP TABLE IF EXISTS inventory_quarantine_records, inventory_waste_records, stock_ledger, recipe_items, recipes, ingredients, warehouses, products, categories, folio_leases, security_telemetry_events, audit_log_events, stations, user_branch_credentials, user_roles, roles, users, test_composite_ref, branches, organizations CASCADE;
         DELETE FROM _migrations WHERE id = '${wp006Id}';
         DROP OWNED BY ${testRole};
         DROP ROLE ${testRole};
@@ -3216,7 +3219,7 @@ describe('TRIDENTPOS WP-006 Tamper-Evident Security Logging & Cloud Audit Trail 
     const client = await pool.connect();
     try {
       await client.query(`
-        DROP TABLE IF EXISTS recipe_items, recipes, ingredients, warehouses, products, categories, folio_leases, security_telemetry_events, audit_log_events, stations, user_branch_credentials, user_roles, roles, users, test_composite_ref, branches, organizations, _migrations CASCADE;
+        DROP TABLE IF EXISTS inventory_quarantine_records, inventory_waste_records, stock_ledger, recipe_items, recipes, ingredients, warehouses, products, categories, folio_leases, security_telemetry_events, audit_log_events, stations, user_branch_credentials, user_roles, roles, users, test_composite_ref, branches, organizations, _migrations CASCADE;
         DROP EXTENSION IF EXISTS pgcrypto, "uuid-ossp" CASCADE;
         DROP FUNCTION IF EXISTS current_app_org_id() CASCADE;
         DROP FUNCTION IF EXISTS trg_audit_log_append_only() CASCADE;
@@ -3364,7 +3367,7 @@ describe('TRIDENTPOS WP-011 Cloud Folio Lease Allocation & Fencing Protocol Suit
     const client = await pool.connect();
     try {
       await client.query(`
-        DROP TABLE IF EXISTS recipe_items, recipes, ingredients, warehouses, products, categories, folio_leases, security_telemetry_events, audit_log_events, stations, user_branch_credentials, user_roles, roles, users, test_composite_ref, branches, organizations, _migrations CASCADE;
+        DROP TABLE IF EXISTS inventory_quarantine_records, inventory_waste_records, stock_ledger, recipe_items, recipes, ingredients, warehouses, products, categories, folio_leases, security_telemetry_events, audit_log_events, stations, user_branch_credentials, user_roles, roles, users, test_composite_ref, branches, organizations, _migrations CASCADE;
         DROP EXTENSION IF EXISTS pgcrypto, "uuid-ossp" CASCADE;
         DROP FUNCTION IF EXISTS current_app_org_id() CASCADE;
         DROP FUNCTION IF EXISTS trg_audit_log_append_only() CASCADE;
@@ -3414,7 +3417,7 @@ describe('TRIDENTPOS WP-011 Cloud Folio Lease Allocation & Fencing Protocol Suit
     const client = await pool.connect();
     try {
       await client.query(`
-        DROP TABLE IF EXISTS recipe_items, recipes, ingredients, warehouses, products, categories, folio_leases, security_telemetry_events, audit_log_events, stations, user_branch_credentials, user_roles, roles, users, test_composite_ref, branches, organizations CASCADE;
+        DROP TABLE IF EXISTS inventory_quarantine_records, inventory_waste_records, stock_ledger, recipe_items, recipes, ingredients, warehouses, products, categories, folio_leases, security_telemetry_events, audit_log_events, stations, user_branch_credentials, user_roles, roles, users, test_composite_ref, branches, organizations CASCADE;
         DELETE FROM _migrations WHERE id = '${wp011Id}';
         DROP OWNED BY ${testRole};
         DROP ROLE ${testRole};
@@ -4489,7 +4492,7 @@ describe('TRIDENTPOS WP-016B Platform Core Master Catalog Foundation (Categories
     const client = await pool.connect();
     try {
       await client.query(`
-        DROP TABLE IF EXISTS recipe_items, recipes, ingredients, warehouses, products, categories, folio_leases, security_telemetry_events, audit_log_events, stations, user_branch_credentials, user_roles, roles, users, test_composite_ref, branches, organizations, _migrations CASCADE;
+        DROP TABLE IF EXISTS inventory_quarantine_records, inventory_waste_records, stock_ledger, recipe_items, recipes, ingredients, warehouses, products, categories, folio_leases, security_telemetry_events, audit_log_events, stations, user_branch_credentials, user_roles, roles, users, test_composite_ref, branches, organizations, _migrations CASCADE;
         DROP EXTENSION IF EXISTS pgcrypto, "uuid-ossp" CASCADE;
         DROP FUNCTION IF EXISTS current_app_org_id() CASCADE;
         DROP FUNCTION IF EXISTS trg_audit_log_append_only() CASCADE;
@@ -4525,7 +4528,7 @@ describe('TRIDENTPOS WP-016B Platform Core Master Catalog Foundation (Categories
     const client = await pool.connect();
     try {
       await client.query(`
-        DROP TABLE IF EXISTS recipe_items, recipes, ingredients, warehouses, products, categories, branches, organizations CASCADE;
+        DROP TABLE IF EXISTS inventory_quarantine_records, inventory_waste_records, stock_ledger, recipe_items, recipes, ingredients, warehouses, products, categories, branches, organizations CASCADE;
         DELETE FROM _migrations WHERE id = '${wp016bId}';
         DROP OWNED BY ${testRole};
         DROP ROLE ${testRole};
@@ -5010,7 +5013,7 @@ describe('TRIDENTPOS WP-016B Platform Core Master Catalog Foundation (Categories
     const client = await pool.connect();
     try {
       await client.query(`
-        DROP TABLE IF EXISTS recipe_items, recipes, ingredients, warehouses, products, categories, branches, organizations, _migrations CASCADE;
+        DROP TABLE IF EXISTS inventory_quarantine_records, inventory_waste_records, stock_ledger, recipe_items, recipes, ingredients, warehouses, products, categories, branches, organizations, _migrations CASCADE;
         DROP EXTENSION IF EXISTS pgcrypto, "uuid-ossp" CASCADE;
         DROP FUNCTION IF EXISTS current_app_org_id() CASCADE;
       `);
