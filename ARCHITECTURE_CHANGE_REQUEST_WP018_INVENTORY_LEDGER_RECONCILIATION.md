@@ -1,8 +1,9 @@
 # ACR-2026-017 — WP-018 Inventory Ledger, Waste & KDS Depletion Reconciliation
 
-**Status:** PROPOSED / FROZEN CANDIDATE — PENDING INDEPENDENT REVIEW  
+**Status:** PROPOSED / FROZEN CANDIDATE R2 — PENDING INDEPENDENT REVIEW  
 **Date:** 2026-09-17  
 **Canonical Base:** `bfc3f9ba36f2c8c413639cdd50eaea0f4ac19cd6`  
+**R1 Historical Candidate:** `b5714663545a8d8112cd303d75da17d6c8fc0a2c` — immutable / superseded by R2  
 **Governing Framework:** `EAAF v1.2.0 @ 7e036f43240b3dc28ccb996e350263598275b2cd`  
 **Affected WP:** `WP-018 — Real-Time Kárdex, Waste Tracking & KDS Depletion Service`  
 **Protected PO Decisions:** 9/9 remain OPEN. This ACR does **not** resolve `OQ-SSOT-07` or any other Product Owner question.
@@ -11,127 +12,130 @@
 
 ## 1. Problem Statement
 
-The current canonical documents contain contradictions that would force the WP-018 Builder to invent data authority or business behavior:
+The canonical WP-018 sources are internally inconsistent and would force the Builder to invent authority or business semantics:
 
-1. `IMPLEMENTATION_PLAN.md` names WP-018 data objects as `stock_actual`, `movimientos_inventario` (Kárdex), and `mermas_inventario`, while canonical `DATA_MODEL.md` physically defines `stock_ledger` only.
-2. `IMPLEMENTATION_PLAN.md` states that Kárdex balances are never updated directly and are derived from append-only movements, which conflicts with treating `stock_actual` as a writable authoritative balance table.
-3. `IMPLEMENTATION_PLAN.md` requires a configurable negative-stock alert, while the test description says `negative stock prevention test`. `FUNCTIONAL_ARCHITECTURE.md` explicitly requires restaurant operation to continue and recognizes deferred inventory depletion / pending stock state; therefore Inventory must not block the sale solely because physical stock becomes negative.
-4. `FUNCTIONAL_ARCHITECTURE.md` contract 6.2 transports `selectedModifiers[]`, while `OQ-SSOT-07` keeps modifier recipe semantics OPEN. Silent omission or guessed modifier depletion is prohibited.
-5. Canonical `stock_ledger` lacks the explicit tenant-safe composite FKs, RLS/FORCE RLS, append-only DB enforcement, concurrency sequencing, and idempotency constraints needed by WP-018 acceptance criteria.
-6. Waste requires a mandatory reason code and photo attachment link, but the current canonical physical schema has no governed structure for that metadata.
-7. `ADR-007` requires critical inter-module Cloud effects to use a durable PostgreSQL transactional outbox; WP-018 must consume KDS-originated production confirmation without volatile in-memory-only delivery.
+1. `IMPLEMENTATION_PLAN.md` names `stock_actual`, `movimientos_inventario`, `mermas_inventario`, while `DATA_MODEL.md` physically defines only `stock_ledger` for Kárdex.
+2. The plan says current stock is derived from append-only movements, which is incompatible with a writable `stock_actual` authority.
+3. The plan asks for a configurable negative-stock alert but also names a `negative stock prevention test`; `FUNCTIONAL_ARCHITECTURE.md` states restaurant operation continues and recognizes pending/deferred inventory impact.
+4. `selectedModifiers[]` is carried into Inventory while `OQ-SSOT-07` remains OPEN.
+5. Current `stock_ledger` lacks explicit WP-018 idempotency, monotonic sequencing, tenant-safe composite FKs, RLS/FORCE RLS, and DB-level append-only enforcement.
+6. Waste requires mandatory reason and photo evidence but no governed physical metadata structure exists.
+7. `ADR-007` requires durable PostgreSQL transactional outbox delivery for critical Cloud inter-module effects.
 
-WP-018 implementation MUST NOT begin until these contradictions are governed.
-
----
-
-## 2. Sources of Authority Preserved
-
-This ACR preserves and reconciles, rather than replaces, the following canonical rules:
-
-- `FUNCTIONAL_ARCHITECTURE.md` §6.2: trigger event `OrdenProduccionConfirmadaEnKDS` and Inventory capability behavior.
-- `DATA_AUTHORITY_MATRIX.md`: Recipes, Warehouses & Kárdex are Cloud PostgreSQL SoR in Full Suite topology.
-- `ADR-002`: authority is segregated by topology and domain; no dual-master inventory authority.
-- `ADR-007`: critical Cloud inter-module events use PostgreSQL Transactional Outbox.
-- `ADR-012`: exact Scale-4 quantity / monetary representation where applicable.
-- `ADR-013`: Inventory pure domain remains in `@trident/inventory`; persistence in `@trident/database`; composition in `@trident/cloud-server`.
-- `WP-017`: `warehouses`, `ingredients`, `recipes`, `recipe_items`, recipe explosion, fixed-point domain primitives, and `ModifierRecipeResolver` contract are already canonical.
-- `WP-015`: KDS authoritative Edge runtime is `kds_tickets` + `kds_ticket_partidas`; `OrdenProduccionConfirmadaEnKDS` is the production completion event.
+WP-018 implementation MUST NOT begin until this reconciliation is canonical.
 
 ---
 
-## 3. Canonical WP-018 Data Authority
+## 2. Preserved Sources of Authority
 
-### 3.1 Sole authoritative inventory movement ledger
+This ACR preserves:
 
-The canonical physical Cloud PostgreSQL Kárdex SoR is:
+- `FUNCTIONAL_ARCHITECTURE.md` §6.2 and event `OrdenProduccionConfirmadaEnKDS`.
+- `DATA_AUTHORITY_MATRIX.md`: Recipes, Warehouses & Kárdex are Cloud PostgreSQL SoR in Full Suite.
+- `ADR-002`: segregated authority; no dual-master inventory state.
+- `ADR-007`: durable Cloud inter-module events via PostgreSQL Transactional Outbox.
+- `ADR-012`: exact Scale-4 numerical representation where applicable.
+- `ADR-013`: `@trident/inventory` pure domain, `@trident/database` persistence, `@trident/cloud-server` composition.
+- canonical WP-017 recipe/warehouse/ingredient schema and `ModifierRecipeResolver` contract.
+- canonical WP-015 KDS schema and production-completion event.
+
+---
+
+## 3. Canonical Data Authority
+
+### 3.1 Sole movement SoR
+
+Physical Cloud PostgreSQL authority:
 
 `stock_ledger`
 
-It is **append-only**. Ordinary application code MUST NOT update or delete existing ledger rows.
+It is append-only. Ordinary application paths may INSERT compensating movements but may not UPDATE or DELETE historical rows.
 
-Conceptual aliases in older planning text are mapped as follows:
+Conceptual mapping:
 
-- `movimientos_inventario` = conceptual business name for physical `stock_ledger`.
-- `stock_actual` = **derived balance/read model**, never an independent writable source of truth.
-- `mermas_inventario` = conceptual waste-registration capability represented physically by governed waste metadata linked to a `MERMA` movement.
+- `movimientos_inventario` → physical `stock_ledger`.
+- `stock_actual` → derived balance/read model only.
+- `mermas_inventario` → waste-registration metadata linked to a `MERMA` ledger movement.
 
 There is exactly one authoritative quantity history: `stock_ledger.quantity_delta`.
 
-### 3.2 Current stock projection
+### 3.2 Current stock
 
-`stock_actual` MUST NOT be implemented as a mutable authoritative balance table.
+`stock_actual` MUST NOT become an independently writable table.
 
-WP-018 may expose current balance through:
+Canonical balance:
 
-- a read-only SQL view, or
-- an application query that performs the equivalent deterministic aggregation.
-
-Canonical balance formula:
-
-`SUM(stock_ledger.quantity_delta)` grouped by:
+`SUM(quantity_delta)` grouped by:
 
 `organization_id + branch_id + warehouse_id + ingredient_id`
 
-A cached/materialized projection may be introduced only by a future governed change and must remain rebuildable from the ledger.
+Implementation may expose this as a read-only SQL view or equivalent application query.
 
 ### 3.3 `balance_after`
 
-The existing `stock_ledger.balance_after` field is retained as an immutable audit snapshot on each movement row, not as an independent authority.
+Existing `stock_ledger.balance_after` remains an immutable audit snapshot, not a second authority.
 
 Invariant:
 
-For each stock aggregate, ordered by the canonical movement sequence, `balance_after` MUST equal the cumulative sum of all `quantity_delta` values through that movement.
-
-A mismatch is an integrity failure.
+For each stock aggregate ordered by `movement_sequence_number`, `balance_after` equals the cumulative sum of `quantity_delta` through that movement.
 
 ---
 
-## 4. Required WP-018 Physical Schema Hardening
+## 4. Required `stock_ledger` Hardening
 
-WP-018 must use an Expand migration to harden / extend the canonical Inventory schema.
+WP-018 Expand migration must ensure at minimum:
 
-### 4.1 `stock_ledger`
-
-Required invariants:
-
+- `id UUID PRIMARY KEY`
 - `organization_id UUID NOT NULL`
 - `branch_id UUID NOT NULL`
 - `warehouse_id UUID NOT NULL`
 - `ingredient_id UUID NOT NULL`
-- `movement_type` canonical values: `COMPRA`, `CONSUMO_KDS`, `MERMA`, `AJUSTE_FISICO`, `TRANSFERENCIA`
+- `movement_type VARCHAR(50) NOT NULL`
+- canonical movement values: `COMPRA`, `CONSUMO_KDS`, `MERMA`, `AJUSTE_FISICO`, `TRANSFERENCIA`
 - `reference_event_id VARCHAR(100) NOT NULL`
-- `quantity_delta DECIMAL(12,4) NOT NULL`
-- `quantity_delta <> 0`
+- `quantity_delta DECIMAL(12,4) NOT NULL CHECK (quantity_delta <> 0)`
 - `unit_cost DECIMAL(12,4) NOT NULL`
 - `total_cost DECIMAL(12,4) NOT NULL`
 - `balance_after DECIMAL(12,4) NOT NULL`
 - `movement_sequence_number BIGINT NOT NULL`
 - `created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`
 
-Tenant-safe composite foreign keys are mandatory:
+Required candidate key:
 
-- `(organization_id, branch_id)` → `branches(organization_id, id)` or repository-equivalent candidate-key-safe reference.
-- `(organization_id, warehouse_id)` → `warehouses(organization_id, id)`.
-- `(organization_id, ingredient_id)` → `ingredients(organization_id, id)`.
+`UNIQUE (organization_id, id)`
 
-Required uniqueness:
+Required tenant-safe composite FKs:
 
-- `(organization_id, branch_id, warehouse_id, ingredient_id, movement_sequence_number)`
-- KDS idempotency uniqueness sufficient to prevent a replayed production event from deducting the same aggregated ingredient twice. Canonical key:
-  `(organization_id, branch_id, warehouse_id, ingredient_id, movement_type, reference_event_id)` for `CONSUMO_KDS` movements.
+- `(organization_id, branch_id)` → `branches(organization_id, id)`
+- `(organization_id, warehouse_id)` → `warehouses(organization_id, id)`
+- `(organization_id, ingredient_id)` → `ingredients(organization_id, id)`
 
-### 4.2 RLS
+Required sequence uniqueness:
 
-`stock_ledger` and all new WP-018 tables MUST use:
+`UNIQUE (organization_id, branch_id, warehouse_id, ingredient_id, movement_sequence_number)`
+
+Required command/event idempotency uniqueness for stock-affecting commands originating outside the ledger:
+
+`UNIQUE (organization_id, branch_id, warehouse_id, ingredient_id, movement_type, reference_event_id)`
+
+This key governs at least:
+
+- `CONSUMO_KDS`: `reference_event_id` = stable KDS production event/order id from the governed integration envelope.
+- `MERMA`: `reference_event_id` = stable waste command/client operation id.
+
+The same pattern may be reused by later governed WPs only where one logical command is canonically aggregated to one movement per ingredient/warehouse.
+
+---
+
+## 5. RLS & Append-Only Enforcement
+
+`stock_ledger` and every new WP-018 table MUST use:
 
 - `ENABLE ROW LEVEL SECURITY`
 - `FORCE ROW LEVEL SECURITY`
-- fail-closed `organization_id = current_app_org_id()` policies
+- fail-closed tenant policy using `organization_id = current_app_org_id()` for both read and write checks.
 
-### 4.3 Database-level append-only enforcement
-
-WP-018 must add DB-level protection that rejects ordinary:
+Database-level append-only protection MUST reject ordinary:
 
 - `UPDATE`
 - `DELETE`
@@ -142,13 +146,11 @@ Corrections use compensating counter-movements only.
 
 ---
 
-## 5. Waste Registration
+## 6. Waste Registration
 
-WP-018 shall add a physical Cloud table:
+WP-018 adds:
 
 `inventory_waste_records`
-
-Purpose: retain mandatory waste metadata without duplicating stock authority.
 
 Required fields:
 
@@ -158,33 +160,54 @@ Required fields:
 - `warehouse_id UUID NOT NULL`
 - `ingredient_id UUID NOT NULL`
 - `stock_ledger_id UUID NOT NULL`
+- `command_id VARCHAR(100) NOT NULL`
 - `reason_code VARCHAR(100) NOT NULL`
 - `photo_attachment_url TEXT NOT NULL`
 - `notes TEXT NULL`
 - `actor_id UUID NULL`
 - `created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`
 
+Required uniqueness:
+
+- `UNIQUE (organization_id, id)`
+- `UNIQUE (organization_id, command_id)`
+- `UNIQUE (organization_id, stock_ledger_id)` — one waste evidence record per linked MERMA movement.
+
+Required tenant-safe FKs:
+
+- `(organization_id, branch_id)` → `branches(organization_id, id)`
+- `(organization_id, warehouse_id)` → `warehouses(organization_id, id)`
+- `(organization_id, ingredient_id)` → `ingredients(organization_id, id)`
+- `(organization_id, stock_ledger_id)` → `stock_ledger(organization_id, id)`
+- if `actor_id` is present: `(organization_id, actor_id)` → `users(organization_id, id)`
+
 Invariant:
 
-Each waste record MUST reference exactly one `stock_ledger` movement whose `movement_type = 'MERMA'` and whose `quantity_delta < 0`.
+Each waste record references exactly one `stock_ledger` movement with:
 
-The `MERMA` ledger movement and `inventory_waste_records` row must commit atomically in the same tenant transaction.
+- `movement_type = 'MERMA'`
+- `quantity_delta < 0`
+- same organization / branch / warehouse / ingredient.
 
-`reason_code` and `photo_attachment_url` are mandatory and must reject blank values at the application boundary; DB CHECK constraints should enforce non-empty canonical text where supported.
+This invariant must be protected by transaction/application validation and, where practical, a DB trigger or equivalent database constraint mechanism.
 
-Waste metadata is descriptive evidence; quantity authority remains only in `stock_ledger`.
+The MERMA ledger movement and its waste record commit atomically in one tenant transaction.
+
+Blank `reason_code` or `photo_attachment_url` is invalid.
+
+Quantity authority remains only in `stock_ledger`.
 
 ---
 
-## 6. KDS Depletion Contract
+## 7. KDS Depletion Contract
 
-### 6.1 Trigger
+### 7.1 Trigger
 
-WP-018 consumes canonical event:
+Canonical event:
 
 `OrdenProduccionConfirmadaEnKDS`
 
-The logical contract follows `FUNCTIONAL_ARCHITECTURE.md` §6.2:
+Logical contract follows `FUNCTIONAL_ARCHITECTURE.md` §6.2:
 
 - `organizacionId`
 - `sucursalId`
@@ -194,151 +217,149 @@ The logical contract follows `FUNCTIONAL_ARCHITECTURE.md` §6.2:
 - `tiempoPreparacionMinutos`
 - `items[] { productoId, cantidad, selectedModifiers[] }`
 
-The canonical KDS production-order identity is `ordenProduccionId` / `ordenId` as carried by the governed integration envelope; station identity MUST NOT replace order identity.
+Order identity MUST remain the governed production-order identity; KDS station identity may not substitute for it.
 
-### 6.2 Durable path
+### 7.2 Durable path
 
-In Full Suite topology the event path is:
+Full Suite path:
 
 KDS Edge completion
-→ existing Edge outbox/sync pipeline (`WP-012` / `WP-013`)
+→ existing Edge outbox/sync (`WP-012` / `WP-013`)
 → Cloud durable integration event
 → Inventory WP-018 consumer
 → `stock_ledger`
 
-Critical Inventory depletion MUST NOT rely solely on an in-memory volatile event handler.
+Critical depletion MUST NOT rely only on volatile in-memory delivery.
 
-The Cloud integration outbox / dispatcher governed by `ADR-007` is the durable handoff mechanism.
+### 7.3 Atomic consumer transaction
 
-### 6.3 Atomic application
+One KDS event application transaction must atomically perform:
 
-For one production event, the Inventory application transaction must atomically perform:
-
-1. idempotency / replay check,
+1. replay/idempotency check,
 2. recipe lookup,
 3. ingredient explosion,
-4. stock aggregate serialization,
-5. append-only `CONSUMO_KDS` movement inserts,
-6. immutable `balance_after` snapshots,
+4. per-stock-aggregate serialization,
+5. `CONSUMO_KDS` ledger inserts,
+6. sequence and `balance_after` calculation,
 7. negative-stock alert determination,
-8. durable emission of `InventarioDescontadoPorReceta` through the Cloud transactional outbox.
+8. durable `InventarioDescontadoPorReceta` outbox insert.
 
 No partial durable depletion is valid.
 
 ---
 
-## 7. Concurrency & Monotonic Kárdex
+## 8. Concurrency & Monotonic Kárdex
 
-Concurrent production confirmations for the same stock aggregate must serialize deterministically inside PostgreSQL.
-
-WP-018 must use a transaction-scoped serialization mechanism for each aggregate key:
+Concurrent movements for the same aggregate:
 
 `organization_id + branch_id + warehouse_id + ingredient_id`
 
-An implementation using PostgreSQL transaction advisory locks or an architecture-equivalent mechanism is permitted.
+must serialize deterministically within PostgreSQL.
 
-The implementation MUST prove:
+A transaction-scoped advisory lock or architecture-equivalent mechanism is permitted.
+
+Required guarantees:
 
 - no lost movements,
-- no duplicate KDS movement on replay,
-- strictly monotonic `movement_sequence_number` per aggregate,
-- `balance_after` equals cumulative ledger sum after concurrent deductions.
+- no duplicate KDS or waste movement on replay,
+- strictly monotonic `movement_sequence_number`,
+- exact `balance_after`,
+- exact derived balance after concurrent deductions.
 
-No mutable `stock_actual` row may be used as hidden authority.
+No hidden mutable balance table may become authority.
 
 ---
 
-## 8. Negative Stock Semantics
+## 9. Negative Stock
 
 Negative stock does **not** block restaurant sale or KDS completion.
 
-This is not a new Product Owner decision; it preserves the frozen functional rule that restaurant operation continues when Inventory cannot satisfy stock synchronously and that inventory may remain pending / below expected physical balance.
+This preserves the frozen functional rule that restaurant operations continue and Inventory side-effects may be deferred/pending.
 
 Therefore:
 
-- a valid `CONSUMO_KDS` movement may produce a derived balance `< 0`;
-- the movement MUST still be committed;
-- an operational alert MUST be emitted/recorded;
-- the alert threshold/configuration may be parameterized, but the Builder MUST NOT invent a replenishment algorithm or purchasing policy;
-- WP-018 MUST NOT reject or roll back the KDS consumption solely because the resulting stock is negative.
+- a valid `CONSUMO_KDS` movement may result in balance `< 0`;
+- the movement still commits;
+- an operational alert is emitted/recorded;
+- no replenishment/purchasing algorithm may be invented;
+- Inventory MUST NOT reject or roll back consumption solely due to negative result.
 
-The stale WP-018 test phrase `negative stock prevention test` is interpreted and must be corrected by the governing plan overlay as:
+The stale plan phrase:
+
+`negative stock prevention test`
+
+is superseded by:
 
 `negative stock non-blocking alert test`.
 
-Required test:
-
-A depletion that crosses below zero commits exactly once, yields the correct negative derived balance, and produces the configured operational alert without blocking the originating restaurant operation.
+Required behavior: the crossing movement commits exactly once, derived balance is correctly negative, and the operational alert is produced without rolling back the originating restaurant operation.
 
 ---
 
-## 9. `OQ-SSOT-07` — Modifier Recipe Semantics Remain OPEN
+## 10. `OQ-SSOT-07` Remains OPEN
 
-This ACR does **not** choose additive, subtractive, replacement, precedence, or any other modifier recipe rule.
+This ACR chooses no modifier recipe semantics.
 
-`ModifierRecipeResolver` remains a contract only.
+`ModifierRecipeResolver` remains contract-only.
 
 For `selectedModifiers[]`:
 
-- WP-018 MUST NOT silently ignore modifiers.
-- WP-018 MUST NOT guess modifier ingredient effects.
-- When a concrete authorized resolver is available, WP-018 may consume its resolved ingredient deltas.
-- While `OQ-SSOT-07` remains unresolved, a KDS depletion event containing unresolved modifiers must be durably quarantined / left replayable with an explicit reason such as `MODIFIER_RECIPE_RESOLUTION_PENDING`; **zero stock movement for that event may be committed until the complete recipe result is deterministic**.
-- Restaurant sale / KDS completion remains unaffected; only the Inventory depletion side-effect is deferred.
-- Once the future PO-approved rule becomes canonical, the pending event may be replayed idempotently.
+- never silently ignore modifiers;
+- never guess additive/replacement/subtractive/precedence behavior;
+- if an authorized resolver exists, consume its deterministic resolved ingredient deltas;
+- while unresolved, a modifier-bearing depletion event is durably quarantined/replayable with reason `MODIFIER_RECIPE_RESOLUTION_PENDING` or equivalent;
+- zero stock movement for that event is committed until the complete recipe result is deterministic;
+- sale/KDS completion is unaffected;
+- future PO-approved semantics may replay the pending event idempotently.
 
-This safeguard is data-preserving and does not constitute a Product Owner choice.
+This is fail-closed data preservation, not resolution of the PO question.
 
-`OQ-SSOT-07` remains `OPEN`.
+`OQ-SSOT-07 = OPEN`.
 
 ---
 
-## 10. `registerWaste()` Contract
+## 11. `registerWaste()`
 
-Canonical application command:
-
-`registerWaste(input)`
-
-Minimum input:
+Canonical application command consumes at minimum:
 
 - `organizationId`
 - `branchId`
 - `warehouseId`
 - `ingredientId`
-- positive waste quantity supplied by caller and converted to a negative ledger delta by the domain service
+- positive caller-facing waste quantity converted to a negative ledger delta
 - `reasonCode`
 - `photoAttachmentUrl`
 - optional `notes`
 - optional `actorId`
-- idempotency key / command identifier
+- stable `commandId`
 
 Atomic result:
 
-- one `stock_ledger` row with `movement_type='MERMA'` and negative `quantity_delta`,
-- one linked `inventory_waste_records` row,
-- correct monotonic sequence and `balance_after`,
-- optional negative-stock operational alert if resulting balance is below threshold.
+- one `MERMA` stock movement with `reference_event_id = commandId`,
+- one linked `inventory_waste_records` row with the same `commandId`,
+- correct sequence and `balance_after`,
+- negative-stock alert if applicable.
 
-Retries MUST NOT duplicate the waste movement.
+Retry with the same `commandId` is idempotent and must not create a second movement or second waste record.
 
 ---
 
-## 11. Package & Dependency Boundaries
+## 12. Package Boundaries
 
-WP-018 extends the canonical WP-017 topology:
+WP-018 extends canonical WP-017 topology.
 
 ### `@trident/inventory`
 
-Owns pure domain behavior:
+Pure domain ownership:
 
-- movement value objects / validation,
-- depletion calculation orchestration over already-governed recipe explosion,
-- waste command rules,
+- movement validation/value objects,
+- depletion orchestration over governed recipe explosion,
 - Kárdex invariants,
+- waste command rules,
 - negative-balance classification,
-- `ModifierRecipeResolver` consumption as a contract only.
+- `ModifierRecipeResolver` consumption as contract only.
 
-Runtime dependencies: `@trident/core` only.
+Runtime dependency: `@trident/core` only.
 
 Forbidden direct runtime dependencies:
 
@@ -348,133 +369,128 @@ Forbidden direct runtime dependencies:
 
 ### `@trident/database`
 
-Owns PostgreSQL migrations, RLS, append-only enforcement and persistence primitives.
+Owns PostgreSQL migration, RLS, append-only enforcement and persistence primitives.
 
 ### `@trident/cloud-server`
 
 Owns composition:
 
 - `withTenantTransaction()` boundary,
-- durable event consumer adapter,
+- durable KDS event consumer adapter,
 - repository wiring,
-- transactional outbox emission.
+- transactional outbox insertion.
 
-No Inventory business rules may be placed in the composition root.
+No Inventory business rules belong in the composition root.
 
 ---
 
-## 12. Required WP-018 Tests
+## 13. Required Tests
 
-WP-018 cannot pass with only happy-path unit tests.
+Minimum evidence:
 
-Required minimum evidence:
-
-1. Kárdex cumulative integrity: derived current balance equals exact historical movement sum.
-2. Concurrent KDS depletion: no lost update, monotonic sequence, exact cumulative balance.
-3. Replay/idempotency: same KDS event reprocessed produces zero duplicate stock movement.
-4. Negative stock non-blocking alert: movement commits, balance may become negative, alert generated, no sale/KDS rollback.
-5. Append-only DB enforcement: UPDATE and DELETE are rejected.
-6. RLS tenant isolation and FORCE RLS.
+1. Kárdex cumulative integrity: derived balance equals historical sum.
+2. Concurrent KDS depletion: no loss, monotonic sequence, exact balance.
+3. KDS replay idempotency: no duplicate movement.
+4. Negative stock non-blocking alert.
+5. DB append-only: UPDATE/DELETE rejected.
+6. RLS + FORCE RLS tenant isolation.
 7. Composite FK cross-tenant rejection.
-8. Waste atomicity: MERMA movement + waste metadata commit together.
-9. Waste validation: blank reason or photo link rejected.
-10. Waste idempotency: retry does not duplicate movement.
-11. Modifier unresolved quarantine: selected modifiers with no authorized resolver produce zero stock movement and remain durably replayable.
-12. Resolver-present path: use a test/dummy resolver contract to prove deterministic resolved deltas without defining PO semantics.
-13. Transaction rollback: failure after movement preparation but before commit leaves zero partial movement/outbox rows.
-14. Durable outbox: successful depletion atomically persists `InventarioDescontadoPorReceta` integration event.
-15. Rollback ownership: WP-018 migration rollback in non-production removes only WP-018-owned objects and preserves WP-017 tables and data.
+8. Waste atomicity: MERMA + waste evidence commit together.
+9. Waste validation: blank reason/photo rejected.
+10. Waste retry idempotency using `commandId`.
+11. Tenant-safe waste → ledger linkage.
+12. Modifier unresolved quarantine: zero stock movement and durable replayability.
+13. Resolver-present path using a test/dummy resolver without defining PO semantics.
+14. Transaction failure leaves zero partial movement/outbox/waste state.
+15. Durable `InventarioDescontadoPorReceta` outbox insertion.
+16. Authorized non-production rollback removes only WP-018-owned additions and preserves WP-017 schema/data.
 
 ---
 
-## 13. Migration & Rollback Rules
+## 14. Migration & Rollback
 
 Migration impact: `EXPAND`.
 
-Production rollback follows canonical migration strategy:
+Production rollback:
 
 - application rollback while expanded schema remains compatible,
 - forward-fix preferred,
-- no destructive universal production down.
+- no universal destructive production down.
 
-Any authorized non-production `migrateDown()` test must prove WP-017 objects survive.
+Business correction:
 
-Business correction uses compensating Kárdex counter-movements; existing ledger rows are never edited or deleted.
-
----
-
-## 14. WP-018 Acceptance Criteria After Reconciliation
-
-WP-018 is eligible for `DONE / CANONICAL` only when:
-
-- `stock_ledger` is the sole authoritative movement ledger;
-- current stock is derived, not independently mutable;
-- append-only behavior is enforced in database and application boundaries;
-- RLS/FORCE RLS and tenant-safe composite FKs pass;
-- KDS depletion is durable, idempotent and atomic;
-- concurrent deductions preserve exact monotonic ledger integrity;
-- negative stock does not block the restaurant operation and generates an alert;
-- waste is represented by a compensating/negative ledger movement plus mandatory linked evidence metadata;
-- `InventarioDescontadoPorReceta` is durably emitted through the Cloud transactional outbox;
-- unresolved modifier events are not silently or partially depleted;
-- `OQ-SSOT-07` remains OPEN until the Product Owner separately decides it;
-- no governing documents are modified by the Builder.
+- compensating counter-movement only,
+- never mutate/delete historical ledger rows.
 
 ---
 
-## 15. Explicit Non-Decisions / Exclusions
+## 15. Canonical WP-018 Acceptance Criteria After Reconciliation
+
+WP-018 may be `DONE / CANONICAL` only if:
+
+- `stock_ledger` is the sole authoritative movement SoR;
+- current stock is derived;
+- append-only is enforced;
+- RLS/FORCE RLS + tenant-safe composite FKs pass;
+- KDS depletion is durable, atomic and idempotent;
+- concurrent deductions preserve monotonic exact ledger state;
+- negative stock is non-blocking and alerting;
+- waste uses a MERMA movement plus mandatory linked evidence;
+- waste retry is idempotent;
+- `InventarioDescontadoPorReceta` is durably outboxed;
+- unresolved modifier events are not silently/partially depleted;
+- `OQ-SSOT-07` remains OPEN;
+- Builder does not alter governing documents.
+
+---
+
+## 16. Explicit Non-Decisions
 
 This ACR does NOT define:
 
-- replenishment / purchase suggestion algorithm (`OQ-SSOT-05` remains OPEN),
-- modifier recipe semantics (`OQ-SSOT-07` remains OPEN),
-- inventory valuation method beyond already frozen cost snapshots,
+- replenishment algorithm (`OQ-SSOT-05` stays OPEN),
+- modifier recipe semantics (`OQ-SSOT-07` stays OPEN),
+- new inventory valuation method,
 - physical cycle-count UX,
 - photo storage provider,
-- alert delivery channel/vendor,
-- external ERP inventory reconciliation policy,
+- alert delivery vendor/channel,
+- external ERP reconciliation policy,
 - UI implementation.
 
 ---
 
-## 16. Required Downstream Documentation Overlay
+## 17. Canonical Overlay Priority
 
-Upon approval/canonicalization, this ACR governs the following corrections:
+Once approved and merged, this ACR supersedes conflicting WP-018 wording in older canonical documents until those documents receive a metadata/content hygiene update.
 
-- `IMPLEMENTATION_PLAN.md` WP-018 entry:
-  - map conceptual objects to physical `stock_ledger` + derived balance + waste metadata;
-  - replace stale `negative stock prevention test` with `negative stock non-blocking alert test`;
-  - add explicit `OQ-SSOT-07` safeguarded dependency for modifier-bearing depletion events;
-  - correct primary data input reference from `DATA_MODEL.md Sec. 3` to Inventory Cloud schema (`Sec. 2.3`) plus KDS Edge contract (`Sec. 3`).
-- `DATA_MODEL.md`:
-  - harden `stock_ledger` authority/invariants;
-  - define `inventory_waste_records`;
-  - define derived stock projection semantics;
-  - add RLS/FORCE RLS and append-only controls.
-- `DATA_AUTHORITY_MATRIX.md`:
-  - state explicitly that `stock_ledger` is the sole Cloud Inventory movement SoR and current stock is derived.
-- `FUNCTIONAL_ARCHITECTURE.md` §6.2:
-  - preserve `selectedModifiers[]` but state unresolved modifier depletion is deferred/replayable and must not be silently approximated.
+Binding corrections:
 
-No implementation branch may treat this ACR as canonical until governance completes.
+- physical movement SoR = `stock_ledger`;
+- `stock_actual` = derived read model only;
+- waste metadata = `inventory_waste_records` linked to MERMA movement;
+- Inventory Cloud schema source = `DATA_MODEL.md` §2.3; KDS event source = Edge/KDS schema §3 + `FUNCTIONAL_ARCHITECTURE.md` §6.2;
+- `negative stock prevention test` is superseded by non-blocking alert behavior;
+- modifier-bearing depletion remains replayable and unapplied until an authorized resolver makes the full result deterministic.
+
+A later governance-hygiene patch may rewrite the older wording, but the Builder must follow this ACR when canonical.
 
 ---
 
-## 17. Governance Gate
+## 18. Governance Gate
 
-Required before Builder start:
+Required before WP-018 Builder start:
 
-1. Coordinator Quick Integrity on this exact candidate.
+1. Coordinator Quick Integrity on exact R2 subject.
 2. Independent `01_Solution_Architect` review.
 3. Independent `03_Data_Architect` review.
 4. Independent `11_Code_Reviewer` consistency review.
 5. Coordinator synthesis.
-6. Product Owner approval of the exact frozen subject.
+6. Product Owner approval of exact frozen subject.
 7. PR Gate.
-8. PR + required CI/Security checks.
+8. PR + required CI/Security.
 9. Merge authorization.
 10. Merge.
 11. Post-merge CI/Security validation.
 12. `DONE / CANONICAL` declaration.
 
-Only then may WP-018 Builder start from the resulting canonical `main`.
+Only then may WP-018 start from the resulting canonical `main`.
