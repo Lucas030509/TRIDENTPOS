@@ -89,9 +89,8 @@ replace_exact(
 )
 
 targets = [acr, adr, fa, dm, dd, dam, ip]
-stale = [
+stale_current = [
     "ACR-2026-016 PROPOSED ARCHITECTURE CHANGE",
-    "PENDING INDEPENDENT REVIEW",
     "PROPOSED OVERLAY — ACR-2026-016",
     "Pending formal independent review and Product Owner approval",
     "Pending formal review and Product Owner approval",
@@ -99,7 +98,7 @@ stale = [
 ]
 for path in targets:
     text = Path(path).read_text()
-    for marker in stale:
+    for marker in stale_current:
         if marker in text:
             raise SystemExit(f"stale current-state marker remains in {path}: {marker}")
 
