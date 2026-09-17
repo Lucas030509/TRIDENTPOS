@@ -18,43 +18,106 @@ import {
   type RecipeCostCalculationResult,
   RecipeNotFoundError,
 } from '@trident/inventory';
-import { setTenantContext } from '@trident/database';
+import { getPool, withTenantTransaction } from '@trident/database';
 
 export interface CloudInventoryCompositionService {
-  getRecipe(
-    client: pg.PoolClient,
-    organizationId: string,
-    recipeId: string,
-  ): Promise<Recipe | null>;
-  getIngredientAverageCost(
-    client: pg.PoolClient,
-    organizationId: string,
-    ingredientId: string,
-  ): Promise<string>;
+  getRecipe(organizationId: string, recipeId: string): Promise<Recipe | null>;
+  getIngredientAverageCost(organizationId: string, ingredientId: string): Promise<string>;
   explodeRecipeIngredients(
-    client: pg.PoolClient,
     organizationId: string,
     recipeId: string,
   ): Promise<readonly ExplodedIngredient[]>;
   calculateRecipeCost(
-    client: pg.PoolClient,
     organizationId: string,
     recipeId: string,
   ): Promise<RecipeCostCalculationResult>;
 }
 
 export class PostgresCloudInventoryService implements CloudInventoryCompositionService {
+  private readonly pool: pg.Pool;
+
+  public constructor(pool?: pg.Pool) {
+    this.pool = pool ?? getPool();
+  }
+
   /**
-   * Fetches a Recipe with its RecipeItems from PostgreSQL within tenant context.
-   * RLS automatically ensures cross-tenant isolation.
+   * Fetches a Recipe with its RecipeItems within a tenant transaction boundary.
    */
-  public async getRecipe(
+  public async getRecipe(organizationId: string, recipeId: string): Promise<Recipe | null> {
+    return withTenantTransaction(this.pool, organizationId, async (client) => {
+      return this.getRecipeWithClient(client, organizationId, recipeId);
+    });
+  }
+
+  /**
+   * Retrieves current_average_cost for an ingredient within a tenant transaction boundary.
+   */
+  public async getIngredientAverageCost(
+    organizationId: string,
+    ingredientId: string,
+  ): Promise<string> {
+    return withTenantTransaction(this.pool, organizationId, async (client) => {
+      return this.getIngredientAverageCostWithClient(client, organizationId, ingredientId);
+    });
+  }
+
+  /**
+   * Explodes recipe into base raw materials within a single tenant transaction.
+   * Recursive subrecipe lookups execute within the same active transaction.
+   */
+  public async explodeRecipeIngredients(
+    organizationId: string,
+    recipeId: string,
+  ): Promise<readonly ExplodedIngredient[]> {
+    return withTenantTransaction(this.pool, organizationId, async (client) => {
+      const rootRecipe = await this.getRecipeWithClient(client, organizationId, recipeId);
+      if (!rootRecipe) {
+        throw new RecipeNotFoundError(recipeId);
+      }
+
+      const recipeResolver = async (subId: string) => {
+        return this.getRecipeWithClient(client, organizationId, subId);
+      };
+
+      return RecipeEngine.explodeIngredients(rootRecipe, recipeResolver);
+    });
+  }
+
+  /**
+   * Computes theoretical recipe costing within a single tenant transaction.
+   * Recursive subrecipe and ingredient lookups execute within the same active transaction.
+   */
+  public async calculateRecipeCost(
+    organizationId: string,
+    recipeId: string,
+  ): Promise<RecipeCostCalculationResult> {
+    return withTenantTransaction(this.pool, organizationId, async (client) => {
+      const rootRecipe = await this.getRecipeWithClient(client, organizationId, recipeId);
+      if (!rootRecipe) {
+        throw new RecipeNotFoundError(recipeId);
+      }
+
+      const costResolver = {
+        getIngredientCost: async (ingId: string) => {
+          return this.getIngredientAverageCostWithClient(client, organizationId, ingId);
+        },
+        getSubRecipe: async (subId: string) => {
+          return this.getRecipeWithClient(client, organizationId, subId);
+        },
+      };
+
+      return RecipeEngine.calculateRecipeCost(rootRecipe, costResolver);
+    });
+  }
+
+  /**
+   * Internal helper to fetch a Recipe using an existing transaction-scoped client.
+   */
+  private async getRecipeWithClient(
     client: pg.PoolClient,
     organizationId: string,
     recipeId: string,
   ): Promise<Recipe | null> {
-    await setTenantContext(client, organizationId);
-
     const recipeRes = await client.query<{
       id: string;
       organization_id: string;
@@ -127,15 +190,13 @@ export class PostgresCloudInventoryService implements CloudInventoryCompositionS
   }
 
   /**
-   * Retrieves current_average_cost for an ingredient from PostgreSQL within tenant context.
+   * Internal helper to retrieve ingredient average cost using an existing transaction-scoped client.
    */
-  public async getIngredientAverageCost(
+  private async getIngredientAverageCostWithClient(
     client: pg.PoolClient,
     organizationId: string,
     ingredientId: string,
   ): Promise<string> {
-    await setTenantContext(client, organizationId);
-
     const res = await client.query<{ current_average_cost: string }>(
       `SELECT current_average_cost::text FROM ingredients WHERE organization_id = $1 AND id = $2;`,
       [organizationId, ingredientId],
@@ -146,50 +207,5 @@ export class PostgresCloudInventoryService implements CloudInventoryCompositionS
     }
 
     return res.rows[0]!.current_average_cost;
-  }
-
-  /**
-   * Explodes recipe into base raw materials using recursive DB lookups and RecipeEngine.
-   */
-  public async explodeRecipeIngredients(
-    client: pg.PoolClient,
-    organizationId: string,
-    recipeId: string,
-  ): Promise<readonly ExplodedIngredient[]> {
-    const rootRecipe = await this.getRecipe(client, organizationId, recipeId);
-    if (!rootRecipe) {
-      throw new RecipeNotFoundError(recipeId);
-    }
-
-    const recipeResolver = async (subId: string) => {
-      return this.getRecipe(client, organizationId, subId);
-    };
-
-    return RecipeEngine.explodeIngredients(rootRecipe, recipeResolver);
-  }
-
-  /**
-   * Computes theoretical recipe costing using real average costs from PostgreSQL.
-   */
-  public async calculateRecipeCost(
-    client: pg.PoolClient,
-    organizationId: string,
-    recipeId: string,
-  ): Promise<RecipeCostCalculationResult> {
-    const rootRecipe = await this.getRecipe(client, organizationId, recipeId);
-    if (!rootRecipe) {
-      throw new RecipeNotFoundError(recipeId);
-    }
-
-    const costResolver = {
-      getIngredientCost: async (ingId: string) => {
-        return this.getIngredientAverageCost(client, organizationId, ingId);
-      },
-      getSubRecipe: async (subId: string) => {
-        return this.getRecipe(client, organizationId, subId);
-      },
-    };
-
-    return RecipeEngine.calculateRecipeCost(rootRecipe, costResolver);
   }
 }

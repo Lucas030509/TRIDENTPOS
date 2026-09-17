@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import dotenv from 'dotenv';
-import { getPool, setTenantContext, migrateUp } from '@trident/database';
+import { getPool, migrateUp, withTenantTransaction } from '@trident/database';
 import { RecipeNotFoundError } from '@trident/inventory';
 import { PostgresCloudInventoryService } from './index.js';
 
@@ -17,9 +17,9 @@ if (!process.env['DATABASE_URL']) {
   }
 }
 
-describe('TRIDENTPOS WP-017 Cloud Server Composition & Application Suite', () => {
+describe('TRIDENTPOS WP-017 Cloud Server Composition & Transaction Boundary Suite', () => {
   const pool = getPool();
-  const service = new PostgresCloudInventoryService();
+  const service = new PostgresCloudInventoryService(pool);
 
   const tenantAId = crypto.randomUUID();
   const tenantBId = crypto.randomUUID();
@@ -145,38 +145,137 @@ describe('TRIDENTPOS WP-017 Cloud Server Composition & Application Suite', () =>
     }
   });
 
-  it('WP017-CLOUD-02: Deterministic subrecipe explosion with nested PostgreSQL records', async () => {
-    const client = await pool.connect();
+  it('TX-017-01 & TX-017-02: Public getRecipe operates WITHOUT caller manual BEGIN / setTenantContext', async () => {
+    // Seed recipe inside Tenant A via helper
+    const recipeId = crypto.randomUUID();
+    await withTenantTransaction(pool, tenantAId, async (client) => {
+      await client.query(
+        `INSERT INTO recipes (id, organization_id, code, name, yield_quantity, yield_unit)
+         VALUES ($1, $2, 'REC-TX-01', 'Direct Recipe Test', 1.0000, 'PZ');`,
+        [recipeId, tenantAId],
+      );
+    });
+
+    // Invoke public service method directly without passing client, BEGIN, or setTenantContext
+    const recipe = await service.getRecipe(tenantAId, recipeId);
+    assert.ok(recipe !== null);
+    assert.equal(recipe.id, recipeId);
+    assert.equal(recipe.organizationId, tenantAId);
+    assert.equal(recipe.code, 'REC-TX-01');
+  });
+
+  it('TX-017-03 & WP017-CLOUD-04: Cross-tenant isolation — Tenant B cannot access Tenant A recipe', async () => {
+    const recipeId = crypto.randomUUID();
+    await withTenantTransaction(pool, tenantAId, async (client) => {
+      await client.query(
+        `INSERT INTO recipes (id, organization_id, code, name, yield_quantity, yield_unit)
+         VALUES ($1, $2, 'REC-TX-03', 'Tenant A Secret Recipe', 1.0000, 'PZ');`,
+        [recipeId, tenantAId],
+      );
+    });
+
+    // Query with Tenant B credentials
+    const recipeForTenantB = await service.getRecipe(tenantBId, recipeId);
+    assert.equal(recipeForTenantB, null, 'Tenant B must receive null for Tenant A recipe');
+
+    await assert.rejects(
+      async () => {
+        await service.explodeRecipeIngredients(tenantBId, recipeId);
+      },
+      (err: unknown) => {
+        assert(err instanceof RecipeNotFoundError);
+        assert.equal(err.recipeId, recipeId);
+        return true;
+      },
+    );
+
+    await assert.rejects(
+      async () => {
+        await service.calculateRecipeCost(tenantBId, recipeId);
+      },
+      (err: unknown) => {
+        assert(err instanceof RecipeNotFoundError);
+        assert.equal(err.recipeId, recipeId);
+        return true;
+      },
+    );
+  });
+
+  it('TX-017-04: Transaction failure triggers ROLLBACK without partial state mutation', async () => {
+    const controlledIngId = crypto.randomUUID();
+
+    // Verify error thrown inside withTenantTransaction rolls back write
+    await assert.rejects(async () => {
+      await withTenantTransaction(pool, tenantAId, async (client) => {
+        await client.query(
+          `INSERT INTO ingredients (id, organization_id, code, name, unit_of_measure, current_average_cost)
+             VALUES ($1, $2, 'ING-FAIL', 'Failing Ingredient', 'KG', 50.0000);`,
+          [controlledIngId, tenantAId],
+        );
+        throw new Error('Controlled transaction failure');
+      });
+    }, /Controlled transaction failure/);
+
+    // Verify ingredient was rolled back and does not exist
+    await withTenantTransaction(pool, tenantAId, async (client) => {
+      const check = await client.query(
+        `SELECT id FROM ingredients WHERE organization_id = $1 AND id = $2;`,
+        [tenantAId, controlledIngId],
+      );
+      assert.equal(check.rows.length, 0, 'Ingredient must have been rolled back');
+    });
+  });
+
+  it('TX-017-05: Transaction-local tenant context does not leak into next pooled connection', async () => {
+    // 1. Run an operation with Tenant A
+    await withTenantTransaction(pool, tenantAId, async (client) => {
+      const cfg = await client.query<{ val: string }>(
+        "SELECT current_setting('app.current_organization_id', true) AS val;",
+      );
+      assert.equal(cfg.rows[0]?.val, tenantAId);
+    });
+
+    // 2. Grab a raw connection from pool without setting tenant context
+    const rawClient = await pool.connect();
     try {
-      await client.query('BEGIN;');
-      await setTenantContext(client, tenantAId);
+      const check = await rawClient.query<{ val: string }>(
+        "SELECT current_setting('app.current_organization_id', true) AS val;",
+      );
+      assert.equal(
+        check.rows[0]?.val,
+        '',
+        'Transaction-local setting must have reverted, leaving no tenant context leakage',
+      );
+    } finally {
+      rawClient.release();
+    }
+  });
 
-      const prodId = crypto.randomUUID();
-      const parentRecipeId = crypto.randomUUID();
-      const subRecipeId = crypto.randomUUID();
-      const ingTomatoId = crypto.randomUUID();
-      const ingCheeseId = crypto.randomUUID();
+  it('TX-017-06 & WP017-CLOUD-02: Nested subrecipe explosion executes in a single tenant transaction', async () => {
+    const prodId = crypto.randomUUID();
+    const parentRecipeId = crypto.randomUUID();
+    const subRecipeId = crypto.randomUUID();
+    const ingTomatoId = crypto.randomUUID();
+    const ingCheeseId = crypto.randomUUID();
 
-      // 1. Seed Product
+    await withTenantTransaction(pool, tenantAId, async (client) => {
       await client.query(
         `INSERT INTO products (id, organization_id, category_id, code, name, product_type, base_price, tax_scheme_id)
-         VALUES ($1, $2, $3, 'PROD-PIZZA', 'Pizza Margherita', 'COMPOSITE', 150.0000, $4);`,
+         VALUES ($1, $2, $3, 'PROD-PIZZA-TX', 'Pizza Margherita TX', 'COMPOSITE', 150.0000, $4);`,
         [prodId, tenantAId, categoryAId, taxSchemeId],
       );
 
-      // 2. Seed Ingredients
       await client.query(
         `INSERT INTO ingredients (id, organization_id, code, name, unit_of_measure, current_average_cost)
          VALUES
-           ($1, $2, 'ING-TOM', 'Tomato', 'KG', 20.0000),
-           ($3, $2, 'ING-CHS', 'Cheese', 'KG', 80.0000);`,
+           ($1, $2, 'ING-TOM-TX', 'Tomato TX', 'KG', 20.0000),
+           ($3, $2, 'ING-CHS-TX', 'Cheese TX', 'KG', 80.0000);`,
         [ingTomatoId, tenantAId, ingCheeseId],
       );
 
-      // 3. Seed Subrecipe (Tomato Sauce batch, yield 2.0000 LT)
       await client.query(
         `INSERT INTO recipes (id, organization_id, product_id, code, name, yield_quantity, yield_unit)
-         VALUES ($1, $2, NULL, 'REC-SAUCE', 'Tomato Sauce Batch', 2.0000, 'LT');`,
+         VALUES ($1, $2, NULL, 'REC-SAUCE-TX', 'Tomato Sauce Batch TX', 2.0000, 'LT');`,
         [subRecipeId, tenantAId],
       );
       await client.query(
@@ -185,10 +284,9 @@ describe('TRIDENTPOS WP-017 Cloud Server Composition & Application Suite', () =>
         [crypto.randomUUID(), tenantAId, subRecipeId, ingTomatoId],
       );
 
-      // 4. Seed Parent Recipe (Pizza, yield 1.0000 PZ, consumes 0.2000 LT Sauce + 0.1500 KG Cheese)
       await client.query(
         `INSERT INTO recipes (id, organization_id, product_id, code, name, yield_quantity, yield_unit)
-         VALUES ($1, $2, $3, 'REC-PIZZA', 'Pizza Recipe', 1.0000, 'PZ');`,
+         VALUES ($1, $2, $3, 'REC-PIZZA-TX', 'Pizza Recipe TX', 1.0000, 'PZ');`,
         [parentRecipeId, tenantAId, prodId],
       );
       await client.query(
@@ -205,62 +303,51 @@ describe('TRIDENTPOS WP-017 Cloud Server Composition & Application Suite', () =>
           ingCheeseId,
         ],
       );
+    });
 
-      // 5. Execute explosion via service
-      const exploded = await service.explodeRecipeIngredients(client, tenantAId, parentRecipeId);
+    // Call public method directly without providing client
+    const exploded = await service.explodeRecipeIngredients(tenantAId, parentRecipeId);
 
-      assert.equal(exploded.length, 2);
-      // Sorted deterministically by ingredientId
-      const expectedIds = [ingCheeseId, ingTomatoId].sort();
-      assert.equal(exploded[0]!.ingredientId, expectedIds[0]);
-      assert.equal(exploded[1]!.ingredientId, expectedIds[1]);
+    assert.equal(exploded.length, 2);
+    const expectedIds = [ingCheeseId, ingTomatoId].sort();
+    assert.equal(exploded[0]!.ingredientId, expectedIds[0]);
+    assert.equal(exploded[1]!.ingredientId, expectedIds[1]);
 
-      const tomatoExploded = exploded.find((e) => e.ingredientId === ingTomatoId)!;
-      // 0.2000 consumed / 2.0000 subrecipe yield = 0.1000 factor. Net = 0.1000 * 1.0000 = 0.1000, Gross = 0.1000 * 1.1000 = 0.1100
-      assert.equal(tomatoExploded.totalQuantity, '0.1000');
-      assert.equal(tomatoExploded.totalGrossQuantity, '0.1100');
+    const tomatoExploded = exploded.find((e) => e.ingredientId === ingTomatoId)!;
+    assert.equal(tomatoExploded.totalQuantity, '0.1000');
+    assert.equal(tomatoExploded.totalGrossQuantity, '0.1100');
 
-      const cheeseExploded = exploded.find((e) => e.ingredientId === ingCheeseId)!;
-      assert.equal(cheeseExploded.totalQuantity, '0.1500');
-      assert.equal(cheeseExploded.totalGrossQuantity, '0.1500');
-
-      await client.query('ROLLBACK;');
-    } finally {
-      client.release();
-    }
+    const cheeseExploded = exploded.find((e) => e.ingredientId === ingCheeseId)!;
+    assert.equal(cheeseExploded.totalQuantity, '0.1500');
+    assert.equal(cheeseExploded.totalGrossQuantity, '0.1500');
   });
 
-  it('WP017-CLOUD-03: Theoretical recipe cost calculation using PostgreSQL average costs', async () => {
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN;');
-      await setTenantContext(client, tenantAId);
+  it('TX-017-07 & WP017-CLOUD-03: Theoretical recipe cost calculation within tenant transaction', async () => {
+    const prodId = crypto.randomUUID();
+    const parentRecipeId = crypto.randomUUID();
+    const subRecipeId = crypto.randomUUID();
+    const ingTomatoId = crypto.randomUUID();
+    const ingCheeseId = crypto.randomUUID();
 
-      const prodId = crypto.randomUUID();
-      const parentRecipeId = crypto.randomUUID();
-      const subRecipeId = crypto.randomUUID();
-      const ingTomatoId = crypto.randomUUID();
-      const ingCheeseId = crypto.randomUUID();
-
+    await withTenantTransaction(pool, tenantAId, async (client) => {
       await client.query(
         `INSERT INTO products (id, organization_id, category_id, code, name, product_type, base_price, tax_scheme_id)
-         VALUES ($1, $2, $3, 'PROD-PIZZA-2', 'Pizza 2', 'COMPOSITE', 160.0000, $4);`,
+         VALUES ($1, $2, $3, 'PROD-PIZZA-CST', 'Pizza Cost TX', 'COMPOSITE', 160.0000, $4);`,
         [prodId, tenantAId, categoryAId, taxSchemeId],
       );
 
-      // Tomato avg cost = 20.0000/KG, Cheese avg cost = 80.0000/KG
       await client.query(
         `INSERT INTO ingredients (id, organization_id, code, name, unit_of_measure, current_average_cost)
          VALUES
-           ($1, $2, 'ING-TOM-2', 'Tomato 2', 'KG', 20.0000),
-           ($3, $2, 'ING-CHS-2', 'Cheese 2', 'KG', 80.0000);`,
+           ($1, $2, 'ING-TOM-CST', 'Tomato Cost', 'KG', 20.0000),
+           ($3, $2, 'ING-CHS-CST', 'Cheese Cost', 'KG', 80.0000);`,
         [ingTomatoId, tenantAId, ingCheeseId],
       );
 
       // Subrecipe Sauce (Yield 2.0000 LT): 1.1000 gross Tomato @ 20.0000 = 22.0000 batch cost. Unit cost = 11.0000/LT
       await client.query(
         `INSERT INTO recipes (id, organization_id, product_id, code, name, yield_quantity, yield_unit)
-         VALUES ($1, $2, NULL, 'REC-SAUCE-2', 'Sauce 2', 2.0000, 'LT');`,
+         VALUES ($1, $2, NULL, 'REC-SAUCE-CST', 'Sauce Cost', 2.0000, 'LT');`,
         [subRecipeId, tenantAId],
       );
       await client.query(
@@ -275,7 +362,7 @@ describe('TRIDENTPOS WP-017 Cloud Server Composition & Application Suite', () =>
       // Total Batch = 14.2000, Unit Cost = 14.2000
       await client.query(
         `INSERT INTO recipes (id, organization_id, product_id, code, name, yield_quantity, yield_unit)
-         VALUES ($1, $2, $3, 'REC-PIZZA-2', 'Pizza Recipe 2', 1.0000, 'PZ');`,
+         VALUES ($1, $2, $3, 'REC-PIZZA-CST', 'Pizza Recipe Cost', 1.0000, 'PZ');`,
         [parentRecipeId, tenantAId, prodId],
       );
       await client.query(
@@ -292,61 +379,15 @@ describe('TRIDENTPOS WP-017 Cloud Server Composition & Application Suite', () =>
           ingCheeseId,
         ],
       );
+    });
 
-      const costResult = await service.calculateRecipeCost(client, tenantAId, parentRecipeId);
+    // Call public method directly without providing client
+    const costResult = await service.calculateRecipeCost(tenantAId, parentRecipeId);
 
-      assert.equal(costResult.recipeId, parentRecipeId);
-      assert.equal(costResult.yieldQuantity, '1.0000');
-      assert.equal(costResult.totalCost, '14.2000');
-      assert.equal(costResult.unitCost, '14.2000');
-      assert.equal(costResult.lineItems.length, 2);
-
-      await client.query('ROLLBACK;');
-    } finally {
-      client.release();
-    }
-  });
-
-  it('WP017-CLOUD-04: Cross-tenant RLS isolation fails closed against unauthorized tenant access', async () => {
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN;');
-
-      // Seed Recipe in Org A
-      await setTenantContext(client, tenantAId);
-      const recipeAId = crypto.randomUUID();
-      await client.query(
-        `INSERT INTO recipes (id, organization_id, code, name, yield_quantity, yield_unit)
-         VALUES ($1, $2, 'REC-ORG-A', 'Org A Recipe', 1.0000, 'PZ');`,
-        [recipeAId, tenantAId],
-      );
-
-      // Attempt to access Org A recipe using Tenant B context -> RecipeNotFoundError
-      await assert.rejects(
-        async () => {
-          await service.explodeRecipeIngredients(client, tenantBId, recipeAId);
-        },
-        (err: unknown) => {
-          assert(err instanceof RecipeNotFoundError);
-          assert.equal(err.recipeId, recipeAId);
-          return true;
-        },
-      );
-
-      await assert.rejects(
-        async () => {
-          await service.calculateRecipeCost(client, tenantBId, recipeAId);
-        },
-        (err: unknown) => {
-          assert(err instanceof RecipeNotFoundError);
-          assert.equal(err.recipeId, recipeAId);
-          return true;
-        },
-      );
-
-      await client.query('ROLLBACK;');
-    } finally {
-      client.release();
-    }
+    assert.equal(costResult.recipeId, parentRecipeId);
+    assert.equal(costResult.yieldQuantity, '1.0000');
+    assert.equal(costResult.totalCost, '14.2000');
+    assert.equal(costResult.unitCost, '14.2000');
+    assert.equal(costResult.lineItems.length, 2);
   });
 });

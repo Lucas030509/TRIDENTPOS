@@ -4,9 +4,11 @@
 * **Work Package**: WP-017 — Inventory Catalog, Multi-Warehouse & Recipe Explosion Engine
 * **Canonical Base SHA**: `083b05fde1d39a82b998abb18cb5fcc1ee8facbd` (`origin/main`)
 * **Base Verification**: PASS (exact match with canonical baseline)
-* **Implementation Branch**: `feat/wp-017-inventory-catalog-recipes-canonical`
+* **Implementation Branch (R1)**: `feat/wp-017-inventory-catalog-recipes-canonical`
+* **R1 Frozen Subject**: `b6d2d763450d440e039238f4b3447e4619a23a5d`
+* **Remediation Branch (R2)**: `feat/wp-017-inventory-catalog-recipes-canonical-r2`
 * **Historical Non-Canonical Branch**: `feature/wp-017-inventory-recipes` (`20398d68de7ecb8017df1731ee5fa5e1c7a66098`)
-* **Historical Candidate Used As Base**: NO (strictly branched fresh from canonical `main` at `083b05fde1d39a82b998abb18cb5fcc1ee8facbd`)
+* **Historical Candidate Used As Base**: NO (strictly branched fresh from canonical baseline)
 * **Historical Branch Modified**: NO
 
 ---
@@ -46,6 +48,7 @@
 * **Integrity Constraints**:
   * Exclusive Source XOR on `recipe_items`: `(ingredient_id IS NOT NULL AND sub_recipe_id IS NULL) OR (ingredient_id IS NULL AND sub_recipe_id IS NOT NULL)`
   * Delete Cascade Policy: RESTRICT (`ON DELETE NO ACTION` / `RESTRICT` on all recipe relationships to prevent unauthorized cascading loss)
+  * Down Migration Policy (QI-ADV-017-01): Clean `DROP TABLE IF EXISTS` without `CASCADE` in reverse dependency order.
   * Scale-4 Precision: `DECIMAL(12,4)` with exact numeric bounds `[-99999999.9999, +99999999.9999]`
 
 ---
@@ -83,7 +86,28 @@
 
 ---
 
-## 6. Verification & Test Execution Evidence
+## 6. R2 Surgical Quick-Integrity Remediation
+
+### A. QI-BLK-017-01 Resolution: Cloud Tenant Transaction Boundary
+* `PostgresCloudInventoryService` encapsulates `pg.Pool` and guarantees all public application operations execute inside a canonical tenant transaction using `withTenantTransaction(this.pool, organizationId, callback)` from `@trident/database`.
+* Callers and consumers do NOT need manual `BEGIN`, `COMMIT`, `ROLLBACK`, or `setTenantContext`.
+* Public API surface:
+  * `getRecipe(organizationId, recipeId)`
+  * `getIngredientAverageCost(organizationId, ingredientId)`
+  * `explodeRecipeIngredients(organizationId, recipeId)`
+  * `calculateRecipeCost(organizationId, recipeId)`
+* Single Transaction per Operation: Recursive subrecipe and ingredient lookups execute inside the SAME established tenant transaction via internal client-scoped helpers (`#getRecipeWithClient`, `#getIngredientAverageCostWithClient`) without opening redundant transactions per recursive node.
+* Rollback-on-error verified: Unhandled exceptions automatically trigger PostgreSQL `ROLLBACK`, leaving zero partial mutation (TX-017-04).
+* Tenant context isolation verified: `app.current_organization_id` reverts at transaction completion, ensuring 0% context leakage across pooled connections (TX-017-05).
+
+### B. QI-ADV-017-01 Resolution: WP-017 Down Migration CASCADE Removal
+* Removed unnecessary `CASCADE` directives from `DROP TABLE` statements in `packages/database/migrations/20260904230000_inventory_catalog_and_recipes.sql`.
+* Reverse dependency drop order: `recipe_items` -> `recipes` -> `ingredients` -> `warehouses`.
+* Proves rollback cannot cascade to or destroy Platform Core tables (`products`, `categories`, `organizations`, `branches`).
+
+---
+
+## 7. Verification & Test Execution Evidence
 
 ### A. Prettier Code Formatting (`npm run format:check`)
 * Result: PASS (All matched files use Prettier code style)
@@ -102,7 +126,7 @@
 
 ### F. Unit & Domain Tests
 * `@trident/inventory`: 22 passed / 0 failed
-* `@trident/cloud-server`: 4 passed / 0 failed
+* `@trident/cloud-server`: 7 passed / 0 failed (TX-017-01..07, WP017-CLOUD-01..04)
 * `@trident/pos`: 38 passed / 0 failed
 * `@trident/core`: 25 passed / 0 failed
 * `@trident/edge`: 168 passed / 0 failed
@@ -111,7 +135,7 @@
 * `@trident/ui`: 1 passed / 0 failed
 
 ### G. PostgreSQL Integration Tests (`@trident/database`)
-* Result: 271 passed / 0 failed (including 11 WP-017 inventory database integration tests)
+* Result: 272 passed / 0 failed (including 12 WP-017 inventory database integration tests covering DB-01..12, Sec 42, and QI-ADV-017-01)
 * Cross-Package Integration Suite (`tests/integration/`): 1 passed / 0 failed
 
 ### H. Electron Runtime Tests (`npm run --prefix packages/edge test:electron`)
@@ -122,7 +146,16 @@
 
 ---
 
-## 7. Changed Files Inventory (20 Files Total)
+## 8. Changed Files Inventory
+
+### A. R1 -> R2 Changed Files (5 Files Total)
+1. `evidence/WP-017_CANONICAL_BUILDER_EVIDENCE.md`
+2. `packages/cloud-server/src/index.ts`
+3. `packages/cloud-server/src/index.test.ts`
+4. `packages/database/migrations/20260904230000_inventory_catalog_and_recipes.sql`
+5. `packages/database/src/inventory.test.ts`
+
+### B. Effective Main -> R2 Changed Files (20 Files Total)
 1. `evidence/WP-017_CANONICAL_BUILDER_EVIDENCE.md` [NEW]
 2. `package-lock.json` [MODIFY]
 3. `packages/cloud-server/package.json` [NEW]
@@ -144,7 +177,7 @@
 19. `packages/inventory/tsconfig.json` [NEW]
 20. `turbo.json` [MODIFY]
 
-* **Changed File Count Including Evidence**: 20
+* **Effective Builder Evidence Files**: 1
 * **Unauthorized Files**: 0
 * **Governing Documents Modified**: NO
 * **PR Created**: NO

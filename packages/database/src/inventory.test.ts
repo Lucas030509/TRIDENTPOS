@@ -625,4 +625,18 @@ describe('TRIDENTPOS WP-017 Inventory & Recipes Database Suite', () => {
       'recipes.product_id must reference Platform Core products(organization_id, id)',
     );
   });
+
+  it('QI-ADV-017-01: WP-017 Down migration contains no destructive CASCADE and preserves Platform Core', async () => {
+    const migrationPath = path.resolve(
+      process.cwd(),
+      'migrations/20260904230000_inventory_catalog_and_recipes.sql',
+    );
+    const sql = fs.readFileSync(migrationPath, 'utf8');
+    const downSection = sql.split(/--\s*Down/i)[1] || '';
+
+    assert.ok(
+      !/DROP\s+TABLE[^\n;]*CASCADE/i.test(downSection),
+      'WP-017 Down migration must NOT contain DROP TABLE ... CASCADE',
+    );
+  });
 });
