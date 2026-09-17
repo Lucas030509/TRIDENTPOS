@@ -42,9 +42,7 @@ export interface KdsWebSocketDispatcherOptions {
    * connection) rather than silently allowing unauthenticated stations --
    * per ADR-005 Sec 9 and the WP-015 security rules (Sec 14).
    */
-  readonly authenticateStation?: (
-    req: http.IncomingMessage,
-  ) => boolean | Promise<boolean>;
+  readonly authenticateStation?: (req: http.IncomingMessage) => boolean | Promise<boolean>;
   /**
    * Optional resync-state provider invoked on every successful connection,
    * sent to that single client as an initial `KDS_RESYNC` frame (ADR-005
@@ -128,7 +126,13 @@ export class KdsWebSocketDispatcher {
         Promise.resolve(options.getResyncSnapshot(req))
           .then((snapshot) => {
             if (ws.readyState === WebSocket.OPEN) {
-              ws.send(JSON.stringify({ type: 'KDS_RESYNC', payload: snapshot, emittedAt: new Date().toISOString() }));
+              ws.send(
+                JSON.stringify({
+                  type: 'KDS_RESYNC',
+                  payload: snapshot,
+                  emittedAt: new Date().toISOString(),
+                }),
+              );
             }
           })
           .catch((err: unknown) => {
@@ -147,7 +151,9 @@ export class KdsWebSocketDispatcher {
 
       ws.on('close', () => {
         this.#clients.delete(ws);
-        this.#logger.info('KDS WebSocket client disconnected', { totalClients: this.#clients.size });
+        this.#logger.info('KDS WebSocket client disconnected', {
+          totalClients: this.#clients.size,
+        });
       });
 
       ws.on('error', (err) => {

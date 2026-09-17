@@ -61,7 +61,12 @@ export function formatKdsTicketEscPos(ticket: EscPosTicketInput): Buffer {
   parts.push(ascii('------------------------------'), LF);
 
   for (const partida of ticket.partidas) {
-    parts.push(CMD_BOLD_ON, ascii(`${partida.quantity} x ${partida.productNameSnapshot}`), LF, CMD_BOLD_OFF);
+    parts.push(
+      CMD_BOLD_ON,
+      ascii(`${partida.quantity} x ${partida.productNameSnapshot}`),
+      LF,
+      CMD_BOLD_OFF,
+    );
     for (const mod of partida.modifiers ?? []) {
       parts.push(ascii(`   + ${mod.modifierNameSnapshot}`), LF);
     }

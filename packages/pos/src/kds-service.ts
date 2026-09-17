@@ -200,7 +200,11 @@ export class KdsDomainService {
   public consultarOrdenesActivas(kdsEstacionId: string): readonly KdsTicket[] {
     const estacion = this.#kdsRepo.getEstacionById(kdsEstacionId);
     if (!estacion) {
-      throw new DomainError(`KDS estacion '${kdsEstacionId}' not found`, 'KDS_ESTACION_NOT_FOUND', 404);
+      throw new DomainError(
+        `KDS estacion '${kdsEstacionId}' not found`,
+        'KDS_ESTACION_NOT_FOUND',
+        404,
+      );
     }
     return this.#kdsRepo.listActiveTicketsByEstacion(kdsEstacionId);
   }
@@ -241,11 +245,7 @@ export class KdsDomainService {
     return ticket;
   }
 
-  #emit(
-    type: KdsDomainEvent['type'],
-    ticket: KdsTicket,
-    tiempoPreparacionMinutos?: number,
-  ): void {
+  #emit(type: KdsDomainEvent['type'], ticket: KdsTicket, tiempoPreparacionMinutos?: number): void {
     if (!this.#eventPublisher) {
       return;
     }

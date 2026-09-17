@@ -84,7 +84,6 @@ export function createKdsRuntime(options: CreateKdsRuntimeOptions): KdsRuntime {
     },
   };
 
-
   const service = new KdsDomainService({ kdsRepo: repo, eventPublisher });
 
   const printerQueueRunner = new PrinterQueueRunner({

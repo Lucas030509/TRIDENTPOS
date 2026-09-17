@@ -87,7 +87,6 @@ export class SqliteKdsRepository implements KdsRepositoryPort, PrinterRepository
     this.#db.executeSchema(KDS_EDGE_SQLITE_SCHEMA);
   }
 
-
   // ==========================================
   // KDS Estacion helpers (test/bootstrap convenience -- not part of the
   // port interface, but required for any caller to actually create
@@ -354,7 +353,11 @@ export class SqliteKdsRepository implements KdsRepositoryPort, PrinterRepository
   }
 
   public assignPrinterToTicket(ticketId: string, printerId: string): void {
-    this.#db.executeMutation(`UPDATE kds_tickets SET printer_id = ? WHERE id = ?;`, printerId, ticketId);
+    this.#db.executeMutation(
+      `UPDATE kds_tickets SET printer_id = ? WHERE id = ?;`,
+      printerId,
+      ticketId,
+    );
   }
 
   // ==========================================

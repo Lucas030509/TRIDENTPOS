@@ -98,7 +98,11 @@ export class EscPosPrinterClient {
         socket.destroy();
       };
 
-      const fail = (reason: PrinterConnectionError['reason'], message: string, cause?: unknown): void => {
+      const fail = (
+        reason: PrinterConnectionError['reason'],
+        message: string,
+        cause?: unknown,
+      ): void => {
         if (settled) return;
         settled = true;
         cleanup();
@@ -113,7 +117,10 @@ export class EscPosPrinterClient {
       };
 
       const connectTimer = setTimeout(() => {
-        fail('TIMEOUT', `Printer connection to ${this.#host}:${this.#port} timed out after ${this.#connectTimeoutMs}ms`);
+        fail(
+          'TIMEOUT',
+          `Printer connection to ${this.#host}:${this.#port} timed out after ${this.#connectTimeoutMs}ms`,
+        );
       }, this.#connectTimeoutMs);
 
       socket.once('error', (err: NodeJS.ErrnoException) => {
@@ -124,7 +131,10 @@ export class EscPosPrinterClient {
         if (connectTimer) clearTimeout(connectTimer);
 
         writeTimer = setTimeout(() => {
-          fail('TIMEOUT', `Printer write to ${this.#host}:${this.#port} timed out after ${this.#writeTimeoutMs}ms`);
+          fail(
+            'TIMEOUT',
+            `Printer write to ${this.#host}:${this.#port} timed out after ${this.#writeTimeoutMs}ms`,
+          );
         }, this.#writeTimeoutMs);
 
         socket.write(payload, (writeErr) => {

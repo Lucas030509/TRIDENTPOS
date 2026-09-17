@@ -83,7 +83,10 @@ describe('TRIDENTPOS WP-015: formatKdsTicketEscPos', () => {
     });
     for (const byte of buf) {
       // Allow the known control bytes (ESC, GS, LF, etc.) or printable ASCII.
-      assert.ok(byte <= 0x7e, `unexpected byte outside printable ASCII/control range: 0x${byte.toString(16)}`);
+      assert.ok(
+        byte <= 0x7e,
+        `unexpected byte outside printable ASCII/control range: 0x${byte.toString(16)}`,
+      );
     }
   });
 });

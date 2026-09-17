@@ -120,9 +120,7 @@ describe('TRIDENTPOS WP-015 / ACR-2026-016: KdsDomainService', () => {
       cuentaId: 'cuenta-1',
       mesaReference: 'Mesa 1',
       kdsEstacionId: COCINA.id,
-      items: [
-        { id: 'p1', productId: 'prod-1', productNameSnapshot: 'Item', quantity: 10000n },
-      ],
+      items: [{ id: 'p1', productId: 'prod-1', productNameSnapshot: 'Item', quantity: 10000n }],
     };
     service.enviarComandaACocina(input);
     assert.throws(() => service.enviarComandaACocina(input), DomainError);
@@ -224,7 +222,12 @@ describe('TRIDENTPOS WP-015 / ACR-2026-016: KdsDomainService', () => {
 
   it('WP015-T07: consultarOrdenesActivas returns only tickets for the requested estacion', () => {
     const repo = new InMemoryKdsRepo();
-    const barra: KdsEstacion = { ...COCINA, id: 'estacion-barra-2', stationType: 'BARRA', name: 'Barra' };
+    const barra: KdsEstacion = {
+      ...COCINA,
+      id: 'estacion-barra-2',
+      stationType: 'BARRA',
+      name: 'Barra',
+    };
     repo.addEstacion(COCINA);
     repo.addEstacion(barra);
     const service = new KdsDomainService({ kdsRepo: repo });

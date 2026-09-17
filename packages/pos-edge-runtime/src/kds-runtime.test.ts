@@ -76,7 +76,11 @@ describe('TRIDENTPOS WP-015 / ACR-2026-016: KDS Runtime Integration Suite', () =
       wsPort: 0,
       authenticateStation: () => true,
     });
-    runtime.repo.createEstacion({ id: COCINA_ID, name: 'Cocina Integracion', stationType: 'COCINA' });
+    runtime.repo.createEstacion({
+      id: COCINA_ID,
+      name: 'Cocina Integracion',
+      stationType: 'COCINA',
+    });
     await runtime.dispatcher.whenListening();
   });
 
@@ -99,13 +103,20 @@ describe('TRIDENTPOS WP-015 / ACR-2026-016: KDS Runtime Integration Suite', () =
       mesaReference: 'Mesa 9',
       kdsEstacionId: COCINA_ID,
       items: [
-        { id: 'partida-integ-1', productId: 'prod-1', productNameSnapshot: 'Enchiladas', quantity: 15000n },
+        {
+          id: 'partida-integ-1',
+          productId: 'prod-1',
+          productNameSnapshot: 'Enchiladas',
+          quantity: 15000n,
+        },
       ],
     });
 
     const received = await client.next();
     assert.equal(received.type, 'ComandaEnviadaACocina');
-    const payload = received.payload as { ticket: { id: string; partidas: Array<{ quantity: string }> } };
+    const payload = received.payload as {
+      ticket: { id: string; partidas: Array<{ quantity: string }> };
+    };
     assert.equal(payload.ticket.id, ticket.id);
     assert.equal(payload.ticket.partidas[0]?.quantity, '1.5000'); // Wire DTO has canonical decimal string
 
@@ -141,13 +152,24 @@ describe('TRIDENTPOS WP-015 / ACR-2026-016: KDS Runtime Integration Suite', () =
       cuentaId: 'cuenta-integ-2',
       mesaReference: 'Mesa 10',
       kdsEstacionId: COCINA_ID,
-      items: [{ id: 'partida-integ-2', productId: 'prod-2', productNameSnapshot: 'Sopa', quantity: 10000n }],
+      items: [
+        {
+          id: 'partida-integ-2',
+          productId: 'prod-2',
+          productNameSnapshot: 'Sopa',
+          quantity: 10000n,
+        },
+      ],
     });
     runtime.repo.assignPrinterToTicket(ticket.id, printer.id);
 
     assert.equal(ticket.status, 'PENDIENTE');
 
-    const runner = new PrinterQueueRunner({ printerRepo: runtime.repo, maxAttempts: 5, connectTimeoutMs: 1000 });
+    const runner = new PrinterQueueRunner({
+      printerRepo: runtime.repo,
+      maxAttempts: 5,
+      connectTimeoutMs: 1000,
+    });
     const results = await runner.runPendingQueueOnce();
     const thisResult = results.find((r) => r.ticketId === ticket.id);
     assert.ok(thisResult);
@@ -168,7 +190,9 @@ describe('TRIDENTPOS WP-015 / ACR-2026-016: KDS Runtime Integration Suite', () =
     const server = net.createServer((socket) => {
       connectionCount += 1;
       if (connectionCount === 1) {
-        socket.on('data', () => (socket.resetAndDestroy ? socket.resetAndDestroy() : socket.destroy()));
+        socket.on('data', () =>
+          socket.resetAndDestroy ? socket.resetAndDestroy() : socket.destroy(),
+        );
         return;
       }
       socket.on('data', (chunk) => received.push(chunk));
@@ -190,11 +214,22 @@ describe('TRIDENTPOS WP-015 / ACR-2026-016: KDS Runtime Integration Suite', () =
         cuentaId: 'cuenta-integ-3',
         mesaReference: 'Mesa 11',
         kdsEstacionId: COCINA_ID,
-        items: [{ id: 'partida-integ-3', productId: 'prod-3', productNameSnapshot: 'Agua', quantity: 20000n }],
+        items: [
+          {
+            id: 'partida-integ-3',
+            productId: 'prod-3',
+            productNameSnapshot: 'Agua',
+            quantity: 20000n,
+          },
+        ],
       });
       runtime.repo.assignPrinterToTicket(ticket.id, printer.id);
 
-      const runner = new PrinterQueueRunner({ printerRepo: runtime.repo, connectTimeoutMs: 1000, writeTimeoutMs: 1000 });
+      const runner = new PrinterQueueRunner({
+        printerRepo: runtime.repo,
+        connectTimeoutMs: 1000,
+        writeTimeoutMs: 1000,
+      });
 
       const firstPass = await runner.runPendingQueueOnce();
       const first = firstPass.find((r) => r.ticketId === ticket.id);
@@ -208,7 +243,10 @@ describe('TRIDENTPOS WP-015 / ACR-2026-016: KDS Runtime Integration Suite', () =
       const finalTicket = runtime.repo.getTicketById(ticket.id);
       assert.equal(finalTicket?.printStatus, 'PRINTED');
       assert.equal(finalTicket?.printAttempts, 2);
-      assert.ok(Buffer.concat(received).length > 0, 'expected the recovered printer to actually receive ESC/POS bytes');
+      assert.ok(
+        Buffer.concat(received).length > 0,
+        'expected the recovered printer to actually receive ESC/POS bytes',
+      );
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
@@ -220,10 +258,24 @@ describe('TRIDENTPOS WP-015 / ACR-2026-016: KDS Runtime Integration Suite', () =
     try {
       db1 = new EdgeDatabaseService({ databasePath: dbPath });
       const repo1 = new SqliteKdsRepository(db1);
-      repo1.createEstacion({ id: 'estacion-restart', name: 'Cocina Restart', stationType: 'COCINA' });
-      repo1.createPrinter({ id: 'printer-restart', name: 'Printer Restart', host: '127.0.0.1', port: 41, kdsEstacionId: 'estacion-restart' });
+      repo1.createEstacion({
+        id: 'estacion-restart',
+        name: 'Cocina Restart',
+        stationType: 'COCINA',
+      });
+      repo1.createPrinter({
+        id: 'printer-restart',
+        name: 'Printer Restart',
+        host: '127.0.0.1',
+        port: 41,
+        kdsEstacionId: 'estacion-restart',
+      });
 
-      const runtime1 = createKdsRuntime({ edgeDb: db1, wsPort: 0, authenticateStation: () => true });
+      const runtime1 = createKdsRuntime({
+        edgeDb: db1,
+        wsPort: 0,
+        authenticateStation: () => true,
+      });
       await runtime1.dispatcher.whenListening();
 
       const ticket = runtime1.service.enviarComandaACocina({
@@ -231,7 +283,14 @@ describe('TRIDENTPOS WP-015 / ACR-2026-016: KDS Runtime Integration Suite', () =
         cuentaId: 'cuenta-restart-1',
         mesaReference: 'Mesa 12',
         kdsEstacionId: 'estacion-restart',
-        items: [{ id: 'partida-restart-1', productId: 'prod-4', productNameSnapshot: 'Cafe', quantity: 10000n }],
+        items: [
+          {
+            id: 'partida-restart-1',
+            productId: 'prod-4',
+            productNameSnapshot: 'Cafe',
+            quantity: 10000n,
+          },
+        ],
       });
 
       const runner1 = new PrinterQueueRunner({ printerRepo: runtime1.repo, connectTimeoutMs: 500 });
@@ -253,7 +312,10 @@ describe('TRIDENTPOS WP-015 / ACR-2026-016: KDS Runtime Integration Suite', () =
         assert.equal(reloadedTicket?.printAttempts, 1);
 
         const pending = repo2.listPendingPrintJobs();
-        assert.ok(pending.some((t) => t.id === ticket.id), 'ticket must remain enqueued for retry after restart');
+        assert.ok(
+          pending.some((t) => t.id === ticket.id),
+          'ticket must remain enqueued for retry after restart',
+        );
       } finally {
         db2.close();
       }
@@ -268,7 +330,9 @@ describe('TRIDENTPOS WP-015 / ACR-2026-016: KDS Runtime Integration Suite', () =
       cuentaId: 'c-prep',
       mesaReference: 'Mesa 15',
       kdsEstacionId: COCINA_ID,
-      items: [{ id: 'part-prep', productId: 'prod-p', productNameSnapshot: 'Torta', quantity: 10000n }],
+      items: [
+        { id: 'part-prep', productId: 'prod-p', productNameSnapshot: 'Torta', quantity: 10000n },
+      ],
     });
 
     runtime.service.iniciarPreparacionOrden(ticket.id, COCINA_ID);
@@ -292,7 +356,14 @@ describe('TRIDENTPOS WP-015 / ACR-2026-016: KDS Runtime Integration Suite', () =
       cuentaId: 'c-recall',
       mesaReference: 'Mesa 16',
       kdsEstacionId: COCINA_ID,
-      items: [{ id: 'part-rec', productId: 'prod-r', productNameSnapshot: 'Quesadilla', quantity: 30000n }],
+      items: [
+        {
+          id: 'part-rec',
+          productId: 'prod-r',
+          productNameSnapshot: 'Quesadilla',
+          quantity: 30000n,
+        },
+      ],
     });
 
     // Incomplete ticket returns null
@@ -326,16 +397,28 @@ describe('TRIDENTPOS WP-015 / ACR-2026-016: KDS Runtime Integration Suite', () =
       db1 = new EdgeDatabaseService({ databasePath: dbPath });
       const repo1 = new SqliteKdsRepository(db1);
       repo1.createEstacion({ id: 'estacion-crash', name: 'Cocina Crash', stationType: 'COCINA' });
-      const printer = repo1.createPrinter({ id: 'printer-crash', name: 'Printer Crash', host: '127.0.0.1', port: 9100, kdsEstacionId: 'estacion-crash' });
+      const printer = repo1.createPrinter({
+        id: 'printer-crash',
+        name: 'Printer Crash',
+        host: '127.0.0.1',
+        port: 9100,
+        kdsEstacionId: 'estacion-crash',
+      });
 
-      const runtime1 = createKdsRuntime({ edgeDb: db1, wsPort: 0, authenticateStation: () => true });
+      const runtime1 = createKdsRuntime({
+        edgeDb: db1,
+        wsPort: 0,
+        authenticateStation: () => true,
+      });
 
       const ticket = runtime1.service.enviarComandaACocina({
         id: 'ticket-crash-1',
         cuentaId: 'c-crash',
         mesaReference: 'Mesa Crash',
         kdsEstacionId: 'estacion-crash',
-        items: [{ id: 'part-crash', productId: 'prod-c', productNameSnapshot: 'Carne', quantity: 10000n }],
+        items: [
+          { id: 'part-crash', productId: 'prod-c', productNameSnapshot: 'Carne', quantity: 10000n },
+        ],
       });
       repo1.assignPrinterToTicket(ticket.id, printer.id);
 
@@ -373,7 +456,10 @@ describe('TRIDENTPOS WP-015 / ACR-2026-016: KDS Runtime Integration Suite', () =
 
         // Verify ticket appears in retry-eligible queue
         const pendingJobs = repo2.listPendingPrintJobs();
-        assert.ok(pendingJobs.some((t) => t.id === ticket.id), 'ticket must appear in pending print queue for retry');
+        assert.ok(
+          pendingJobs.some((t) => t.id === ticket.id),
+          'ticket must appear in pending print queue for retry',
+        );
       } finally {
         db2.close();
       }
@@ -401,13 +487,15 @@ describe('TRIDENTPOS WP-015 / ACR-2026-016: KDS Runtime Integration Suite', () =
       kdsEstacionId: COCINA_ID,
       items: [
         { id: 'part-ws-1', productId: 'p1', productNameSnapshot: 'Ribeye', quantity: 15000n }, // 1.5000
-        { id: 'part-ws-2', productId: 'p2', productNameSnapshot: 'Papas', quantity: 1250n },  // 0.1250
+        { id: 'part-ws-2', productId: 'p2', productNameSnapshot: 'Papas', quantity: 1250n }, // 0.1250
       ],
     });
 
     const event1 = await client.next();
     assert.equal(event1.type, 'ComandaEnviadaACocina');
-    const payload1 = event1.payload as { ticket: { id: string; partidas: Array<{ quantity: string }> } };
+    const payload1 = event1.payload as {
+      ticket: { id: string; partidas: Array<{ quantity: string }> };
+    };
     assert.equal(payload1.ticket.id, ticket.id);
     assert.equal(payload1.ticket.partidas[0]?.quantity, '1.5000');
     assert.equal(payload1.ticket.partidas[1]?.quantity, '0.1250');

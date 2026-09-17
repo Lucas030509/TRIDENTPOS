@@ -54,7 +54,9 @@ describe('TRIDENTPOS WP-015: KdsWebSocketDispatcher (WS /kds/events)', () => {
     const port = dispatcher.getPort();
 
     const clientCount = 5;
-    const clients = await Promise.all(Array.from({ length: clientCount }, () => connectClient(port)));
+    const clients = await Promise.all(
+      Array.from({ length: clientCount }, () => connectClient(port)),
+    );
     assert.equal(dispatcher.getClientCount(), clientCount);
 
     const messagePromises = clients.map((c) => waitForMessage(c));
@@ -131,7 +133,10 @@ describe('TRIDENTPOS WP-015: KdsWebSocketDispatcher (WS /kds/events)', () => {
     console.log(
       `[WP-015 LAN latency] samples=${iterations} avgMs=${avgMs.toFixed(3)} maxMs=${maxMs.toFixed(3)}`,
     );
-    assert.ok(maxMs < 250, `expected loopback broadcast latency well under 250ms, observed ${maxMs}ms`);
+    assert.ok(
+      maxMs < 250,
+      `expected loopback broadcast latency well under 250ms, observed ${maxMs}ms`,
+    );
 
     client.close();
     await dispatcher.close();
