@@ -1,0 +1,61 @@
+name: GOV Hygiene 016 One-Shot Docs Remediation V2
+
+on:
+  push:
+    branches:
+      - automation/gov-hygiene-016-post-01-docs
+
+permissions:
+  contents: write
+
+jobs:
+  remediate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout automation branch
+        uses: actions/checkout@v4
+        with:
+          ref: automation/gov-hygiene-016-post-01-docs
+          fetch-depth: 0
+
+      - name: Apply exact metadata-only remediation
+        run: python3 scripts/gov_hygiene_016_post.py
+
+      - name: Remove transient automation files, validate and commit
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm \
+            .github/workflows/gov-hygiene-016-docs.yml \
+            .github/workflows/gov-hygiene-016-docs-v2.yml \
+            scripts/gov_hygiene_016_post.py
+          git add \
+            ARCHITECTURE_CHANGE_REQUEST_KDS_CONTRACT_DATA_RECONCILIATION.md \
+            ADR/ADR-005-local-lan-communication-protocol.md \
+            FUNCTIONAL_ARCHITECTURE.md \
+            DATA_MODEL.md \
+            DATA_DICTIONARY.md \
+            DATA_AUTHORITY_MATRIX.md \
+            IMPLEMENTATION_PLAN.md
+          git diff --cached --check
+          python3 - <<'PY'
+          import subprocess
+          expected = {
+              '.github/workflows/gov-hygiene-016-docs.yml',
+              '.github/workflows/gov-hygiene-016-docs-v2.yml',
+              'scripts/gov_hygiene_016_post.py',
+              'ARCHITECTURE_CHANGE_REQUEST_KDS_CONTRACT_DATA_RECONCILIATION.md',
+              'ADR/ADR-005-local-lan-communication-protocol.md',
+              'FUNCTIONAL_ARCHITECTURE.md',
+              'DATA_MODEL.md',
+              'DATA_DICTIONARY.md',
+              'DATA_AUTHORITY_MATRIX.md',
+              'IMPLEMENTATION_PLAN.md',
+          }
+          actual = set(subprocess.check_output(['git','diff','--cached','--name-only'], text=True).splitlines())
+          if actual != expected:
+              raise SystemExit(f"Unexpected staged scope: {sorted(actual)}")
+          PY
+          git commit -m "docs(governance): close ACR-2026-016 canonical status metadata"
+          git push origin HEAD:automation/gov-hygiene-016-post-01-docs
