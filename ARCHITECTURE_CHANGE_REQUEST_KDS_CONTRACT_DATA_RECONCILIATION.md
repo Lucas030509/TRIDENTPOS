@@ -5,13 +5,18 @@
 **Document ID:** `ACR-2026-016`
 **Title:** KDS Contract & Data Authority Reconciliation
 **Classification:** ARCHITECTURE CLARIFICATION / DATA AUTHORITY RECONCILIATION / SSOT HARMONIZATION / VALIDATION-DEBT FORMALIZATION
-**Status:** `PROPOSED — PENDING INDEPENDENT REVIEW`
+**Status:** `APPROVED / MERGED / CANONICAL ON MAIN`
 **Date:** 2026-09-16
 **Framework:** `EAAF v1.2.0 @ 7e036f43240b3dc28ccb996e350263598275b2cd`
 **Authoring Roles:** `01_Solution_Architect`, `03_Data_Architect`
 **Originating WP-015 Frozen Subject:** `21f99d901c0b19a99d1a18bcec780055822805e8` (`HOLD — QUICK INTEGRITY REMEDIATION REQUIRED`)
 **Canonical Base:** `f0e21e51c86cb3c0bcdfdce1953dc616ad4169bc`
 **Authoring Branch:** `architecture/acr-2026-016-kds-contract-data-reconciliation-r3`
+**Canonical PR:** `#45`
+**Canonical Merge Commit:** `d17633ab26606baf67029609f9db6d993b5c9909`
+**Product Owner Approval Evidence:** `d3c37383999242100cf23caab3e2e4ba8ce0b03b`
+**Post-Merge CI:** `35229769662` — `SUCCESS`
+**Post-Merge Security:** `35229769855` — `SUCCESS`
 
 ---
 
