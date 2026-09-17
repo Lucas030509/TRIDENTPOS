@@ -11,7 +11,7 @@
 **Authoring Roles:** `01_Solution_Architect`, `03_Data_Architect`
 **Originating WP-015 Frozen Subject:** `21f99d901c0b19a99d1a18bcec780055822805e8` (`HOLD — QUICK INTEGRITY REMEDIATION REQUIRED`)
 **Canonical Base:** `f0e21e51c86cb3c0bcdfdce1953dc616ad4169bc`
-**Authoring Branch:** `architecture/acr-2026-016-kds-contract-data-reconciliation-r2`
+**Authoring Branch:** `architecture/acr-2026-016-kds-contract-data-reconciliation-r3`
 
 ---
 
@@ -118,10 +118,10 @@ This Architecture Change Request (`ACR-2026-016`) provides the formal, binding r
    - `URGENTE`: Maximum priority (e.g. urgent order, re-fire, or expedited comanda).
 4. **Printer Queue Job Statuses (`PrintJobStatus`):**
    - `PENDING`: Initial state upon ticket creation before submission to queue runner.
-   - `QUEUED`: Enqueued in memory for asynchronous network dispatch.
-   - `PRINTING`: Active raw socket transmission in progress to ESC/POS port 9100.
-   - `PRINTED`: Successfully acknowledged/sent to printer device.
-   - `FAILED`: Print job failed after exhaustion of retries (does not block kitchen workflow).
+   - `QUEUED`: Print attempt did not complete successfully and the ticket remains durably persisted in Edge SQLite (`kds_tickets.print_status = 'QUEUED'`) as retry-eligible work. This state survives process, runtime, or database restarts according to the persistent queue design (it is NOT an ephemeral, in-memory, or process-local queue).
+   - `PRINTING`: Declared print-job lifecycle state representing an active transmission attempt. Note: The WP-015 R1 Frozen Subject declared this state in the domain vocabulary (`PrintJobStatus`) but did not persist/materialize the transition in `PrinterQueueRunner` prior to socket transmission. Future WP-015 remediation must explicitly reconcile this state with the runtime implementation (either by materializing the transition consistently if retained by the canonical contract, or obtaining governed reviewer direction before removing it). R1 must not be described as already demonstrating a persisted `PRINTING` transition.
+   - `PRINTED`: ESC/POS payload successfully delivered through the configured TCP transport without a detected transport-layer error; the socket write completed and connection closed cleanly. `PRINTED` does NOT prove physical paper output, nor does it represent a hardware-level print acknowledgement unless a future governed device-status protocol explicitly adds that capability.
+   - `FAILED`: Print job failed after exhaustion of retries (does not block kitchen workflow; recorded durably in SQLite with `last_print_error`).
 5. **Printer Hardware Statuses (`PrinterStatus`):**
    - `ONLINE`: Socket connectivity verified.
    - `OFFLINE`: Socket unreachable or connection refused.
