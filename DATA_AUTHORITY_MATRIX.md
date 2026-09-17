@@ -1,9 +1,9 @@
 # DATA AUTHORITY MATRIX — ERP RESTAURANTES / TRIDENTPOS
 
 > [!NOTE]
-> **ACR-2026-016 PROPOSED ARCHITECTURE CHANGE — PENDING GOVERNANCE APPROVAL**
+> **ACR-2026-016 APPROVED / MERGED / CANONICAL ON MAIN** (PR `#45`, canonical merge commit `d17633ab26606baf67029609f9db6d993b5c9909`)
 >
-> Proposed amendment under `ACR-2026-016`: KDS Contract & Data Authority Reconciliation. Formalizes `kds_tickets` + `kds_ticket_partidas` as the sole authoritative Edge runtime entities for KDS production orders, `kds_estaciones` for station config, `impresoras_red` for printer config, and designates historical `kds_ordenes` as superseded and non-writable. Pending formal independent review and Product Owner approval.
+> Canonical amendment under `ACR-2026-016`: KDS Contract & Data Authority Reconciliation. Formalizes `kds_tickets` + `kds_ticket_partidas` as the sole authoritative Edge runtime entities for KDS production orders, `kds_estaciones` for station config, `impresoras_red` for printer config, and designates historical `kds_ordenes` as superseded and non-writable.
 
 > [!NOTE]
 > **ACR-2026-011 APPROVED / MERGED / CANONICAL ON MAIN — G9**
@@ -11,8 +11,8 @@
 > The additions in this document relating to WP-009 (`enrollment_tokens`, `station_credentials`, `edge_security_audit`) represent governance overlays formally approved and merged into canonical main under G9 (`0e50fe12ba7a95638c8efe57d4cd9c598b56daa9`). The underlying baseline remains `APPROVED / FROZEN — 2026-09-01`.
 
 **Document ID:** `ARCH-AUT-001`
-**Version:** `1.2 PROPOSED OVERLAY — ACR-2026-016` (Underlying baseline: `1.0 APPROVED / FROZEN — 2026-09-01` with ACR-2026-011 Canonical Overlay — G9)
-**Status:** `PROPOSED ARCHITECTURE CHANGE — PENDING GOVERNANCE APPROVAL`
+**Version:** `1.2 MERGED / CANONICAL ON MAIN — ACR-2026-016` (Underlying baseline: `1.0 APPROVED / FROZEN — 2026-09-01` with ACR-2026-011 Canonical Overlay — G9)
+**Status:** `ACR-2026-016: APPROVED / MERGED / CANONICAL ON MAIN` (PR `#45`, canonical merge commit `d17633ab26606baf67029609f9db6d993b5c9909`)
 **Date:** 2026-09-16
 **Framework:** `EAAF v1.2.0 @ 7e036f43240b3dc28ccb996e350263598275b2cd`
 **Author Agent:** `01_Solution_Architect` & `03_Data_Architect`

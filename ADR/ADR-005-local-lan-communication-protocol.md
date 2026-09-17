@@ -1,9 +1,9 @@
 # ADR-005: Protocolo de Comunicación en Red Local (LAN) para TRIDENTPOS
 
 > [!NOTE]
-> **ACR-2026-016 PROPOSED ARCHITECTURE CHANGE — PENDING GOVERNANCE APPROVAL**
+> **ACR-2026-016 APPROVED / MERGED / CANONICAL ON MAIN** (PR `#45`, canonical merge commit `d17633ab26606baf67029609f9db6d993b5c9909`)
 >
-> Proposed amendment under `ACR-2026-016`: KDS Contract & Data Authority Reconciliation. Reaffirms the physical LAN 20-client saturation benchmark requirement (`< 5 ms` target latency) and formalizes performance validation debt `PERF-VAL-015-01`, owned for empirical hardware discharge by `WP-028` (Hardware Benchmarking & Release Packaging). Software loopback tests in `WP-015` qualify as software-only evidence and do not discharge physical LAN validation. Pending formal independent review and Product Owner approval.
+> Canonical amendment under `ACR-2026-016`: KDS Contract & Data Authority Reconciliation. Reaffirms the physical LAN 20-client saturation benchmark requirement (`< 5 ms` target latency) and formalizes performance validation debt `PERF-VAL-015-01`, owned for empirical hardware discharge by `WP-028` (Hardware Benchmarking & Release Packaging). Software loopback tests in `WP-015` qualify as software-only evidence and do not discharge physical LAN validation. Product Owner approval and post-merge validation are complete; `PERF-VAL-015-01` remains OPEN until discharged by `WP-028`.
 
 **Status:** `ACCEPTED WITH VALIDATION REQUIRED` (Validation Debt `PERF-VAL-015-01` tracked for discharge in `WP-028`)
 **Date:** 2026-09-01

@@ -1,13 +1,13 @@
 # FUNCTIONAL ARCHITECTURE — ERP RESTAURANTES
 
 > [!NOTE]
-> **ACR-2026-016 PROPOSED ARCHITECTURE CHANGE — PENDING GOVERNANCE APPROVAL**
+> **ACR-2026-016 APPROVED / MERGED / CANONICAL ON MAIN** (PR `#45`, canonical merge commit `d17633ab26606baf67029609f9db6d993b5c9909`)
 >
-> Proposed amendment under `ACR-2026-016`: Clarification of KDS functional contracts, formalization of `RecuperarOrdenRecall(ordenProduccionId, ventanaMaxMinutos = 120)` as an id-keyed query anchored on `completed_at`, and inclusion of operational `tiempoPreparacionMinutos` persistence and event propagation in `OrdenProduccionConfirmadaEnKDS`. Pending independent review and Product Owner approval.
+> Canonical amendment under `ACR-2026-016`: clarification of KDS functional contracts, formalization of `RecuperarOrdenRecall(ordenProduccionId, ventanaMaxMinutos = 120)` as an id-keyed query anchored on `completed_at`, and inclusion of operational `tiempoPreparacionMinutos` persistence and event propagation in `OrdenProduccionConfirmadaEnKDS`.
 
 **Document ID:** `ARCH-FUNC-001`
-**Version:** `1.4 PROPOSED OVERLAY — ACR-2026-016` (Underlying baseline: `1.3 NORMALIZED / REMEDIATED — 2026-09-01`)
-**Status:** `PROPOSED ARCHITECTURE CHANGE — PENDING GOVERNANCE APPROVAL`
+**Version:** `1.4 MERGED / CANONICAL ON MAIN — ACR-2026-016` (Underlying baseline: `1.3 NORMALIZED / REMEDIATED — 2026-09-01`)
+**Status:** `ACR-2026-016: APPROVED / MERGED / CANONICAL ON MAIN` (PR `#45`, canonical merge commit `d17633ab26606baf67029609f9db6d993b5c9909`)
 **Date:** 2026-09-16
 **Baseline:** `EAAF v1.2.0 @ 7e036f43240b3dc28ccb996e350263598275b2cd`
 **Supersedes:** `FUNCTIONAL_ARCHITECTURE.md v1.2`
