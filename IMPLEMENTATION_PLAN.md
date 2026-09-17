@@ -1,33 +1,38 @@
 # IMPLEMENTATION PLAN — ERP RESTAURANTES / TRIDENTPOS
 
 > [!NOTE]
+> **ACR-2026-016 PROPOSED ARCHITECTURE CHANGE — PENDING GOVERNANCE APPROVAL**
+>
+> Proposed amendment under `ACR-2026-016`: KDS Contract & Data Authority Reconciliation. Establishes `kds_tickets` as the sole authoritative Edge runtime entity (classifying historical `kds_ordenes` as superseded/non-writable), reconciles `RecuperarOrdenRecall` as id-keyed by `ordenProduccionId` anchored on `completed_at`, canonicalizes operational `preparation_time_minutes` persistence and event propagation, enforces `ADR-012` Scale 4 integer quantities on `kds_ticket_partidas`, and formalizes performance validation debt `PERF-VAL-015-01` owned by `WP-028`. Pending formal review and Product Owner approval.
+
+> [!NOTE]
 > **ACR-2026-015 MERGED / CANONICAL ON MAIN** (PR `#43`, canonical merge commit `456f75e854d62012af899cd2a467446375e5d65f`)
 >
 > Amendment under `ACR-2026-015` (Salón Productization, POS Settlement & Frontend Execution Decomposition): insertion of additive Work Packages `WP-014A: Dining Operations Expansion` (Wave 4) and `WP-016C: POS Payment Orchestration & Account Settlement` (Wave 4); conversion of executable `WP-026` into a non-executable umbrella/milestone decomposed into `WP-026A`–`WP-026D` (Wave 8); a Frontend Architecture Gate (`FRONTEND_ARCHITECTURE.md`, authored by `05_Frontend_Architect`) inserted as a non-executable prerequisite before `WP-026A` START; correction of `WP-016`'s `Bounded Context` label per advisory `ARCH-ADV-013-01`; and an updated `WP-027` E2E lifecycle. Effective executable roadmap: 29 → 34 Work Packages, no existing WP renumbered. Independently reviewed (`01_Solution_Architect`, `03_Data_Architect`, `05_Frontend_Architect`, `06_UX_UI_Design_Architect`, `08_Security_Architect` — 5/5 PASS WITH ADVISORIES, 0 blockers across the R1 panel, then a fresh 5/5 PASS WITH ADVISORIES, 0 blockers R3 panel on the merged subject), synthesized (Coordinator Synthesis: `8fc490f3df1945c21f3a651767618d6cf133e1ad:evidence/ACR-2026-015_R1_COORDINATOR_SYNTHESIS.md` — sidecar commit, not present in this tree), and approved by the Product Owner (Product Owner Approval: `3808c25285018888d5f31113cab64cdca4192c31:evidence/ACR-2026-015_R1_PRODUCT_OWNER_APPROVAL.md` — sidecar commit, not present in this tree), subject to 11 binding downstream conditions (`FE`/`DATA`/`UX`/`SEC-COND-015-0x`) carried forward as mandatory Acceptance Criteria on the WP entries above. Reservations remain explicitly excluded from this productization. Protected Product Owner decisions (`OQ-SSOT-01`, `OQ-SSOT-02`, `OQ-SSOT-06`, `OQ-SSOT-07`, `OQ-ARCH-01`) remain OPEN and are not touched by this amendment. `ARCH-ADV-013-01` is remediated by this merge's `WP-016` label correction (see line ~686 below) and is `CLOSED BY CANONICAL MERGE`. See `evidence/ACR-2026-015_CANONICALIZATION_EVIDENCE.md` for full governance provenance. *(Current-state corrected post-merge — GOV-HYGIENE-015-POST-01; this banner previously read "PENDING CANONICAL MERGE".)*
 
 > [!NOTE]
 > **ACR-2026-014 MERGED / CANONICAL ON MAIN**
-> 
+>
 > Amendment under `ACR-2026-014` / `ADR-014`: Insertion of additive prerequisite work package `WP-016B: Platform Core Master Catalog Foundation (Categories & Products)` in Wave 4, and update of `WP-017` prerequisites to `WP-004, WP-016B` with strict prohibition on Inventory-owned products. Merged to canonical `main` at `d102f5296c9175c485aeb1a4bf7b5af3a93173b5`; `WP-016B` itself completed and merged at `f655551085dea3cff887a411adec4026842aed07`. *(Corrected by `ACR-2026-015` Canonical Amendment R1 — CA-QI-015-24: this banner previously and incorrectly stated `PROPOSED / PENDING GOVERNANCE APPROVAL`, which was factually stale by the time this candidate was prepared.)*
 
 > [!NOTE]
 > **ACR-2026-013 MERGED / CANONICAL ON MAIN**
-> 
+>
 > Amendment under `ACR-2026-013`: Harmonization of Edge exact fixed-point signed integer storage (`INTEGER` scale 4, `ADR-012`) and monorepo package composition topology (`ADR-013`) for WP-014 (`@trident/pos` + `@trident/pos-edge-runtime`) and WP-017 (`@trident/inventory` + `@trident/cloud-server`). Merged to canonical `main`: Exact Numerics & Bounded-Context Composition Model at `dceb4cf90fb75c7b32c90a86a616a341a5288ba3`; Package Dependency Graph Enforcement at `38062575ceed063c8f03af5a5c473d140dd264df`. *(Corrected by `ACR-2026-015` Canonical Amendment R1 — CA-QI-015-24: this banner previously and incorrectly stated `PROPOSED / PENDING GOVERNANCE APPROVAL`, which was factually stale by the time this candidate was prepared.)*
 
 > [!NOTE]
 > **ACR-2026-011 APPROVED / MERGED / CANONICAL ON MAIN — G9**
-> 
+>
 > The additions and test specifications in this document relating to WP-009 (`DATA-INV-WP009-01`, `StationPinStore`, `EdgeSecureStore`, `edge_security_audit`, exact test obligations) represent governance overlays formally approved and merged into canonical main under G9 (`0e50fe12ba7a95638c8efe57d4cd9c598b56daa9`). The underlying baseline remains `APPROVED / FROZEN — 2026-09-03`.
 
-**Document ID:** `PLAN-IMP-001`  
-**Version:** `1.3 MERGED / CANONICAL ON MAIN — ACR-2026-015` (Underlying baseline: `1.0 APPROVED / FROZEN — 2026-09-03` with ACR-2026-011 Canonical Overlay — G9; ACR-2026-013, ACR-2026-014, and ACR-2026-015 overlays are all `MERGED / CANONICAL ON MAIN`) *(current-state corrected post-merge — GOV-HYGIENE-015-POST-01; previously read "1.3 CANDIDATE OVERLAY — ACR-2026-015")*  
-**Status:** `ACR-2026-015: MERGED / CANONICAL ON MAIN` (PR `#43`, canonical merge commit `456f75e854d62012af899cd2a467446375e5d65f`; `ACR-2026-013`/`ACR-2026-014`/`ACR-2026-015` are all canonical on `main`; see banners above) *(current-state corrected post-merge — GOV-HYGIENE-015-POST-01; previously read "PRODUCT OWNER APPROVED / GATE PASSED — PENDING CANONICAL MERGE")*  
-**Date:** `2026-09-13`  
-**Author Agent:** `01_Solution_Architect` (Overlay Synthesis: `01_Solution_Architect`)  
-**Target Gate:** `gates/IMPLEMENTATION_READINESS_GATE.md`  
-**Governing Framework:** `EAAF v1.2.0 @ 7e036f43240b3dc28ccb996e350263598275b2cd`  
-**Immutable Architecture Baseline Commit:** `6c31b64c435d50177e192fc6c5b7e83e18ffd87f`  
+**Document ID:** `PLAN-IMP-001`
+**Version:** `1.3 MERGED / CANONICAL ON MAIN — ACR-2026-015` (Underlying baseline: `1.0 APPROVED / FROZEN — 2026-09-03` with ACR-2026-011 Canonical Overlay — G9; ACR-2026-013, ACR-2026-014, and ACR-2026-015 overlays are all `MERGED / CANONICAL ON MAIN`) *(current-state corrected post-merge — GOV-HYGIENE-015-POST-01; previously read "1.3 CANDIDATE OVERLAY — ACR-2026-015")*
+**Status:** `ACR-2026-015: MERGED / CANONICAL ON MAIN` (PR `#43`, canonical merge commit `456f75e854d62012af899cd2a467446375e5d65f`; `ACR-2026-013`/`ACR-2026-014`/`ACR-2026-015` are all canonical on `main`; see banners above) *(current-state corrected post-merge — GOV-HYGIENE-015-POST-01; previously read "PRODUCT OWNER APPROVED / GATE PASSED — PENDING CANONICAL MERGE")*
+**Date:** `2026-09-13`
+**Author Agent:** `01_Solution_Architect` (Overlay Synthesis: `01_Solution_Architect`)
+**Target Gate:** `gates/IMPLEMENTATION_READINESS_GATE.md`
+**Governing Framework:** `EAAF v1.2.0 @ 7e036f43240b3dc28ccb996e350263598275b2cd`
+**Immutable Architecture Baseline Commit:** `6c31b64c435d50177e192fc6c5b7e83e18ffd87f`
 
 ---
 
@@ -659,21 +664,31 @@ Dining room, counter orders, kitchen display (KDS), cash drawer, Cortes X/Z, and
 
 #### `WP-015`: Kitchen Display System (KDS) LAN Event Dispatcher & Printer Service
 * **Bounded Context:** TRIDENTPOS
-* **Frozen Requirements:** `FUNCTIONAL_ARCHITECTURE.md` Sec. 3; `ADR-005`
-* **ADRs:** `ADR-005`
-* **Data Objects:** SQLite `kds_estaciones`, `kds_tickets`, `kds_ticket_partidas`, `impresoras_red`
-* **APIs / Contracts:** Local WebSocket broadcast (`WS /kds/events`), ESC/POS raw socket printer service
+* **Frozen Requirements:** `FUNCTIONAL_ARCHITECTURE.md` Sec. 3, 6.1; `ADR-005`, `ADR-012`, `ADR-013`, `ACR-2026-016`
+* **ADRs:** `ADR-005`, `ADR-012`, `ADR-013`
+* **Data Objects:** SQLite `kds_estaciones`, `kds_tickets`, `kds_ticket_partidas`, `impresoras_red` (`kds_tickets` is the sole authoritative entity for KDS production orders; historical `kds_ordenes` is superseded and non-writable per `ACR-2026-016`).
+* **APIs / Contracts:** Local WebSocket broadcast (`WS /kds/events`), ESC/POS raw socket printer service, domain commands/queries (`EnviarComandaACocina`, `IniciarPreparacionOrden`, `ConfirmarOrdenSurtida`, `ConsultarOrdenesActivas`, `RecuperarOrdenRecall`).
 * **Builder Agent:** `16_Native_Edge_Developer`
 * **Specialist Reviewer:** `01_Solution_Architect`
 * **Code Reviewer:** `11_Code_Reviewer`
 * **Prerequisites:** `WP-014`
-* **Dependencies:** Raw TCP socket (port 9100) for ESC/POS, WebSockets for KDS screens.
-* **Inputs:** `ADR-005`, `FUNCTIONAL_ARCHITECTURE.md` Sec. 3
-* **Outputs:** Local WebSocket pub/sub engine broadcasting new order events to connected KDS screens; ESC/POS network ticket formatter with queue and retry mechanism.
-* **Acceptance Criteria:** KDS displays new comanda ticket within LAN target latency; handles printer offline state gracefully without crashing order flow; queues unprinted tickets.
-* **Tests:** LAN broadcast latency test; printer paper-out / network disconnect test verifying queue persistence in SQLite.
+* **Dependencies:** Raw TCP socket (port 9100) for ESC/POS, WebSockets for KDS screens, SQLite 3 (WAL).
+* **Inputs:** `ADR-005`, `ADR-012`, `ADR-013`, `FUNCTIONAL_ARCHITECTURE.md` Sec. 3 & 6.1, `ACR-2026-016`
+* **Outputs:** Local WebSocket pub/sub engine broadcasting new order events to connected KDS screens; ESC/POS network ticket formatter with queue and retry mechanism; KDS domain service with recall and operational preparation-time tracking.
+* **Acceptance Criteria (reconciled per `ACR-2026-016`):**
+  1. `RecuperarOrdenRecall` is strictly id-keyed by `ordenProduccionId` and validates eligibility against the `completed_at` anchor within `ventanaMaxMinutos = 120`, returning the single ticket or null without state mutation.
+  2. `ConfirmarOrdenSurtida` captures `tiempoPreparacionMinutos`, persists it in `kds_tickets.preparation_time_minutes` (non-negative integer `>= 0`), and propagates it in the emitted `OrdenProduccionConfirmadaEnKDS` domain event.
+  3. `kds_ticket_partidas.quantity` strictly conforms to `ADR-012` (SQLite `INTEGER NOT NULL` scale-4 / factor 10,000, domain `bigint`, wire canonical decimal string `"1.0000"`).
+  4. `kds_tickets` + `kds_ticket_partidas` is the sole authoritative representation for KDS production orders; `kds_ordenes` is classified as superseded and non-writable.
+  5. Handles printer offline / disconnected state gracefully without crashing order flow or dropping tickets; unprinted tickets queued in `kds_tickets`.
+  6. Software loopback latency tests are qualified as software-only evidence and do not claim satisfaction of physical LAN saturation benchmarks.
+  7. `PERF-VAL-015-01` remains OPEN and is formally owned for physical LAN saturation discharge by `WP-028`.
+* **Tests:** KDS domain lifecycle test (transitions, id-keyed recall, preparation time persistence and event emission); LAN broadcast latency test; printer paper-out / network disconnect test verifying queue persistence in SQLite.
 * **Security Debt:** None
-* **Evidence Required:** KDS event timing log and printer failure recovery test log.
+* **Performance / Hardware Validation Debt:** `PERF-VAL-015-01` (KDS Physical LAN Latency & 20-Client Saturation Validation) — `OPEN — OWNED BY WP-028`.
+* **Evidence Required:** KDS event timing log, printer failure recovery test log, and builder evidence `evidence/WP-015_BUILDER_EVIDENCE.md` complying with:
+  - *Evidence Advisory 015-A:* The changed-files count heading must state the total inclusive of the evidence file itself (e.g. `Changed Files (N total, including this evidence file)`).
+  - *Evidence Advisory 015-B:* Explicitly separate lack of regression from pre-existing environment-only Electron sandbox limitations.
 * **Rollback:** Disable specific printer route in config.
 * **Feature Flag:** NO
 * **Migration Impact:** None (Edge DB)
@@ -1383,10 +1398,11 @@ Every one of the 11 cataloged Security Validation Debts is mapped to concrete Wo
 
 ---
 
-## 12. Data & Solution Residual Risk Mapping
+## 12. Data & Solution Residual Risk & Validation Debt Mapping
 
-| Risk ID | Title | Assigned WP | Owning Agent | Validation & Mitigation Method |
+| Debt / Risk ID | Title | Assigned WP | Owning Agent | Validation & Mitigation Method |
 |---|---|---|---|---|
+| **`PERF-VAL-015-01`** | KDS Physical LAN Latency & 20-Client Saturation Validation | `WP-015`, `WP-028` | `18_DevOps_Engineer` / `16_Native_Edge_Developer` | Dedicated physical LAN benchmark with 20 concurrent WebSocket clients measuring p50/p95/max latency against `< 5 ms` target under realistic network conditions (`ADR-005` Sec. 11). |
 | **`DAT-04`** | SQLite Power-Loss Durability on SSD Cache | `WP-008`, `WP-028` | `16_Native_Edge_Developer` | Power-loss testing on consumer SSDs; dual `PRAGMA synchronous` (NORMAL / FULL for Corte Z); flush-barrier validation. |
 | **`DAT-08`** | Disaster Recovery Cold-Restore Simulation | `WP-027` | `18_DevOps_Engineer` | Automated DR drill wiping Edge database and verifying catalog bootstrap from Cloud in $< 30\text{ min}$. |
 | **`RSK-08`** | SSD Volatile Cache Loss | `WP-008`, `WP-028` | `16_Native_Edge_Developer` | Recommend hardware UPS with auto-shutdown daemon; test simulated power cut during active transaction. |

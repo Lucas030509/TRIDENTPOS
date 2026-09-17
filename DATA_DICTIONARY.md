@@ -1,22 +1,27 @@
 # DATA DICTIONARY — ERP RESTAURANTES / TRIDENTPOS
 
 > [!NOTE]
-> **ACR-2026-013 PROPOSED ARCHITECTURE CHANGE — PENDING GOVERNANCE APPROVAL**
-> 
-> Proposed amendment under `ACR-2026-013`: Harmonization of Edge SQLite monetary representation from floating point to exact signed 64-bit `INTEGER` (Fixed-Point Escala 4: factor $10^4 = 10,000$, `ADR-012`). Pending formal review and Product Owner approval.
+> **ACR-2026-016 PROPOSED ARCHITECTURE CHANGE — PENDING GOVERNANCE APPROVAL**
+>
+> Proposed amendment under `ACR-2026-016`: KDS Contract & Data Authority Reconciliation. Adds dictionary definitions for authoritative KDS entities (`kds_estaciones`, `impresoras_red`, `kds_tickets`, `kds_ticket_partidas`), formalizes `preparation_time_minutes` (INTEGER NULL `>= 0`) and ADR-012 scale-4 integer `quantity`, and classifies historical `kds_ordenes` as superseded/non-writable. Pending formal independent review and Product Owner approval.
+
+> [!NOTE]
+> **ACR-2026-013 APPROVED / MERGED / CANONICAL ON MAIN** (PR `#42`, merge commit `b68019b7a42145b2bb50c822394747aa1f79cbb6`)
+>
+> Harmonization of Edge SQLite monetary representation from floating point to exact signed 64-bit `INTEGER` (Fixed-Point Escala 4: factor $10^4 = 10,000$, `ADR-012`).
 
 > [!NOTE]
 > **ACR-2026-011 APPROVED / MERGED / CANONICAL ON MAIN — G9**
-> 
+>
 > The additions in this document relating to WP-009 (`enrollment_tokens`, `station_credentials`, `edge_security_audit`) represent governance overlays formally approved and merged into canonical main under G9 (`0e50fe12ba7a95638c8efe57d4cd9c598b56daa9`). The underlying baseline remains `APPROVED / FROZEN — 2026-09-01`.
 
-**Document ID:** `ARCH-DIC-001`  
-**Version:** `1.1 PROPOSED OVERLAY — ACR-2026-013` (Underlying baseline: `1.0 APPROVED / FROZEN — 2026-09-01` with ACR-2026-011 Canonical Overlay — G9)  
-**Status:** `PROPOSED ARCHITECTURE CHANGE — PENDING GOVERNANCE APPROVAL`  
-**Date:** 2026-09-13  
-**Framework:** `EAAF v1.2.0 @ 7e036f43240b3dc28ccb996e350263598275b2cd`  
-**Author Agent:** `01_Solution_Architect` (Original author: `03_Data_Architect`)  
-**Approved Solution Baseline:** `e35205906055a8425ab875d05789652b3c3497b7` (Tag `solution-architecture-v1.3-approved`)  
+**Document ID:** `ARCH-DIC-001`
+**Version:** `1.3 PROPOSED OVERLAY — ACR-2026-016` (Underlying baseline: `1.0 APPROVED / FROZEN — 2026-09-01` with ACR-2026-011 and ACR-2026-013 Canonical Overlays)
+**Status:** `PROPOSED ARCHITECTURE CHANGE — PENDING GOVERNANCE APPROVAL`
+**Date:** 2026-09-16
+**Framework:** `EAAF v1.2.0 @ 7e036f43240b3dc28ccb996e350263598275b2cd`
+**Author Agent:** `01_Solution_Architect` & `03_Data_Architect`
+**Approved Solution Baseline:** `e35205906055a8425ab875d05789652b3c3497b7` (Tag `solution-architecture-v1.3-approved`)
 
 ---
 
@@ -128,6 +133,44 @@
 | `pagos` | `payment_method` | VARCHAR(50) | NO | Confidential | `EFECTIVO`, `TARJETA`, `TRANSFERENCIA`, `RESTCARD`, `CXC`. |
 | `outbox_queue` | `client_op_id` | TEXT / UUID | NO | Internal | UUIDv4 generado determinísticamente por el cliente antes del envío. |
 | `outbox_queue` | `idempotency_key` | TEXT | NO | Internal | Clave lógica compuesta única: `org:branch:aggType:aggId:action:clientOpId`. |
+| `kds_estaciones` | `id` | TEXT | NO | Internal | Identificador único de estación KDS local (UUID/TEXT). Clave primaria. |
+| `kds_estaciones` | `name` | TEXT | NO | Internal | Nombre descriptivo de la estación ('Cocina', 'Barra'). |
+| `kds_estaciones` | `station_type` | TEXT | NO | Internal | Tipo de estación: `COCINA`, `BARRA`. |
+| `kds_estaciones` | `status` | TEXT | NO | Internal | Estado operativo de la estación: `ACTIVA`, `INACTIVA`. |
+| `kds_estaciones` | `created_at` | TEXT | NO | Internal | Timestamp UTC ISO 8601 de creación del registro. |
+| `impresoras_red` | `id` | TEXT | NO | Internal | Identificador único de impresora de red local (UUID/TEXT). Clave primaria. |
+| `impresoras_red` | `name` | TEXT | NO | Internal | Nombre descriptivo de la impresora ('Cocina ESC/POS', 'Barra Ticket'). |
+| `impresoras_red` | `host` | TEXT | NO | Internal | Dirección IP fija o hostname en la LAN local para socket TCP crudo (puerto 9100). |
+| `impresoras_red` | `port` | INTEGER | NO | Internal | Puerto TCP de escucha del servicio de impresión (default 9100). |
+| `impresoras_red` | `kds_estacion_id` | TEXT | SÍ | Internal | Estación KDS asignada. Clave foránea `kds_estaciones(id)`. |
+| `impresoras_red` | `status` | TEXT | NO | Internal | Estado de conexión con el dispositivo de red: `ONLINE`, `OFFLINE`, `UNKNOWN`. |
+| `impresoras_red` | `last_seen_at` | TEXT | SÍ | Internal | Timestamp UTC ISO 8601 de última respuesta exitosa de red. |
+| `impresoras_red` | `created_at` | TEXT | NO | Internal | Timestamp UTC ISO 8601 de registro de la impresora. |
+| `kds_tickets` | `id` | TEXT | NO | Internal | Identificador único de orden/ticket de producción KDS. Clave primaria y raíz de agregado autoritativa en Edge SQLite (`WP-015`, `ACR-2026-016`). |
+| `kds_tickets` | `cuenta_id` | TEXT | NO | Internal | Identificador de la cuenta/comanda de comedor asociada. |
+| `kds_tickets` | `mesa_reference` | TEXT | NO | Internal | Referencia textual de mesa o destino para visualización en pantalla KDS. |
+| `kds_tickets` | `kds_estacion_id` | TEXT | NO | Internal | Identificador de la estación KDS receptora. Clave foránea `kds_estaciones(id)`. |
+| `kds_tickets` | `urgency_level` | TEXT | NO | Internal | Nivel de prioridad operativa: `NORMAL`, `ALTA`, `URGENTE`. |
+| `kds_tickets` | `status` | TEXT | NO | Internal | Estado de producción KDS: `PENDIENTE`, `EN_PREPARACION`, `LISTO`, `ENTREGADO`. |
+| `kds_tickets` | `print_status` | TEXT | NO | Internal | Estado del trabajo de impresión en cola: `PENDING`, `QUEUED`, `PRINTING`, `PRINTED`, `FAILED`. |
+| `kds_tickets` | `print_attempts` | INTEGER | NO | Internal | Contador de reintentos de despacho a impresora de red. |
+| `kds_tickets` | `printer_id` | TEXT | SÍ | Internal | Impresora asignada para despacho. Clave foránea `impresoras_red(id)`. |
+| `kds_tickets` | `last_print_error` | TEXT | SÍ | Internal | Mensaje de error del último intento fallido de impresión. |
+| `kds_tickets` | `aggregate_sequence_number` | INTEGER | NO | Internal | Número de secuencia monotónico del agregado para resolución causal de conflictos. |
+| `kds_tickets` | `created_at` | TEXT | NO | Internal | Timestamp UTC ISO 8601 de emisión de la comanda. |
+| `kds_tickets` | `updated_at` | TEXT | NO | Internal | Timestamp UTC ISO 8601 de última actualización de estado. |
+| `kds_tickets` | `completed_at` | TEXT | SÍ | Internal | Timestamp UTC ISO 8601 de confirmación de surtido/entrega. Ancla canónica para la ventana de recall (`RecuperarOrdenRecall`). |
+| `kds_tickets` | `preparation_time_minutes` | INTEGER | SÍ | Internal | Medición operativa de tiempo de preparación en minutos capturada en `ConfirmarOrdenSurtida` (`ACR-2026-016`). Entero no negativo (`>= 0`), NULL antes de completarse. |
+| `kds_ticket_partidas` | `id` | TEXT | NO | Internal | Identificador único de la partida del ticket KDS. Clave primaria. |
+| `kds_ticket_partidas` | `kds_ticket_id` | TEXT | NO | Internal | Ticket de producción padre. Clave foránea `kds_tickets(id) ON DELETE CASCADE`. |
+| `kds_ticket_partidas` | `product_id` | TEXT | NO | Internal | Identificador del producto a preparar. |
+| `kds_ticket_partidas` | `product_name_snapshot` | TEXT | NO | Internal | Snapshot inmutable del nombre del producto al momento de ordenar. |
+| `kds_ticket_partidas` | `quantity` | INTEGER | NO | Internal | Cantidad de producto representada como entero signed Escala 4 (factor $10^4 = 10,000$, ej. `1.0000` = `10000`) conforme a `ADR-012` y `ACR-2026-016`. En dominio TS `bigint`, en transporte wire string decimal canónico `"1.0000"`. |
+| `kds_ticket_partidas` | `comments` | TEXT | SÍ | Internal | Comentarios o notas de preparación del mesero/cliente. |
+| `kds_ticket_partidas` | `modifiers_snapshot` | TEXT | NO | Internal | Snapshot JSON de modificadores seleccionados para la partida (default `'[]'`). |
+| `kds_ticket_partidas` | `status` | TEXT | NO | Internal | Estado de preparación de la partida individual: `PENDIENTE`, `EN_PREPARACION`, `LISTO`. |
+| `kds_ticket_partidas` | `created_at` | TEXT | NO | Internal | Timestamp UTC ISO 8601 de inserción de la partida. |
+| `kds_ordenes` | `[TODOS]` | - | - | Internal | **`[SUPERSEDED / HISTORICAL — DO NOT WRITE]`** Objeto histórico que predates el modelo reconciliado de WP-015 y traslapa con `kds_tickets`. Ningún código en runtime debe escribir en esta tabla (`ACR-2026-016`). |
 
 ---
 
@@ -158,4 +201,5 @@
 
 ---
 
-DOCUMENT STATUS: APPROVED / FROZEN — 2026-09-01 (ACR-2026-011 APPROVED / MERGED / CANONICAL ON MAIN — G9)
+DOCUMENT STATUS: PROPOSED ARCHITECTURE CHANGE — PENDING GOVERNANCE APPROVAL (ACR-2026-016)
+(Underlying baseline: APPROVED / FROZEN — 2026-09-01; ACR-2026-011, ACR-2026-013 APPROVED / MERGED / CANONICAL ON MAIN)

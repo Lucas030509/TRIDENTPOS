@@ -1,10 +1,15 @@
 # ADR-012: Representación Monetaria Exacta en Borde (Fixed-Point Scale 4 en SQLite)
 
-**Status:** `PROPOSED ARCHITECTURE CHANGE — PENDING GOVERNANCE APPROVAL`  
-**Date:** 2026-09-13  
-**Owners:** `01_Solution_Architect`  
-**Related Documents:** `DATA_MODEL.md`, `DATA_ARCHITECTURE.md`, `DATA_DICTIONARY.md`, `TECH_STACK_DECISIONS.md`, `ACR-2026-013`  
-**Classification:** `TECHNICAL ARCHITECTURE DECISION`  
+> [!NOTE]
+> **ACR-2026-013 APPROVED / MERGED / CANONICAL ON MAIN** (PR `#42`, merge commit `b68019b7a42145b2bb50c822394747aa1f79cbb6`)
+>
+> Formally approved and merged into canonical main. Governs exact fixed-point scale 4 integer representation across Edge persistence, TypeScript domain (`bigint`), and JSON/wire transport.
+
+**Status:** `APPROVED / CANONICAL` (Canonicalized via `ACR-2026-013` / PR `#42`)
+**Date:** 2026-09-13
+**Owners:** `01_Solution_Architect`
+**Related Documents:** `DATA_MODEL.md`, `DATA_ARCHITECTURE.md`, `DATA_DICTIONARY.md`, `TECH_STACK_DECISIONS.md`, `ACR-2026-013`, `ACR-2026-016`
+**Classification:** `TECHNICAL ARCHITECTURE DECISION`
 
 ---
 
@@ -56,7 +61,7 @@ Se requiere establecer una única representación física y lógica, determinist
 - *Pros:*
   1. **Exactitud 100% Determinista:** Todos los valores monetarios se almacenan como enteros con signo de 64 bits en SQLite (`INTEGER`), representando unidades fixed-point de escala 4 (diezmilésimas, $1.0000 = 10,000$).
   2. **Isomorfismo Exacto con Cloud `DECIMAL(12,4)`:** La escala 4 en Edge empata 1:1 con los 4 decimales de PostgreSQL `DECIMAL(12,4)` sin truncación, redondeo intermedio, ni pérdida de precisión.
-  3. **Rango Común Interoperable y Autoridad de BigInt:** 
+  3. **Rango Común Interoperable y Autoridad de BigInt:**
      - El rango canónico interoperable está gobernado por el tipo más restrictivo: Cloud PostgreSQL `DECIMAL(12,4)` (12 dígitos decimales totales, 4 fraccionarios, 8 enteros), lo que delimita estrictamente el rango de importes a $[-99,999,999.9999, +99,999,999.9999]$. En Edge SQLite a escala 4, esto equivale al rango de enteros $[-999999999999, +999999999999]$ ($[-999\_999\_999\_999\text{n}, +999\_999\_999\_999\text{n}]$).
      - Se define validación de límites antes de la persistencia, aceptación de resultados aritméticos, sincronización y serialización Cloud.
      - Toda la aritmética en el dominio TypeScript se ejecuta exclusivamente con `bigint`. Debido a que la multiplicación a escala 4 genera productos intermedios a escala 8, se prohíbe el uso de `number` de JavaScript para aritmética financiera autoritativa a fin de prevenir desbordamientos de precisión.
@@ -98,7 +103,7 @@ Se establece **Half Away From Zero** como el **MODO DE REDONDEO CANÓNICO DEL PR
 
 1. **Primitiva Genérica de Redondeo Sign-Safe (`roundDiv`):**
    $$\text{roundDiv}(A, B) = \text{sign}(A \times B) \times \left\lfloor \frac{|A| + \lfloor |B| / 2 \rfloor}{|B|} \right\rfloor \quad (\text{con } B \neq 0)$$
-   
+
    En TypeScript con `bigint`:
    ```typescript
    export function roundDiv(a: bigint, b: bigint): bigint {
