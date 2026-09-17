@@ -6,7 +6,6 @@
  * Enforces ADR-012 scale-4 integer quantity persistence.
  */
 
-import { decimalStringToScaledBigInt, scaledBigIntToDecimalString } from '@trident/core';
 import {
   type ImpresoraRed,
   type KdsEstacion,
@@ -81,11 +80,13 @@ export class SqliteKdsRepository implements KdsRepositoryPort, PrinterRepository
   constructor(db: EdgeDatabaseService) {
     this.#db = db;
     this.bootstrapSchema();
+    this.recoverInterruptedPrintingJobs();
   }
 
   public bootstrapSchema(): void {
     this.#db.executeSchema(KDS_EDGE_SQLITE_SCHEMA);
   }
+
 
   // ==========================================
   // KDS Estacion helpers (test/bootstrap convenience -- not part of the
@@ -318,6 +319,25 @@ export class SqliteKdsRepository implements KdsRepositoryPort, PrinterRepository
     return rows.map((r) => this.#mapTicket(r, this.#loadPartidas(r.id)));
   }
 
+  public recoverInterruptedPrintingJobs(): readonly KdsTicket[] {
+    const interruptedRows = this.#db.queryRows<KdsTicketRow>(
+      `SELECT id FROM kds_tickets WHERE print_status = 'PRINTING';`,
+    );
+    if (interruptedRows.length === 0) {
+      return [];
+    }
+    const now = new Date().toISOString();
+    this.#db.executeMutation(
+      `UPDATE kds_tickets
+       SET print_status = 'QUEUED',
+           last_print_error = 'RECOVERED_AFTER_RESTART_DURING_PRINTING',
+           updated_at = ?
+       WHERE print_status = 'PRINTING';`,
+      now,
+    );
+    return interruptedRows.map((r) => this.getTicketById(r.id)!);
+  }
+
   public markTicketPrintAttempt(
     id: string,
     result: { status: PrintJobStatus; attempts: number; lastPrintError: string | null },
@@ -387,34 +407,27 @@ export class SqliteKdsRepository implements KdsRepositoryPort, PrinterRepository
   }
 
   #loadPartidas(kdsTicketId: string): readonly KdsTicketPartida[] {
-    const rows = this.#db.queryRows<KdsTicketPartidaRow>(
+    const rows = this.#db.queryRowsSafe<KdsTicketPartidaRow>(
       `SELECT id, kds_ticket_id, product_id, product_name_snapshot, quantity, comments,
               modifiers_snapshot, status, created_at
        FROM kds_ticket_partidas WHERE kds_ticket_id = ? ORDER BY created_at ASC;`,
       kdsTicketId,
     );
-    return rows.map((r) => {
-      const scaledBigInt = BigInt(r.quantity);
-      const canonicalQty = scaledBigIntToDecimalString(scaledBigInt);
-      return {
-        id: r.id,
-        kdsTicketId: r.kds_ticket_id,
-        productId: r.product_id,
-        productNameSnapshot: r.product_name_snapshot,
-        quantity: canonicalQty,
-        comments: r.comments,
-        modifiers: JSON.parse(r.modifiers_snapshot) as KdsTicketPartidaModificadorSnapshot[],
-        status: r.status as KdsTicketPartidaStatus,
-        createdAt: r.created_at,
-      };
-    });
+    return rows.map((r) => ({
+      id: r.id,
+      kdsTicketId: r.kds_ticket_id,
+      productId: r.product_id,
+      productNameSnapshot: r.product_name_snapshot,
+      quantity: BigInt(r.quantity),
+      comments: r.comments,
+      modifiers: JSON.parse(r.modifiers_snapshot) as KdsTicketPartidaModificadorSnapshot[],
+      status: r.status as KdsTicketPartidaStatus,
+      createdAt: r.created_at,
+    }));
   }
 
   #persistPartidas(kdsTicketId: string, partidas: readonly KdsTicketPartida[]): void {
     for (const p of partidas) {
-      const scaledBigInt = decimalStringToScaledBigInt(p.quantity);
-      const integerScaledQty = Number(scaledBigInt);
-
       this.#db.executeMutation(
         `INSERT INTO kds_ticket_partidas (
            id, kds_ticket_id, product_id, product_name_snapshot, quantity, comments,
@@ -425,7 +438,7 @@ export class SqliteKdsRepository implements KdsRepositoryPort, PrinterRepository
         kdsTicketId,
         p.productId,
         p.productNameSnapshot,
-        integerScaledQty,
+        p.quantity,
         p.comments,
         JSON.stringify(p.modifiers),
         p.status,

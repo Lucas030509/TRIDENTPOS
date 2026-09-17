@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import {
   KdsDomainService,
   DomainError,
+  mapKdsTicketToWire,
+  parseComandaWireItem,
   type KdsEstacion,
   type KdsRepositoryPort,
   type KdsEventPublisherPort,
@@ -28,19 +30,19 @@ class InMemoryKdsRepo implements KdsRepositoryPort {
 
   getTicketById(id: string): KdsTicket | null {
     const t = this.tickets.get(id);
-    return t ? JSON.parse(JSON.stringify(t)) : null;
+    return t ? { ...t, partidas: t.partidas.map((p) => ({ ...p })) } : null;
   }
 
   saveTicket(ticket: KdsTicket): KdsTicket {
-    const cloned = JSON.parse(JSON.stringify(ticket));
+    const cloned: KdsTicket = { ...ticket, partidas: ticket.partidas.map((p) => ({ ...p })) };
     this.tickets.set(ticket.id, cloned);
-    return JSON.parse(JSON.stringify(cloned));
+    return { ...cloned, partidas: cloned.partidas.map((p) => ({ ...p })) };
   }
 
   listActiveTicketsByEstacion(kdsEstacionId: string): readonly KdsTicket[] {
     return Array.from(this.tickets.values())
       .filter((t) => t.kdsEstacionId === kdsEstacionId && t.status !== 'ENTREGADO')
-      .map((t) => JSON.parse(JSON.stringify(t)));
+      .map((t) => ({ ...t, partidas: t.partidas.map((p) => ({ ...p })) }));
   }
 
   getTicketForRecall(ordenProduccionId: string, windowMinutes: number): KdsTicket | null {
@@ -57,7 +59,7 @@ class InMemoryKdsRepo implements KdsRepositoryPort {
     if (elapsedMinutes < 0 || elapsedMinutes > windowMinutes) {
       return null;
     }
-    return JSON.parse(JSON.stringify(t));
+    return { ...t, partidas: t.partidas.map((p) => ({ ...p })) };
   }
 }
 
@@ -77,7 +79,7 @@ const COCINA: KdsEstacion = {
 };
 
 describe('TRIDENTPOS WP-015 / ACR-2026-016: KdsDomainService', () => {
-  it('WP015-T01: enviarComandaACocina creates a PENDIENTE ticket and emits ComandaEnviadaACocina', () => {
+  it('WP015-T01: enviarComandaACocina creates a PENDIENTE ticket with bigint quantity and emits ComandaEnviadaACocina', () => {
     const repo = new InMemoryKdsRepo();
     repo.addEstacion(COCINA);
     const publisher = new RecordingPublisher();
@@ -93,7 +95,7 @@ describe('TRIDENTPOS WP-015 / ACR-2026-016: KdsDomainService', () => {
           id: 'partida-1',
           productId: 'prod-1',
           productNameSnapshot: 'Tacos al Pastor',
-          quantity: '2.0000',
+          quantity: 20000n, // 2.0000 authoritative bigint
         },
       ],
     });
@@ -102,7 +104,8 @@ describe('TRIDENTPOS WP-015 / ACR-2026-016: KdsDomainService', () => {
     assert.equal(ticket.printStatus, 'PENDING');
     assert.equal(ticket.preparationTimeMinutes, null);
     assert.equal(ticket.partidas.length, 1);
-    assert.equal(ticket.partidas[0]?.quantity, '2.0000');
+    assert.equal(typeof ticket.partidas[0]?.quantity, 'bigint');
+    assert.equal(ticket.partidas[0]?.quantity, 20000n);
     assert.equal(publisher.events.length, 1);
     assert.equal(publisher.events[0]?.type, 'ComandaEnviadaACocina');
   });
@@ -118,7 +121,7 @@ describe('TRIDENTPOS WP-015 / ACR-2026-016: KdsDomainService', () => {
       mesaReference: 'Mesa 1',
       kdsEstacionId: COCINA.id,
       items: [
-        { id: 'p1', productId: 'prod-1', productNameSnapshot: 'Item', quantity: '1.0000' },
+        { id: 'p1', productId: 'prod-1', productNameSnapshot: 'Item', quantity: 10000n },
       ],
     };
     service.enviarComandaACocina(input);
@@ -143,7 +146,7 @@ describe('TRIDENTPOS WP-015 / ACR-2026-016: KdsDomainService', () => {
     );
   });
 
-  it('WP015-T04: full lifecycle iniciarPreparacion -> confirmarOrdenSurtida emits events and persists preparation time', () => {
+  it('WP015-T04: full lifecycle iniciarPreparacion -> confirmarOrdenSurtida emits discriminated events with explicit fields', () => {
     const repo = new InMemoryKdsRepo();
     repo.addEstacion(COCINA);
     const publisher = new RecordingPublisher();
@@ -154,7 +157,7 @@ describe('TRIDENTPOS WP-015 / ACR-2026-016: KdsDomainService', () => {
       cuentaId: 'cuenta-2',
       mesaReference: 'Mesa 2',
       kdsEstacionId: COCINA.id,
-      items: [{ id: 'p1', productId: 'prod-1', productNameSnapshot: 'Item', quantity: '1.0000' }],
+      items: [{ id: 'p1', productId: 'prod-1', productNameSnapshot: 'Item', quantity: 10000n }],
     });
 
     const started = service.iniciarPreparacionOrden(ticket.id, COCINA.id);
@@ -171,8 +174,13 @@ describe('TRIDENTPOS WP-015 / ACR-2026-016: KdsDomainService', () => {
       ['ComandaEnviadaACocina', 'OrdenProduccionIniciadaEnKDS', 'OrdenProduccionConfirmadaEnKDS'],
     );
     const confirmedEvent = publisher.events[2];
-    assert.equal(confirmedEvent?.tiempoPreparacionMinutos, 8);
-    assert.equal(confirmedEvent?.ticket.preparationTimeMinutes, 8);
+    assert.equal(confirmedEvent?.type, 'OrdenProduccionConfirmadaEnKDS');
+    if (confirmedEvent?.type === 'OrdenProduccionConfirmadaEnKDS') {
+      assert.equal(confirmedEvent.ordenProduccionId, ticket.id);
+      assert.equal(confirmedEvent.completedAt, confirmed.completedAt);
+      assert.equal(confirmedEvent.tiempoPreparacionMinutos, 8);
+      assert.equal(confirmedEvent.ticket.preparationTimeMinutes, 8);
+    }
   });
 
   it('WP015-T05: iniciarPreparacionOrden rejects wrong estacion (KDS_ESTACION_MISMATCH)', () => {
@@ -186,7 +194,7 @@ describe('TRIDENTPOS WP-015 / ACR-2026-016: KdsDomainService', () => {
       cuentaId: 'cuenta-3',
       mesaReference: 'Mesa 3',
       kdsEstacionId: COCINA.id,
-      items: [{ id: 'p1', productId: 'prod-1', productNameSnapshot: 'Item', quantity: '1.0000' }],
+      items: [{ id: 'p1', productId: 'prod-1', productNameSnapshot: 'Item', quantity: 10000n }],
     });
 
     assert.throws(
@@ -205,7 +213,7 @@ describe('TRIDENTPOS WP-015 / ACR-2026-016: KdsDomainService', () => {
       cuentaId: 'cuenta-4',
       mesaReference: 'Mesa 4',
       kdsEstacionId: COCINA.id,
-      items: [{ id: 'p1', productId: 'prod-1', productNameSnapshot: 'Item', quantity: '1.0000' }],
+      items: [{ id: 'p1', productId: 'prod-1', productNameSnapshot: 'Item', quantity: 10000n }],
     });
 
     assert.throws(
@@ -226,14 +234,14 @@ describe('TRIDENTPOS WP-015 / ACR-2026-016: KdsDomainService', () => {
       cuentaId: 'cuenta-5',
       mesaReference: 'Mesa 5',
       kdsEstacionId: COCINA.id,
-      items: [{ id: 'p1', productId: 'prod-1', productNameSnapshot: 'Item', quantity: '1.0000' }],
+      items: [{ id: 'p1', productId: 'prod-1', productNameSnapshot: 'Item', quantity: 10000n }],
     });
     service.enviarComandaACocina({
       id: 'ticket-6',
       cuentaId: 'cuenta-6',
       mesaReference: 'Mesa 6',
       kdsEstacionId: barra.id,
-      items: [{ id: 'p2', productId: 'prod-2', productNameSnapshot: 'Bebida', quantity: '1.0000' }],
+      items: [{ id: 'p2', productId: 'prod-2', productNameSnapshot: 'Bebida', quantity: 10000n }],
     });
 
     const activeCocina = service.consultarOrdenesActivas(COCINA.id);
@@ -252,7 +260,7 @@ describe('TRIDENTPOS WP-015 / ACR-2026-016: KdsDomainService', () => {
           cuentaId: 'cuenta-7',
           mesaReference: 'Mesa 7',
           kdsEstacionId: 'unknown-estacion',
-          items: [{ id: 'p1', productId: 'prod-1', productNameSnapshot: 'Item', quantity: '1.0000' }],
+          items: [{ id: 'p1', productId: 'prod-1', productNameSnapshot: 'Item', quantity: 10000n }],
         }),
       (err: unknown) => err instanceof DomainError && err.code === 'KDS_ESTACION_NOT_FOUND',
     );
@@ -270,7 +278,7 @@ describe('TRIDENTPOS WP-015 / ACR-2026-016: KdsDomainService', () => {
           cuentaId: 'cuenta-8',
           mesaReference: 'Mesa 8',
           kdsEstacionId: 'estacion-inactiva',
-          items: [{ id: 'p1', productId: 'prod-1', productNameSnapshot: 'Item', quantity: '1.0000' }],
+          items: [{ id: 'p1', productId: 'prod-1', productNameSnapshot: 'Item', quantity: 10000n }],
         }),
       (err: unknown) => err instanceof DomainError && err.code === 'KDS_ESTACION_INACTIVE',
     );
@@ -290,7 +298,7 @@ describe('TRIDENTPOS WP-015 / ACR-2026-016: KdsDomainService', () => {
       cuentaId: 'c1',
       mesaReference: 'M1',
       kdsEstacionId: COCINA.id,
-      items: [{ id: 'p1', productId: 'pr1', productNameSnapshot: 'Agua', quantity: '1.0000' }],
+      items: [{ id: 'p1', productId: 'pr1', productNameSnapshot: 'Agua', quantity: 10000n }],
     });
     service.iniciarPreparacionOrden('ticket-prep-0', COCINA.id);
     const confirmed = service.confirmarOrdenSurtida('ticket-prep-0', COCINA.id, 0);
@@ -310,7 +318,7 @@ describe('TRIDENTPOS WP-015 / ACR-2026-016: KdsDomainService', () => {
       cuentaId: 'c1',
       mesaReference: 'M1',
       kdsEstacionId: COCINA.id,
-      items: [{ id: 'p1', productId: 'pr1', productNameSnapshot: 'Taco', quantity: '1.0000' }],
+      items: [{ id: 'p1', productId: 'pr1', productNameSnapshot: 'Taco', quantity: 10000n }],
     });
     service.iniciarPreparacionOrden('ticket-prep-invalid', COCINA.id);
 
@@ -342,7 +350,7 @@ describe('TRIDENTPOS WP-015 / ACR-2026-016: KdsDomainService', () => {
       cuentaId: 'c1',
       mesaReference: 'M1',
       kdsEstacionId: COCINA.id,
-      items: [{ id: 'p1', productId: 'pr1', productNameSnapshot: 'Taco', quantity: '1.0000' }],
+      items: [{ id: 'p1', productId: 'pr1', productNameSnapshot: 'Taco', quantity: 10000n }],
     });
     service.iniciarPreparacionOrden('ord-recall-1', COCINA.id);
     service.confirmarOrdenSurtida('ord-recall-1', COCINA.id, 10);
@@ -393,7 +401,7 @@ describe('TRIDENTPOS WP-015 / ACR-2026-016: KdsDomainService', () => {
       cuentaId: 'c1',
       mesaReference: 'M1',
       kdsEstacionId: COCINA.id,
-      items: [{ id: 'p1', productId: 'pr1', productNameSnapshot: 'Taco', quantity: '1.0000' }],
+      items: [{ id: 'p1', productId: 'pr1', productNameSnapshot: 'Taco', quantity: 10000n }],
     });
     service.iniciarPreparacionOrden('ord-in-prep', COCINA.id);
 
@@ -413,7 +421,7 @@ describe('TRIDENTPOS WP-015 / ACR-2026-016: KdsDomainService', () => {
       cuentaId: 'c1',
       mesaReference: 'M1',
       kdsEstacionId: COCINA.id,
-      items: [{ id: 'p1', productId: 'pr1', productNameSnapshot: 'Taco', quantity: '1.0000' }],
+      items: [{ id: 'p1', productId: 'pr1', productNameSnapshot: 'Taco', quantity: 10000n }],
     });
     service.iniciarPreparacionOrden('ord-recall-immut', COCINA.id);
     service.confirmarOrdenSurtida('ord-recall-immut', COCINA.id, 7);
@@ -435,7 +443,7 @@ describe('TRIDENTPOS WP-015 / ACR-2026-016: KdsDomainService', () => {
       cuentaId: 'c1',
       mesaReference: 'M1',
       kdsEstacionId: COCINA.id,
-      items: [{ id: 'p1', productId: 'pr1', productNameSnapshot: 'Taco', quantity: '1.0000' }],
+      items: [{ id: 'p1', productId: 'pr1', productNameSnapshot: 'Taco', quantity: 10000n }],
     });
     service.iniciarPreparacionOrden('ord-ticket-actual-id', COCINA.id);
     service.confirmarOrdenSurtida('ord-ticket-actual-id', COCINA.id, 7);
@@ -445,32 +453,58 @@ describe('TRIDENTPOS WP-015 / ACR-2026-016: KdsDomainService', () => {
   });
 
   // ==========================================
-  // ACR-2026-016: QUANTITY VALIDATION TESTS (ADR-012)
+  // ACR-2026-016: QUANTITY DOMAIN & WIRE TESTS (ADR-012)
   // ==========================================
 
-  it('WP015-R3-01: quantity accepts valid fractional and integer scale-4 decimal strings', () => {
+  it('WP015-R3-01: domain quantity is strictly bigint and maps to canonical wire decimal strings', () => {
     const repo = new InMemoryKdsRepo();
     repo.addEstacion(COCINA);
     const service = new KdsDomainService({ kdsRepo: repo });
+
+    // Prove domain representation: 1.5000 -> 15000n, 0.1250 -> 1250n, 12.3456 -> 123456n
+    const item1 = parseComandaWireItem({
+      id: 'p1',
+      productId: 'pr1',
+      productNameSnapshot: 'Kg Carne',
+      quantity: '1.5000',
+    });
+    const item2 = parseComandaWireItem({
+      id: 'p2',
+      productId: 'pr2',
+      productNameSnapshot: 'Fractional',
+      quantity: '0.1250',
+    });
+    const item3 = parseComandaWireItem({
+      id: 'p3',
+      productId: 'pr3',
+      productNameSnapshot: 'Precise',
+      quantity: '12.3456',
+    });
+
+    assert.equal(item1.quantity, 15000n);
+    assert.equal(item2.quantity, 1250n);
+    assert.equal(item3.quantity, 123456n);
 
     const ticket = service.enviarComandaACocina({
       id: 'ticket-quantities',
       cuentaId: 'c1',
       mesaReference: 'M1',
       kdsEstacionId: COCINA.id,
-      items: [
-        { id: 'p1', productId: 'pr1', productNameSnapshot: 'Kg Carne', quantity: '1.5000' },
-        { id: 'p2', productId: 'pr2', productNameSnapshot: 'Fractional', quantity: '0.1250' },
-        { id: 'p3', productId: 'pr3', productNameSnapshot: 'Precise', quantity: '12.3456' },
-      ],
+      items: [item1, item2, item3],
     });
 
-    assert.equal(ticket.partidas[0]?.quantity, '1.5000');
-    assert.equal(ticket.partidas[1]?.quantity, '0.1250');
-    assert.equal(ticket.partidas[2]?.quantity, '12.3456');
+    assert.equal(ticket.partidas[0]?.quantity, 15000n);
+    assert.equal(ticket.partidas[1]?.quantity, 1250n);
+    assert.equal(ticket.partidas[2]?.quantity, 123456n);
+
+    // Wire serialization maps bigint back to canonical decimal string
+    const wire = mapKdsTicketToWire(ticket);
+    assert.equal(wire.partidas[0]?.quantity, '1.5000');
+    assert.equal(wire.partidas[1]?.quantity, '0.1250');
+    assert.equal(wire.partidas[2]?.quantity, '12.3456');
   });
 
-  it('WP015-R3-02: quantity rejects zero, negative, malformed, or excessive precision decimals', () => {
+  it('WP015-R3-02: quantity rejects non-bigint, zero, or negative domain values', () => {
     const repo = new InMemoryKdsRepo();
     repo.addEstacion(COCINA);
     const service = new KdsDomainService({ kdsRepo: repo });
@@ -483,7 +517,7 @@ describe('TRIDENTPOS WP-015 / ACR-2026-016: KdsDomainService', () => {
           cuentaId: 'c1',
           mesaReference: 'M1',
           kdsEstacionId: COCINA.id,
-          items: [{ id: 'p1', productId: 'pr1', productNameSnapshot: 'Item', quantity: '0.0000' }],
+          items: [{ id: 'p1', productId: 'pr1', productNameSnapshot: 'Item', quantity: 0n }],
         }),
       (err: unknown) => err instanceof DomainError && err.code === 'INVALID_QUANTITY',
     );
@@ -496,33 +530,21 @@ describe('TRIDENTPOS WP-015 / ACR-2026-016: KdsDomainService', () => {
           cuentaId: 'c1',
           mesaReference: 'M1',
           kdsEstacionId: COCINA.id,
-          items: [{ id: 'p1', productId: 'pr1', productNameSnapshot: 'Item', quantity: '-1.0000' }],
+          items: [{ id: 'p1', productId: 'pr1', productNameSnapshot: 'Item', quantity: -10000n }],
         }),
       (err: unknown) => err instanceof DomainError && err.code === 'INVALID_QUANTITY',
     );
 
-    // Malformed string
+    // Non-bigint (e.g. number or string passed directly to domain method)
     assert.throws(
       () =>
         service.enviarComandaACocina({
-          id: 't-malformed',
+          id: 't-num',
           cuentaId: 'c1',
           mesaReference: 'M1',
           kdsEstacionId: COCINA.id,
-          items: [{ id: 'p1', productId: 'pr1', productNameSnapshot: 'Item', quantity: 'abc' }],
-        }),
-      (err: unknown) => err instanceof DomainError && err.code === 'INVALID_QUANTITY',
-    );
-
-    // Invalid decimal places (e.g. 5 decimals instead of 4)
-    assert.throws(
-      () =>
-        service.enviarComandaACocina({
-          id: 't-5dec',
-          cuentaId: 'c1',
-          mesaReference: 'M1',
-          kdsEstacionId: COCINA.id,
-          items: [{ id: 'p1', productId: 'pr1', productNameSnapshot: 'Item', quantity: '1.12345' }],
+          // @ts-expect-error test non-bigint runtime rejection
+          items: [{ id: 'p1', productId: 'pr1', productNameSnapshot: 'Item', quantity: 1.5 }],
         }),
       (err: unknown) => err instanceof DomainError && err.code === 'INVALID_QUANTITY',
     );

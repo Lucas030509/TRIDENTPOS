@@ -31,3 +31,4 @@ export * from './dining-service.js';
 export * from './kds-types.js';
 export * from './kds-ports.js';
 export * from './kds-service.js';
+export * from './kds-wire-mapper.js';

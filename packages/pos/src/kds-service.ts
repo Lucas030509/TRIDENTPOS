@@ -6,7 +6,6 @@
  * is the composition root's responsibility (ADR-013 Invariant 1).
  */
 
-import { decimalStringToScaledBigInt, scaledBigIntToDecimalString } from '@trident/core';
 import { DomainError } from './errors.js';
 import type {
   EnviarComandaInput,
@@ -69,33 +68,28 @@ export class KdsDomainService {
       previousActive.reduce((max, t) => Math.max(max, t.aggregateSequenceNumber), 0) + 1;
 
     const partidas: KdsTicketPartida[] = input.items.map((item) => {
-      let scaledQty: bigint;
-      try {
-        scaledQty = decimalStringToScaledBigInt(item.quantity);
-      } catch (err) {
+      if (typeof item.quantity !== 'bigint') {
         throw new DomainError(
-          `Invalid quantity '${item.quantity}': must be canonical 4-decimal format`,
+          `Invalid quantity '${String(item.quantity)}': must be authoritative scale-4 signed bigint`,
           'INVALID_QUANTITY',
           400,
         );
       }
 
-      if (scaledQty <= 0n) {
+      if (item.quantity <= 0n) {
         throw new DomainError(
-          `Item quantity '${item.quantity}' must be greater than zero`,
+          `Item quantity '${item.quantity}n' must be greater than zero`,
           'INVALID_QUANTITY',
           400,
         );
       }
-
-      const canonicalQty = scaledBigIntToDecimalString(scaledQty);
 
       return {
         id: item.id,
         kdsTicketId: input.id,
         productId: item.productId,
         productNameSnapshot: item.productNameSnapshot,
-        quantity: canonicalQty,
+        quantity: item.quantity,
         comments: item.comments ?? null,
         modifiers: item.modifiers ?? [],
         status: 'PENDIENTE',
@@ -250,18 +244,40 @@ export class KdsDomainService {
   #emit(
     type: KdsDomainEvent['type'],
     ticket: KdsTicket,
-    tiempoPreparacionMinutos?: number | null,
+    tiempoPreparacionMinutos?: number,
   ): void {
     if (!this.#eventPublisher) {
       return;
     }
-    const event: KdsDomainEvent = {
-      type,
-      kdsEstacionId: ticket.kdsEstacionId,
-      ticket,
-      emittedAt: new Date().toISOString(),
-      ...(tiempoPreparacionMinutos !== undefined ? { tiempoPreparacionMinutos } : {}),
-    };
+    const emittedAt = new Date().toISOString();
+    let event: KdsDomainEvent;
+
+    if (type === 'OrdenProduccionConfirmadaEnKDS') {
+      event = {
+        type: 'OrdenProduccionConfirmadaEnKDS',
+        kdsEstacionId: ticket.kdsEstacionId,
+        ordenProduccionId: ticket.id,
+        completedAt: ticket.completedAt ?? emittedAt,
+        tiempoPreparacionMinutos: tiempoPreparacionMinutos ?? ticket.preparationTimeMinutes ?? 0,
+        ticket,
+        emittedAt,
+      };
+    } else if (type === 'OrdenProduccionIniciadaEnKDS') {
+      event = {
+        type: 'OrdenProduccionIniciadaEnKDS',
+        kdsEstacionId: ticket.kdsEstacionId,
+        ticket,
+        emittedAt,
+      };
+    } else {
+      event = {
+        type: 'ComandaEnviadaACocina',
+        kdsEstacionId: ticket.kdsEstacionId,
+        ticket,
+        emittedAt,
+      };
+    }
+
     this.#eventPublisher.publishTicketEvent(event);
   }
 }

@@ -17,6 +17,7 @@
  * for a future retry) and continues with the next ticket.
  */
 
+import { scaledBigIntToDecimalString } from '@trident/core';
 import { EscPosPrinterClient, formatKdsTicketEscPos } from '@trident/edge';
 import type { ImpresoraRed, KdsTicket, PrinterRepositoryPort } from '@trident/pos';
 
@@ -104,7 +105,7 @@ export class PrinterQueueRunner {
       urgencyLevel: ticket.urgencyLevel,
       createdAt: ticket.createdAt,
       partidas: ticket.partidas.map((p) => ({
-        quantity: p.quantity,
+        quantity: scaledBigIntToDecimalString(p.quantity),
         productNameSnapshot: p.productNameSnapshot,
         comments: p.comments,
         modifiers: p.modifiers,
@@ -113,10 +114,10 @@ export class PrinterQueueRunner {
 
     const attemptNumber = ticket.printAttempts + 1;
 
-    // Persist active transport transmission state (PRINTING) in SQLite per ACR-2026-016
+    // Persist active transport transmission state (PRINTING) and increment attempt count durably BEFORE I/O
     this.#printerRepo.markTicketPrintAttempt(ticket.id, {
       status: 'PRINTING',
-      attempts: ticket.printAttempts,
+      attempts: attemptNumber,
       lastPrintError: ticket.lastPrintError,
     });
 

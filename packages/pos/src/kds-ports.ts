@@ -27,6 +27,7 @@ export interface PrinterRepositoryPort {
   updatePrinterStatus(id: string, status: PrinterStatus, lastSeenAt: string): void;
   /** Tickets whose printStatus is PENDING, QUEUED, or FAILED -- eligible for a print attempt. */
   listPendingPrintJobs(): readonly KdsTicket[];
+  recoverInterruptedPrintingJobs(): readonly KdsTicket[];
   markTicketPrintAttempt(
     id: string,
     result: {

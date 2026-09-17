@@ -11,7 +11,7 @@
 import type http from 'node:http';
 import { KdsWebSocketDispatcher, type KdsDispatcherLogger } from '@trident/edge';
 import { EdgeDatabaseService } from '@trident/edge';
-import { KdsDomainService, type KdsEventPublisherPort } from '@trident/pos';
+import { KdsDomainService, type KdsEventPublisherPort, mapKdsTicketToWire } from '@trident/pos';
 import { SqliteKdsRepository } from './kds-sqlite-repository.js';
 import { PrinterQueueRunner } from './printer-queue-runner.js';
 
@@ -50,21 +50,40 @@ export function createKdsRuntime(options: CreateKdsRuntimeOptions): KdsRuntime {
     // that was broadcast while it was disconnected.
     getResyncSnapshot: () => {
       const estaciones = repo.listEstaciones();
-      const activeTickets = estaciones.flatMap((e) => repo.listActiveTicketsByEstacion(e.id));
+      const activeTickets = estaciones
+        .flatMap((e) => repo.listActiveTicketsByEstacion(e.id))
+        .map(mapKdsTicketToWire);
       return { activeTickets };
     },
   });
 
   const eventPublisher: KdsEventPublisherPort = {
     publishTicketEvent(event) {
-      dispatcher.broadcast({
-        type: event.type,
-        kdsEstacionId: event.kdsEstacionId,
-        payload: event.ticket,
-        emittedAt: event.emittedAt,
-      });
+      if (event.type === 'OrdenProduccionConfirmadaEnKDS') {
+        dispatcher.broadcast({
+          type: event.type,
+          kdsEstacionId: event.kdsEstacionId,
+          payload: {
+            ordenProduccionId: event.ordenProduccionId,
+            completedAt: event.completedAt,
+            tiempoPreparacionMinutos: event.tiempoPreparacionMinutos,
+            ticket: mapKdsTicketToWire(event.ticket),
+          },
+          emittedAt: event.emittedAt,
+        });
+      } else {
+        dispatcher.broadcast({
+          type: event.type,
+          kdsEstacionId: event.kdsEstacionId,
+          payload: {
+            ticket: mapKdsTicketToWire(event.ticket),
+          },
+          emittedAt: event.emittedAt,
+        });
+      }
     },
   };
+
 
   const service = new KdsDomainService({ kdsRepo: repo, eventPublisher });
 

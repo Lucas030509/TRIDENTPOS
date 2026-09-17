@@ -99,27 +99,30 @@ describe('TRIDENTPOS WP-015 / ACR-2026-016: KDS Runtime Integration Suite', () =
       mesaReference: 'Mesa 9',
       kdsEstacionId: COCINA_ID,
       items: [
-        { id: 'partida-integ-1', productId: 'prod-1', productNameSnapshot: 'Enchiladas', quantity: '1.5000' },
+        { id: 'partida-integ-1', productId: 'prod-1', productNameSnapshot: 'Enchiladas', quantity: 15000n },
       ],
     });
 
     const received = await client.next();
     assert.equal(received.type, 'ComandaEnviadaACocina');
-    assert.equal((received.payload as { id: string }).id, ticket.id);
+    const payload = received.payload as { ticket: { id: string; partidas: Array<{ quantity: string }> } };
+    assert.equal(payload.ticket.id, ticket.id);
+    assert.equal(payload.ticket.partidas[0]?.quantity, '1.5000'); // Wire DTO has canonical decimal string
 
     // Persisted through the composition root's SQLite repository, not just in-memory.
     const reloaded = runtime.repo.getTicketById(ticket.id);
     assert.ok(reloaded);
     assert.equal(reloaded?.printStatus, 'PENDING');
     assert.equal(reloaded?.preparationTimeMinutes, null);
-    assert.equal(reloaded?.partidas[0]?.quantity, '1.5000');
+    assert.equal(typeof reloaded?.partidas[0]?.quantity, 'bigint');
+    assert.equal(reloaded?.partidas[0]?.quantity, 15000n);
 
     // Direct SQLite raw column inspection: verify quantity is stored as integer scale-4 (15000)
-    const rawPartida = edgeDb.queryRow<{ quantity: number }>(
+    const rawPartida = edgeDb.queryRow<{ quantity: number | bigint }>(
       `SELECT quantity FROM kds_ticket_partidas WHERE id = ?;`,
       'partida-integ-1',
     );
-    assert.equal(rawPartida?.quantity, 15000);
+    assert.equal(Number(rawPartida?.quantity), 15000);
 
     client.close();
   });
@@ -138,7 +141,7 @@ describe('TRIDENTPOS WP-015 / ACR-2026-016: KDS Runtime Integration Suite', () =
       cuentaId: 'cuenta-integ-2',
       mesaReference: 'Mesa 10',
       kdsEstacionId: COCINA_ID,
-      items: [{ id: 'partida-integ-2', productId: 'prod-2', productNameSnapshot: 'Sopa', quantity: '1.0000' }],
+      items: [{ id: 'partida-integ-2', productId: 'prod-2', productNameSnapshot: 'Sopa', quantity: 10000n }],
     });
     runtime.repo.assignPrinterToTicket(ticket.id, printer.id);
 
@@ -187,7 +190,7 @@ describe('TRIDENTPOS WP-015 / ACR-2026-016: KDS Runtime Integration Suite', () =
         cuentaId: 'cuenta-integ-3',
         mesaReference: 'Mesa 11',
         kdsEstacionId: COCINA_ID,
-        items: [{ id: 'partida-integ-3', productId: 'prod-3', productNameSnapshot: 'Agua', quantity: '2.0000' }],
+        items: [{ id: 'partida-integ-3', productId: 'prod-3', productNameSnapshot: 'Agua', quantity: 20000n }],
       });
       runtime.repo.assignPrinterToTicket(ticket.id, printer.id);
 
@@ -228,7 +231,7 @@ describe('TRIDENTPOS WP-015 / ACR-2026-016: KDS Runtime Integration Suite', () =
         cuentaId: 'cuenta-restart-1',
         mesaReference: 'Mesa 12',
         kdsEstacionId: 'estacion-restart',
-        items: [{ id: 'partida-restart-1', productId: 'prod-4', productNameSnapshot: 'Cafe', quantity: '1.0000' }],
+        items: [{ id: 'partida-restart-1', productId: 'prod-4', productNameSnapshot: 'Cafe', quantity: 10000n }],
       });
 
       const runner1 = new PrinterQueueRunner({ printerRepo: runtime1.repo, connectTimeoutMs: 500 });
@@ -265,7 +268,7 @@ describe('TRIDENTPOS WP-015 / ACR-2026-016: KDS Runtime Integration Suite', () =
       cuentaId: 'c-prep',
       mesaReference: 'Mesa 15',
       kdsEstacionId: COCINA_ID,
-      items: [{ id: 'part-prep', productId: 'prod-p', productNameSnapshot: 'Torta', quantity: '1.0000' }],
+      items: [{ id: 'part-prep', productId: 'prod-p', productNameSnapshot: 'Torta', quantity: 10000n }],
     });
 
     runtime.service.iniciarPreparacionOrden(ticket.id, COCINA_ID);
@@ -289,7 +292,7 @@ describe('TRIDENTPOS WP-015 / ACR-2026-016: KDS Runtime Integration Suite', () =
       cuentaId: 'c-recall',
       mesaReference: 'Mesa 16',
       kdsEstacionId: COCINA_ID,
-      items: [{ id: 'part-rec', productId: 'prod-r', productNameSnapshot: 'Quesadilla', quantity: '3.0000' }],
+      items: [{ id: 'part-rec', productId: 'prod-r', productNameSnapshot: 'Quesadilla', quantity: 30000n }],
     });
 
     // Incomplete ticket returns null
@@ -303,10 +306,144 @@ describe('TRIDENTPOS WP-015 / ACR-2026-016: KDS Runtime Integration Suite', () =
     assert.equal(recalled?.id, ticket.id);
     assert.equal(recalled?.status, 'LISTO');
     assert.equal(recalled?.preparationTimeMinutes, 6);
-    assert.equal(recalled?.partidas[0]?.quantity, '3.0000');
+    assert.equal(typeof recalled?.partidas[0]?.quantity, 'bigint');
+    assert.equal(recalled?.partidas[0]?.quantity, 30000n);
 
-    // Recall with narrow 0-minute window on ticket completed earlier returns valid or null as window dictates
+    // Recall with non-existent id returns null
     const nonExistent = runtime.service.recuperarOrdenRecall('nonexistent-id', 120);
     assert.equal(nonExistent, null);
+  });
+
+  // ==========================================
+  // QI-R2-015-02: INTERRUPTED PRINTING RECOVERY TEST
+  // ==========================================
+
+  it('WP015-T29 (interrupted PRINTING restart recovery in SQLite): crash during PRINTING recovers to QUEUED with durable attempt count and error', async () => {
+    const dbPath = path.join(tempDir, 'interrupted-printing-recovery.db');
+    let db1: EdgeDatabaseService | undefined;
+
+    try {
+      db1 = new EdgeDatabaseService({ databasePath: dbPath });
+      const repo1 = new SqliteKdsRepository(db1);
+      repo1.createEstacion({ id: 'estacion-crash', name: 'Cocina Crash', stationType: 'COCINA' });
+      const printer = repo1.createPrinter({ id: 'printer-crash', name: 'Printer Crash', host: '127.0.0.1', port: 9100, kdsEstacionId: 'estacion-crash' });
+
+      const runtime1 = createKdsRuntime({ edgeDb: db1, wsPort: 0, authenticateStation: () => true });
+
+      const ticket = runtime1.service.enviarComandaACocina({
+        id: 'ticket-crash-1',
+        cuentaId: 'c-crash',
+        mesaReference: 'Mesa Crash',
+        kdsEstacionId: 'estacion-crash',
+        items: [{ id: 'part-crash', productId: 'prod-c', productNameSnapshot: 'Carne', quantity: 10000n }],
+      });
+      repo1.assignPrinterToTicket(ticket.id, printer.id);
+
+      // Simulate entering PRINTING state with attempt count = 1 durably recorded before I/O
+      repo1.markTicketPrintAttempt(ticket.id, {
+        status: 'PRINTING',
+        attempts: 1,
+        lastPrintError: null,
+      });
+
+      // Verify active state is PRINTING before crash
+      const preCrashTicket = repo1.getTicketById(ticket.id);
+      assert.equal(preCrashTicket?.printStatus, 'PRINTING');
+      assert.equal(preCrashTicket?.printAttempts, 1);
+
+      // Simulate crash: close database connection abruptly without completing print
+      await runtime1.dispatcher.close();
+      db1.close();
+      db1 = undefined;
+
+      // Reopen fresh database instance / restart runtime
+      const db2 = new EdgeDatabaseService({ databasePath: dbPath });
+      try {
+        const repo2 = new SqliteKdsRepository(db2); // constructor automatically triggers recoverInterruptedPrintingJobs()
+
+        const recoveredTicket = repo2.getTicketById(ticket.id);
+        assert.ok(recoveredTicket, 'ticket must survive crash');
+        // Must be QUEUED, NOT PRINTED
+        assert.equal(recoveredTicket?.printStatus, 'QUEUED');
+        assert.notEqual(recoveredTicket?.printStatus, 'PRINTED');
+        // Durable attempt count preserved
+        assert.equal(recoveredTicket?.printAttempts, 1);
+        // Error recorded
+        assert.equal(recoveredTicket?.lastPrintError, 'RECOVERED_AFTER_RESTART_DURING_PRINTING');
+
+        // Verify ticket appears in retry-eligible queue
+        const pendingJobs = repo2.listPendingPrintJobs();
+        assert.ok(pendingJobs.some((t) => t.id === ticket.id), 'ticket must appear in pending print queue for retry');
+      } finally {
+        db2.close();
+      }
+    } finally {
+      db1?.close();
+    }
+  });
+
+  // ==========================================
+  // QI-R2-015-03: CONFIRMATION EVENT TRANSPORT & WIRE SERIALIZATION TEST
+  // ==========================================
+
+  it('WP015-T30 (WebSocket confirmation event transport & wire DTO mapping): broadcasts explicit fields and canonical decimal string quantities', async () => {
+    const port = runtime.dispatcher.getPort();
+    const client = await BufferingClient.connect(port);
+
+    const resync = await client.next(); // KDS_RESYNC
+    assert.equal(resync.type, 'KDS_RESYNC');
+
+    // 1. Enviar Comanda
+    const ticket = runtime.service.enviarComandaACocina({
+      id: 'ticket-ws-events',
+      cuentaId: 'cuenta-ws-1',
+      mesaReference: 'Mesa 42',
+      kdsEstacionId: COCINA_ID,
+      items: [
+        { id: 'part-ws-1', productId: 'p1', productNameSnapshot: 'Ribeye', quantity: 15000n }, // 1.5000
+        { id: 'part-ws-2', productId: 'p2', productNameSnapshot: 'Papas', quantity: 1250n },  // 0.1250
+      ],
+    });
+
+    const event1 = await client.next();
+    assert.equal(event1.type, 'ComandaEnviadaACocina');
+    const payload1 = event1.payload as { ticket: { id: string; partidas: Array<{ quantity: string }> } };
+    assert.equal(payload1.ticket.id, ticket.id);
+    assert.equal(payload1.ticket.partidas[0]?.quantity, '1.5000');
+    assert.equal(payload1.ticket.partidas[1]?.quantity, '0.1250');
+
+    // 2. Iniciar Preparacion
+    runtime.service.iniciarPreparacionOrden(ticket.id, COCINA_ID);
+    const event2 = await client.next();
+    assert.equal(event2.type, 'OrdenProduccionIniciadaEnKDS');
+
+    // 3. Confirmar Orden Surtida
+    runtime.service.confirmarOrdenSurtida(ticket.id, COCINA_ID, 15);
+    const event3 = await client.next();
+
+    // Assert explicit required canonical event fields
+    assert.equal(event3.type, 'OrdenProduccionConfirmadaEnKDS');
+    assert.equal(event3.kdsEstacionId, COCINA_ID);
+
+    const payload3 = event3.payload as {
+      ordenProduccionId: string;
+      completedAt: string;
+      tiempoPreparacionMinutos: number;
+      ticket: {
+        id: string;
+        preparationTimeMinutes: number;
+        partidas: Array<{ quantity: string; productNameSnapshot: string }>;
+      };
+    };
+
+    assert.equal(payload3.ordenProduccionId, ticket.id);
+    assert.ok(payload3.completedAt);
+    assert.equal(payload3.tiempoPreparacionMinutos, 15);
+    assert.equal(payload3.ticket.id, ticket.id);
+    assert.equal(payload3.ticket.preparationTimeMinutes, 15);
+    assert.equal(payload3.ticket.partidas[0]?.quantity, '1.5000');
+    assert.equal(payload3.ticket.partidas[1]?.quantity, '0.1250');
+
+    client.close();
   });
 });

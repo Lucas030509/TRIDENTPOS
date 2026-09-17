@@ -45,7 +45,27 @@ export interface KdsTicketPartidaModificadorSnapshot {
   readonly modifierNameSnapshot: string;
 }
 
+/**
+ * Authoritative Domain Entity: KdsTicketPartida.
+ * Per ADR-012, quantity is authoritative scale-4 signed bigint (factor 10000n).
+ */
 export interface KdsTicketPartida {
+  readonly id: string;
+  readonly kdsTicketId: string;
+  readonly productId: string;
+  readonly productNameSnapshot: string;
+  readonly quantity: bigint; // authoritative scale-4 signed bigint (ADR-012, e.g. 15000n for 1.5000)
+  readonly comments: string | null;
+  readonly modifiers: readonly KdsTicketPartidaModificadorSnapshot[];
+  readonly status: KdsTicketPartidaStatus;
+  readonly createdAt: string;
+}
+
+/**
+ * Wire / Transport DTO for KdsTicketPartida.
+ * Uses canonical 4-decimal strings for JSON/WebSocket serialization (e.g. "1.5000").
+ */
+export interface KdsTicketPartidaWireDto {
   readonly id: string;
   readonly kdsTicketId: string;
   readonly productId: string;
@@ -76,6 +96,38 @@ export interface KdsTicket {
   readonly partidas: readonly KdsTicketPartida[];
 }
 
+/**
+ * Wire / Transport DTO for KdsTicket.
+ */
+export interface KdsTicketWireDto {
+  readonly id: string;
+  readonly cuentaId: string;
+  readonly mesaReference: string;
+  readonly kdsEstacionId: string;
+  readonly urgencyLevel: UrgencyLevel;
+  readonly status: KdsTicketStatus;
+  readonly printStatus: PrintJobStatus;
+  readonly printAttempts: number;
+  readonly printerId: string | null;
+  readonly lastPrintError: string | null;
+  readonly aggregateSequenceNumber: number;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly completedAt: string | null;
+  readonly preparationTimeMinutes: number | null;
+  readonly partidas: readonly KdsTicketPartidaWireDto[];
+}
+
+/** Input for item in `KdsDomainService.enviarComandaACocina`. */
+export interface EnviarComandaItemInput {
+  readonly id: string;
+  readonly productId: string;
+  readonly productNameSnapshot: string;
+  readonly quantity: bigint; // authoritative scale-4 signed bigint (ADR-012)
+  readonly comments?: string | null;
+  readonly modifiers?: ReadonlyArray<KdsTicketPartidaModificadorSnapshot>;
+}
+
 /** Input for `KdsDomainService.enviarComandaACocina`. */
 export interface EnviarComandaInput {
   readonly id: string;
@@ -83,32 +135,40 @@ export interface EnviarComandaInput {
   readonly mesaReference: string;
   readonly kdsEstacionId: string;
   readonly urgencyLevel?: UrgencyLevel;
-  readonly items: ReadonlyArray<{
-    readonly id: string;
-    readonly productId: string;
-    readonly productNameSnapshot: string;
-    readonly quantity: string; // canonical 4-decimal string, e.g. "1.0000"
-    readonly comments?: string | null;
-    readonly modifiers?: ReadonlyArray<KdsTicketPartidaModificadorSnapshot>;
-  }>;
+  readonly items: ReadonlyArray<EnviarComandaItemInput>;
 }
 
 /**
- * Domain event contract per FUNCTIONAL_ARCHITECTURE.md Sec. 6.1
- * ("Eventos de Dominio Emitidos"). Transported verbatim over `WS /kds/events`
- * by the Edge WebSocket dispatcher (@trident/edge) -- the dispatcher does not
- * interpret or mutate this payload, it only broadcasts it (Sec. 8 of the
- * WP-015 work order: "no business-rule ownership in the WebSocket dispatcher").
+ * Discriminated domain event contract per FUNCTIONAL_ARCHITECTURE.md Sec. 6.1
+ * & ACR-2026-016.
  */
-export type KdsDomainEventType =
-  | 'ComandaEnviadaACocina'
-  | 'OrdenProduccionIniciadaEnKDS'
-  | 'OrdenProduccionConfirmadaEnKDS';
-
-export interface KdsDomainEvent {
-  readonly type: KdsDomainEventType;
+export interface ComandaEnviadaACocinaEvent {
+  readonly type: 'ComandaEnviadaACocina';
   readonly kdsEstacionId: string;
   readonly ticket: KdsTicket;
   readonly emittedAt: string;
-  readonly tiempoPreparacionMinutos?: number | null; // explicitly propagated per ACR-2026-016 on completion
 }
+
+export interface OrdenProduccionIniciadaEnKDSEvent {
+  readonly type: 'OrdenProduccionIniciadaEnKDS';
+  readonly kdsEstacionId: string;
+  readonly ticket: KdsTicket;
+  readonly emittedAt: string;
+}
+
+export interface OrdenProduccionConfirmadaEnKDSEvent {
+  readonly type: 'OrdenProduccionConfirmadaEnKDS';
+  readonly kdsEstacionId: string;
+  readonly ordenProduccionId: string;
+  readonly completedAt: string;
+  readonly tiempoPreparacionMinutos: number;
+  readonly ticket: KdsTicket;
+  readonly emittedAt: string;
+}
+
+export type KdsDomainEvent =
+  | ComandaEnviadaACocinaEvent
+  | OrdenProduccionIniciadaEnKDSEvent
+  | OrdenProduccionConfirmadaEnKDSEvent;
+
+export type KdsDomainEventType = KdsDomainEvent['type'];
