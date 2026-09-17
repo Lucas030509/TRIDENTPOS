@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type pg from 'pg';
 import { getPool } from './connection.js';
-import { migrateUp } from './runner.js';
+import { migrateUp, migrateDown, getAppliedMigrations, DEFAULT_MIGRATIONS_DIR } from './runner.js';
 import { setTenantContext } from './tenant.js';
 
 dotenv.config();
@@ -599,8 +599,8 @@ describe('TRIDENTPOS WP-017 Inventory & Recipes Database Suite', () => {
 
   it('Section 42: Platform Core ownership test — WP-017 migration does NOT define products or categories', () => {
     const migrationPath = path.resolve(
-      process.cwd(),
-      'migrations/20260904230000_inventory_catalog_and_recipes.sql',
+      DEFAULT_MIGRATIONS_DIR,
+      '20260904230000_inventory_catalog_and_recipes.sql',
     );
     const sql = fs.readFileSync(migrationPath, 'utf8');
 
@@ -628,8 +628,8 @@ describe('TRIDENTPOS WP-017 Inventory & Recipes Database Suite', () => {
 
   it('QI-ADV-017-01: WP-017 Down migration contains no destructive CASCADE and preserves Platform Core', async () => {
     const migrationPath = path.resolve(
-      process.cwd(),
-      'migrations/20260904230000_inventory_catalog_and_recipes.sql',
+      DEFAULT_MIGRATIONS_DIR,
+      '20260904230000_inventory_catalog_and_recipes.sql',
     );
     const sql = fs.readFileSync(migrationPath, 'utf8');
     const downSection = sql.split(/--\s*Down/i)[1] || '';
@@ -638,5 +638,189 @@ describe('TRIDENTPOS WP-017 Inventory & Recipes Database Suite', () => {
       !/DROP\s+TABLE[^\n;]*CASCADE/i.test(downSection),
       'WP-017 Down migration must NOT contain DROP TABLE ... CASCADE',
     );
+  });
+
+  it('WP017-DOWN-01: Actual migrateDown execution reverts WP-017 while preserving Platform Core tables and marker data', async () => {
+    const markerOrgId = crypto.randomUUID();
+    const markerBranchId = crypto.randomUUID();
+    const markerCatId = crypto.randomUUID();
+    const markerProdId = crypto.randomUUID();
+    const markerWhId = crypto.randomUUID();
+    const markerIngId = crypto.randomUUID();
+    const markerRecId = crypto.randomUUID();
+    const markerItemId = crypto.randomUUID();
+
+    // 1. Ensure migrations are up and seed Platform Core and WP-017 records
+    await migrateUp(pool);
+
+    const client = await pool.connect();
+    try {
+      await client.query(`
+        INSERT INTO organizations (id, legal_name, trade_name, tax_id)
+        VALUES ('${markerOrgId}', 'Rollback Test Org', 'Rollback Org', 'TAX-RB-${markerOrgId.slice(0, 8)}')
+        ON CONFLICT (id) DO NOTHING;
+
+        INSERT INTO branches (id, organization_id, code, name)
+        VALUES ('${markerBranchId}', '${markerOrgId}', 'BR-RB', 'Rollback Branch')
+        ON CONFLICT (organization_id, id) DO NOTHING;
+
+        INSERT INTO categories (id, organization_id, code, name)
+        VALUES ('${markerCatId}', '${markerOrgId}', 'CAT-RB', 'Rollback Category')
+        ON CONFLICT (organization_id, id) DO NOTHING;
+
+        INSERT INTO products (id, organization_id, category_id, code, name, product_type, base_price, tax_scheme_id)
+        VALUES ('${markerProdId}', '${markerOrgId}', '${markerCatId}', 'PROD-RB', 'Rollback Product', 'COMPOSITE', 199.0000, '${crypto.randomUUID()}');
+
+        INSERT INTO warehouses (id, organization_id, branch_id, code, name, warehouse_type)
+        VALUES ('${markerWhId}', '${markerOrgId}', '${markerBranchId}', 'WH-RB', 'Rollback Warehouse', 'PRINCIPAL');
+
+        INSERT INTO ingredients (id, organization_id, code, name, unit_of_measure, current_average_cost)
+        VALUES ('${markerIngId}', '${markerOrgId}', 'ING-RB', 'Rollback Ingredient', 'KG', 45.0000);
+
+        INSERT INTO recipes (id, organization_id, product_id, code, name, yield_quantity, yield_unit)
+        VALUES ('${markerRecId}', '${markerOrgId}', '${markerProdId}', 'REC-RB', 'Rollback Recipe', 1.0000, 'PZ');
+
+        INSERT INTO recipe_items (id, organization_id, recipe_id, ingredient_id, sub_recipe_id, quantity, gross_quantity, unit_cost_snapshot)
+        VALUES ('${markerItemId}', '${markerOrgId}', '${markerRecId}', '${markerIngId}', NULL, 1.0000, 1.0000, 45.0000);
+      `);
+    } finally {
+      client.release();
+    }
+
+    // 2. Pre-rollback assertions: all 8 tables exist
+    const preCheck = await pool.query<{
+      warehouses: string | null;
+      ingredients: string | null;
+      recipes: string | null;
+      recipe_items: string | null;
+      products: string | null;
+      categories: string | null;
+      organizations: string | null;
+      branches: string | null;
+    }>(`
+      SELECT
+        to_regclass('warehouses')::text as warehouses,
+        to_regclass('ingredients')::text as ingredients,
+        to_regclass('recipes')::text as recipes,
+        to_regclass('recipe_items')::text as recipe_items,
+        to_regclass('products')::text as products,
+        to_regclass('categories')::text as categories,
+        to_regclass('organizations')::text as organizations,
+        to_regclass('branches')::text as branches;
+    `);
+    const pre = preCheck.rows[0]!;
+    assert.ok(pre.warehouses !== null, 'warehouses must exist before rollback');
+    assert.ok(pre.ingredients !== null, 'ingredients must exist before rollback');
+    assert.ok(pre.recipes !== null, 'recipes must exist before rollback');
+    assert.ok(pre.recipe_items !== null, 'recipe_items must exist before rollback');
+    assert.ok(pre.products !== null, 'products must exist before rollback');
+    assert.ok(pre.categories !== null, 'categories must exist before rollback');
+    assert.ok(pre.organizations !== null, 'organizations must exist before rollback');
+    assert.ok(pre.branches !== null, 'branches must exist before rollback');
+
+    try {
+      // 3. Execute authorized non-production migrateDown
+      const revertResult = await migrateDown(pool, { allowDestructiveDown: true });
+      assert.equal(
+        revertResult.reverted,
+        '20260904230000_inventory_catalog_and_recipes',
+        'migrateDown must revert exactly WP-017 migration',
+      );
+
+      // 4. Verify WP-017 physical tables are removed
+      const postCheck = await pool.query<{
+        warehouses: string | null;
+        ingredients: string | null;
+        recipes: string | null;
+        recipe_items: string | null;
+        products: string | null;
+        categories: string | null;
+        organizations: string | null;
+        branches: string | null;
+      }>(`
+        SELECT
+          to_regclass('warehouses')::text as warehouses,
+          to_regclass('ingredients')::text as ingredients,
+          to_regclass('recipes')::text as recipes,
+          to_regclass('recipe_items')::text as recipe_items,
+          to_regclass('products')::text as products,
+          to_regclass('categories')::text as categories,
+          to_regclass('organizations')::text as organizations,
+          to_regclass('branches')::text as branches;
+      `);
+      const post = postCheck.rows[0]!;
+      assert.equal(post.warehouses, null, 'warehouses must be removed by rollback');
+      assert.equal(post.ingredients, null, 'ingredients must be removed by rollback');
+      assert.equal(post.recipes, null, 'recipes must be removed by rollback');
+      assert.equal(post.recipe_items, null, 'recipe_items must be removed by rollback');
+
+      // 5. Verify Platform Core tables and marker data survived intact
+      assert.ok(post.products !== null, 'products table must survive WP-017 rollback');
+      assert.ok(post.categories !== null, 'categories table must survive WP-017 rollback');
+      assert.ok(post.organizations !== null, 'organizations table must survive WP-017 rollback');
+      assert.ok(post.branches !== null, 'branches table must survive WP-017 rollback');
+
+      const dataCheck = await pool.query<{ id: string }>(`SELECT id FROM products WHERE id = $1;`, [
+        markerProdId,
+      ]);
+      assert.equal(dataCheck.rows.length, 1, 'Platform Core marker product data must survive');
+
+      const catDataCheck = await pool.query<{ id: string }>(
+        `SELECT id FROM categories WHERE id = $1;`,
+        [markerCatId],
+      );
+      assert.equal(catDataCheck.rows.length, 1, 'Platform Core marker category data must survive');
+
+      // 6. Verify ledger state: WP-017 is no longer in applied ledger
+      const checkClient = await pool.connect();
+      try {
+        const applied = await getAppliedMigrations(checkClient);
+        const hasWp017 = applied.some((m) => m.id === '20260904230000');
+        assert.equal(hasWp017, false, 'WP-017 must no longer be recorded in applied migrations');
+        const lastApplied = applied[applied.length - 1];
+        assert.equal(
+          lastApplied?.id,
+          '20260904223000',
+          'Preceding migration must be the latest applied migration',
+        );
+      } finally {
+        checkClient.release();
+      }
+    } finally {
+      // 7. Restore migration environment with migrateUp
+      await migrateUp(pool);
+
+      // Verify WP-017 tables are restored
+      const restoreCheck = await pool.query<{
+        warehouses: string | null;
+        ingredients: string | null;
+        recipes: string | null;
+        recipe_items: string | null;
+      }>(`
+        SELECT
+          to_regclass('warehouses')::text as warehouses,
+          to_regclass('ingredients')::text as ingredients,
+          to_regclass('recipes')::text as recipes,
+          to_regclass('recipe_items')::text as recipe_items;
+      `);
+      const restored = restoreCheck.rows[0]!;
+      assert.ok(restored.warehouses !== null, 'warehouses must be restored');
+      assert.ok(restored.ingredients !== null, 'ingredients must be restored');
+      assert.ok(restored.recipes !== null, 'recipes must be restored');
+      assert.ok(restored.recipe_items !== null, 'recipe_items must be restored');
+
+      // Cleanup marker rows
+      const cleanClient = await pool.connect();
+      try {
+        await cleanClient.query(`
+          DELETE FROM products WHERE id = '${markerProdId}';
+          DELETE FROM categories WHERE id = '${markerCatId}';
+          DELETE FROM branches WHERE id = '${markerBranchId}';
+          DELETE FROM organizations WHERE id = '${markerOrgId}';
+        `);
+      } finally {
+        cleanClient.release();
+      }
+    }
   });
 });

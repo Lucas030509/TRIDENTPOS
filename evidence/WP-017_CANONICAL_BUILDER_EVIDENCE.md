@@ -7,6 +7,8 @@
 * **Implementation Branch (R1)**: `feat/wp-017-inventory-catalog-recipes-canonical`
 * **R1 Frozen Subject**: `b6d2d763450d440e039238f4b3447e4619a23a5d`
 * **Remediation Branch (R2)**: `feat/wp-017-inventory-catalog-recipes-canonical-r2`
+* **R2 Frozen Subject**: `686018d37d3ed88d34e1fe5bfffcc3fafe84f50e`
+* **Rollback Evidence Closure Branch (R3)**: `feat/wp-017-inventory-catalog-recipes-canonical-r3`
 * **Historical Non-Canonical Branch**: `feature/wp-017-inventory-recipes` (`20398d68de7ecb8017df1731ee5fa5e1c7a66098`)
 * **Historical Candidate Used As Base**: NO (strictly branched fresh from canonical baseline)
 * **Historical Branch Modified**: NO
@@ -86,7 +88,7 @@
 
 ---
 
-## 6. R2 Surgical Quick-Integrity Remediation
+## 6. R2 & R3 Quick-Integrity & Rollback Verification
 
 ### A. QI-BLK-017-01 Resolution: Cloud Tenant Transaction Boundary
 * `PostgresCloudInventoryService` encapsulates `pg.Pool` and guarantees all public application operations execute inside a canonical tenant transaction using `withTenantTransaction(this.pool, organizationId, callback)` from `@trident/database`.
@@ -100,10 +102,14 @@
 * Rollback-on-error verified: Unhandled exceptions automatically trigger PostgreSQL `ROLLBACK`, leaving zero partial mutation (TX-017-04).
 * Tenant context isolation verified: `app.current_organization_id` reverts at transaction completion, ensuring 0% context leakage across pooled connections (TX-017-05).
 
-### B. QI-ADV-017-01 Resolution: WP-017 Down Migration CASCADE Removal
-* Removed unnecessary `CASCADE` directives from `DROP TABLE` statements in `packages/database/migrations/20260904230000_inventory_catalog_and_recipes.sql`.
-* Reverse dependency drop order: `recipe_items` -> `recipes` -> `ingredients` -> `warehouses`.
-* Proves rollback cannot cascade to or destroy Platform Core tables (`products`, `categories`, `organizations`, `branches`).
+### B. QI-ADV-017-01 & WP017-DOWN-01: Rollback Evidence & Platform Core Survival
+* **Static Down SQL Inspection**: PASS (clean `DROP TABLE IF EXISTS` without `CASCADE` in reverse dependency order: `recipe_items` -> `recipes` -> `ingredients` -> `warehouses`).
+* **Actual `migrateDown()` Execution (`WP017-DOWN-01`)**: PASS (`migrateDown(pool, { allowDestructiveDown: true })` successfully executed under non-production test conditions and reverted exactly `20260904230000_inventory_catalog_and_recipes`).
+* **WP-017 Tables Removed**: PASS (`warehouses`, `ingredients`, `recipes`, `recipe_items` confirmed removed from database schema).
+* **Platform Core Tables Survived**: PASS (`products`, `categories`, `organizations`, `branches` confirmed present and unaffected).
+* **Platform Core Marker Data Survived**: PASS (marker records in `products` and `categories` survived rollback with 100% data integrity).
+* **Migration Ledger Correctness**: PASS (ledger confirms `20260904230000` is removed from applied records and `20260904223000_platform_core_master_catalog` is the latest applied migration).
+* **`migrateUp()` Restoration**: PASS (WP-017 tables cleanly restored upon forward migration).
 
 ---
 
@@ -135,7 +141,7 @@
 * `@trident/ui`: 1 passed / 0 failed
 
 ### G. PostgreSQL Integration Tests (`@trident/database`)
-* Result: 272 passed / 0 failed (including 12 WP-017 inventory database integration tests covering DB-01..12, Sec 42, and QI-ADV-017-01)
+* Result: 273 passed / 0 failed (including 13 WP-017 inventory database integration tests covering DB-01..12, Sec 42, QI-ADV-017-01, and WP017-DOWN-01)
 * Cross-Package Integration Suite (`tests/integration/`): 1 passed / 0 failed
 
 ### H. Electron Runtime Tests (`npm run --prefix packages/edge test:electron`)
@@ -148,14 +154,11 @@
 
 ## 8. Changed Files Inventory
 
-### A. R1 -> R2 Changed Files (5 Files Total)
+### A. R2 -> R3 Changed Files (2 Files Total)
 1. `evidence/WP-017_CANONICAL_BUILDER_EVIDENCE.md`
-2. `packages/cloud-server/src/index.ts`
-3. `packages/cloud-server/src/index.test.ts`
-4. `packages/database/migrations/20260904230000_inventory_catalog_and_recipes.sql`
-5. `packages/database/src/inventory.test.ts`
+2. `packages/database/src/inventory.test.ts`
 
-### B. Effective Main -> R2 Changed Files (20 Files Total)
+### B. Effective Main -> R3 Changed Files (20 Files Total)
 1. `evidence/WP-017_CANONICAL_BUILDER_EVIDENCE.md` [NEW]
 2. `package-lock.json` [MODIFY]
 3. `packages/cloud-server/package.json` [NEW]
