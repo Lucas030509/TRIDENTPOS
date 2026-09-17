@@ -1,9 +1,9 @@
 # IMPLEMENTATION PLAN — ERP RESTAURANTES / TRIDENTPOS
 
 > [!NOTE]
-> **ACR-2026-016 PROPOSED ARCHITECTURE CHANGE — PENDING GOVERNANCE APPROVAL**
+> **ACR-2026-016 APPROVED / MERGED / CANONICAL ON MAIN** (PR `#45`, canonical merge commit `d17633ab26606baf67029609f9db6d993b5c9909`)
 >
-> Proposed amendment under `ACR-2026-016`: KDS Contract & Data Authority Reconciliation. Establishes `kds_tickets` as the sole authoritative Edge runtime entity (classifying historical `kds_ordenes` as superseded/non-writable), reconciles `RecuperarOrdenRecall` as id-keyed by `ordenProduccionId` anchored on `completed_at`, canonicalizes operational `preparation_time_minutes` persistence and event propagation, enforces `ADR-012` Scale 4 integer quantities on `kds_ticket_partidas`, and formalizes performance validation debt `PERF-VAL-015-01` owned by `WP-028`. Pending formal review and Product Owner approval.
+> Canonical amendment under `ACR-2026-016`: KDS Contract & Data Authority Reconciliation. Establishes `kds_tickets` as the sole authoritative Edge runtime entity (classifying historical `kds_ordenes` as superseded/non-writable), reconciles `RecuperarOrdenRecall` as id-keyed by `ordenProduccionId` anchored on `completed_at`, canonicalizes operational `preparation_time_minutes` persistence and event propagation, enforces `ADR-012` Scale 4 integer quantities on `kds_ticket_partidas`, and formalizes performance validation debt `PERF-VAL-015-01` owned by `WP-028`. Product Owner approval and post-merge CI/security validation are complete; `PERF-VAL-015-01` remains OPEN.
 
 > [!NOTE]
 > **ACR-2026-015 MERGED / CANONICAL ON MAIN** (PR `#43`, canonical merge commit `456f75e854d62012af899cd2a467446375e5d65f`)
@@ -26,8 +26,8 @@
 > The additions and test specifications in this document relating to WP-009 (`DATA-INV-WP009-01`, `StationPinStore`, `EdgeSecureStore`, `edge_security_audit`, exact test obligations) represent governance overlays formally approved and merged into canonical main under G9 (`0e50fe12ba7a95638c8efe57d4cd9c598b56daa9`). The underlying baseline remains `APPROVED / FROZEN — 2026-09-03`.
 
 **Document ID:** `PLAN-IMP-001`
-**Version:** `1.3 MERGED / CANONICAL ON MAIN — ACR-2026-015` (Underlying baseline: `1.0 APPROVED / FROZEN — 2026-09-03` with ACR-2026-011 Canonical Overlay — G9; ACR-2026-013, ACR-2026-014, and ACR-2026-015 overlays are all `MERGED / CANONICAL ON MAIN`) *(current-state corrected post-merge — GOV-HYGIENE-015-POST-01; previously read "1.3 CANDIDATE OVERLAY — ACR-2026-015")*
-**Status:** `ACR-2026-015: MERGED / CANONICAL ON MAIN` (PR `#43`, canonical merge commit `456f75e854d62012af899cd2a467446375e5d65f`; `ACR-2026-013`/`ACR-2026-014`/`ACR-2026-015` are all canonical on `main`; see banners above) *(current-state corrected post-merge — GOV-HYGIENE-015-POST-01; previously read "PRODUCT OWNER APPROVED / GATE PASSED — PENDING CANONICAL MERGE")*
+**Version:** `1.4 MERGED / CANONICAL ON MAIN — ACR-2026-016` (Underlying baseline: `1.0 APPROVED / FROZEN — 2026-09-03` with ACR-2026-011 Canonical Overlay — G9; ACR-2026-013, ACR-2026-014, ACR-2026-015, and ACR-2026-016 overlays are all `MERGED / CANONICAL ON MAIN`)
+**Status:** `ACR-2026-016: APPROVED / MERGED / CANONICAL ON MAIN` (PR `#45`, canonical merge commit `d17633ab26606baf67029609f9db6d993b5c9909`; `ACR-2026-013`/`ACR-2026-014`/`ACR-2026-015`/`ACR-2026-016` are canonical on `main`; see banners above)
 **Date:** `2026-09-13`
 **Author Agent:** `01_Solution_Architect` (Overlay Synthesis: `01_Solution_Architect`)
 **Target Gate:** `gates/IMPLEMENTATION_READINESS_GATE.md`

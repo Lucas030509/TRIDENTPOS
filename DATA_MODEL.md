@@ -1,9 +1,9 @@
 # DATA MODEL SPECIFICATION — ERP RESTAURANTES / TRIDENTPOS
 
 > [!NOTE]
-> **ACR-2026-016 PROPOSED ARCHITECTURE CHANGE — PENDING GOVERNANCE APPROVAL**
+> **ACR-2026-016 APPROVED / MERGED / CANONICAL ON MAIN** (PR `#45`, canonical merge commit `d17633ab26606baf67029609f9db6d993b5c9909`)
 >
-> Proposed amendment under `ACR-2026-016`: KDS Contract & Data Authority Reconciliation. Establishes `kds_tickets` and `kds_ticket_partidas` as the sole authoritative Edge runtime schema for KDS production orders, classifies historical `kds_ordenes` as superseded/non-writable, standardizes `kds_estaciones` and `impresoras_red`, integrates `preparation_time_minutes` (INTEGER NULL `>= 0`), and enforces `ADR-012` Scale 4 integer quantity representation. Pending formal independent review and Product Owner approval.
+> Canonical amendment under `ACR-2026-016`: KDS Contract & Data Authority Reconciliation. Establishes `kds_tickets` and `kds_ticket_partidas` as the sole authoritative Edge runtime schema for KDS production orders, classifies historical `kds_ordenes` as superseded/non-writable, standardizes `kds_estaciones` and `impresoras_red`, integrates `preparation_time_minutes` (INTEGER NULL `>= 0`), and enforces `ADR-012` Scale 4 integer quantity representation.
 
 > [!NOTE]
 > **ACR-2026-014 APPROVED / MERGED / CANONICAL ON MAIN** (PR `#41`, merge commit `d102f5296c9175c485aeb1a4bf7b5af3a93173b5`)
@@ -21,8 +21,8 @@
 > The additions in this document relating to WP-009 (`enrollment_tokens`, `station_credentials`, `edge_security_audit`) represent governance overlays formally approved and merged into canonical main under G9 (`0e50fe12ba7a95638c8efe57d4cd9c598b56daa9`). The underlying baseline remains `APPROVED / FROZEN — 2026-09-01`.
 
 **Document ID:** `ARCH-MDL-001`
-**Version:** `1.3 PROPOSED OVERLAY — ACR-2026-016` (Underlying baseline: `1.0 APPROVED / FROZEN — 2026-09-01` with ACR-2026-011, ACR-2026-013, and ACR-2026-014 Canonical Overlays)
-**Status:** `PROPOSED ARCHITECTURE CHANGE — PENDING GOVERNANCE APPROVAL`
+**Version:** `1.3 MERGED / CANONICAL ON MAIN — ACR-2026-016` (Underlying baseline: `1.0 APPROVED / FROZEN — 2026-09-01` with ACR-2026-011, ACR-2026-013, and ACR-2026-014 Canonical Overlays)
+**Status:** `ACR-2026-016: APPROVED / MERGED / CANONICAL ON MAIN` (PR `#45`, canonical merge commit `d17633ab26606baf67029609f9db6d993b5c9909`)
 **Date:** 2026-09-16
 **Framework:** `EAAF v1.2.0 @ 7e036f43240b3dc28ccb996e350263598275b2cd`
 **Author Agent:** `01_Solution_Architect` & `03_Data_Architect`
