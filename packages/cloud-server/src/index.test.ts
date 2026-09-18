@@ -1404,4 +1404,157 @@ describe('TRIDENTPOS WP-018 Cloud Server Composition, Kárdex & KDS Depletion Su
     );
     assert.equal(outboxCount.rows[0]!.count, '1');
   });
+
+  it('R4-CLOUD-01: concurrent replay and normal redelivery executes without deadlock with canonical lock ordering', async () => {
+    const orderId = `ORD-CONC-REPLAY-REDELIVERY-${crypto.randomUUID()}`;
+    const event: KdsOrderProducedEventDTO = {
+      organizacionId: tenantAId,
+      sucursalId: branchAId,
+      centroConsumoId: whAId,
+      ordenId: orderId,
+      fechaHora: new Date().toISOString(),
+      tiempoPreparacionMinutos: 5,
+      items: [
+        {
+          productoId: prodBurgerId,
+          cantidad: '1.0000',
+          selectedModifiers: [{ modifierId: 'mod-extra-cheese', quantity: '1.0000' }],
+        },
+      ],
+    };
+
+    // 1. Initial execution quarantines the event as PENDING
+    const qResult = await service.onKdsOrderProduced(event);
+    assert.equal(qResult.status, 'QUARANTINED');
+    const quarantineId = qResult.quarantineId!;
+
+    const testResolver: ModifierRecipeResolver = {
+      resolveModifierImpact: async (req) => {
+        if (req.modifierId === 'mod-extra-cheese') {
+          return {
+            modifierId: req.modifierId,
+            additionalIngredients: [
+              { ingredientId: ingCheeseId, quantity: '0.0500', grossQuantity: '0.0500' },
+            ],
+            removedIngredients: [],
+          };
+        }
+        return null;
+      },
+    };
+
+    // 2. Concurrently execute:
+    // A: replayQuarantinedDepletion with resolver
+    // B: onKdsOrderProduced without resolver (normal redelivery)
+    const [resReplay, resRedelivery] = await Promise.all([
+      service.replayQuarantinedDepletion(tenantAId, quarantineId, testResolver),
+      service.onKdsOrderProduced(event),
+    ]);
+
+    assert.ok(
+      resReplay.status === 'APPLIED' || resReplay.status === 'DUPLICATE_ACCEPTED',
+      `Replay status should be APPLIED or DUPLICATE_ACCEPTED, got ${resReplay.status}`,
+    );
+    assert.ok(
+      resRedelivery.status === 'QUARANTINED' || resRedelivery.status === 'DUPLICATE_ACCEPTED',
+      `Redelivery status should be QUARANTINED or DUPLICATE_ACCEPTED, got ${resRedelivery.status}`,
+    );
+
+    // Verify exact stock_ledger movement count: exactly 3 movements (meat + bun + cheese)
+    const movementsCheck = await pool.query(
+      `SELECT id FROM stock_ledger WHERE organization_id = $1 AND reference_event_id = $2;`,
+      [tenantAId, orderId],
+    );
+    assert.equal(movementsCheck.rows.length, 3, 'Exactly 3 stock movements must be persisted');
+
+    // Verify exactly 1 outbox event
+    const outboxCheck = await pool.query(
+      `SELECT id FROM cloud_integration_outbox WHERE organization_id = $1 AND aggregate_id = $2;`,
+      [tenantAId, orderId],
+    );
+    assert.equal(outboxCheck.rows.length, 1, 'Exactly 1 outbox event must be persisted');
+
+    // Verify quarantine ends in REPLAYED
+    const qCheck = await pool.query<{ status: string; replayed_at: string | null }>(
+      `SELECT status, replayed_at FROM inventory_quarantine_records WHERE id = $1;`,
+      [quarantineId],
+    );
+    assert.equal(qCheck.rows[0]!.status, 'REPLAYED', 'Quarantine record must be in REPLAYED state');
+    assert.ok(qCheck.rows[0]!.replayed_at !== null, 'replayed_at must be populated');
+  });
+
+  it('R4-CLOUD-02: reverse concurrency order (redelivery started first, replay overlapping) resolves cleanly without deadlock', async () => {
+    const orderId = `ORD-CONC-REDELIVERY-FIRST-${crypto.randomUUID()}`;
+    const event: KdsOrderProducedEventDTO = {
+      organizacionId: tenantAId,
+      sucursalId: branchAId,
+      centroConsumoId: whAId,
+      ordenId: orderId,
+      fechaHora: new Date().toISOString(),
+      tiempoPreparacionMinutos: 5,
+      items: [
+        {
+          productoId: prodBurgerId,
+          cantidad: '1.0000',
+          selectedModifiers: [{ modifierId: 'mod-extra-cheese', quantity: '1.0000' }],
+        },
+      ],
+    };
+
+    const qResult = await service.onKdsOrderProduced(event);
+    assert.equal(qResult.status, 'QUARANTINED');
+    const quarantineId = qResult.quarantineId!;
+
+    const testResolver: ModifierRecipeResolver = {
+      resolveModifierImpact: async (req) => {
+        if (req.modifierId === 'mod-extra-cheese') {
+          return {
+            modifierId: req.modifierId,
+            additionalIngredients: [
+              { ingredientId: ingCheeseId, quantity: '0.0500', grossQuantity: '0.0500' },
+            ],
+            removedIngredients: [],
+          };
+        }
+        return null;
+      },
+    };
+
+    // Redelivery launched, immediately overlapped with Replay
+    const p1 = service.onKdsOrderProduced(event);
+    const p2 = service.replayQuarantinedDepletion(tenantAId, quarantineId, testResolver);
+
+    const [resRedelivery, resReplay] = await Promise.all([p1, p2]);
+
+    assert.ok(
+      resReplay.status === 'APPLIED' || resReplay.status === 'DUPLICATE_ACCEPTED',
+      `Replay status should be APPLIED or DUPLICATE_ACCEPTED, got ${resReplay.status}`,
+    );
+    assert.ok(
+      resRedelivery.status === 'QUARANTINED' || resRedelivery.status === 'DUPLICATE_ACCEPTED',
+      `Redelivery status should be QUARANTINED or DUPLICATE_ACCEPTED, got ${resRedelivery.status}`,
+    );
+
+    // Total stock movements = 3
+    const movementsCheck = await pool.query(
+      `SELECT id FROM stock_ledger WHERE organization_id = $1 AND reference_event_id = $2;`,
+      [tenantAId, orderId],
+    );
+    assert.equal(movementsCheck.rows.length, 3);
+
+    // Total outbox events = 1
+    const outboxCheck = await pool.query(
+      `SELECT id FROM cloud_integration_outbox WHERE organization_id = $1 AND aggregate_id = $2;`,
+      [tenantAId, orderId],
+    );
+    assert.equal(outboxCheck.rows.length, 1);
+
+    // Quarantine state = REPLAYED
+    const qCheck = await pool.query<{ status: string; replayed_at: string | null }>(
+      `SELECT status, replayed_at FROM inventory_quarantine_records WHERE id = $1;`,
+      [quarantineId],
+    );
+    assert.equal(qCheck.rows[0]!.status, 'REPLAYED');
+    assert.ok(qCheck.rows[0]!.replayed_at !== null);
+  });
 });

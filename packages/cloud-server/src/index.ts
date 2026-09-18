@@ -503,24 +503,29 @@ export class PostgresCloudInventoryService implements CloudInventoryCompositionS
     customResolver?: ModifierRecipeResolver,
   ): Promise<KdsDepletionResult> {
     return withTenantTransaction(this.pool, event.organizacionId, async (client) => {
-      return this.applyKdsDepletionWithClient(client, event, customResolver);
+      // 1. Acquire source-event advisory lock FIRST (canonical lock order step 1)
+      await this.acquireSourceEventLock(
+        client,
+        event.organizacionId,
+        event.sucursalId,
+        event.centroConsumoId,
+        event.ordenId,
+      );
+
+      // 2. Execute depletion under held source-event lock
+      return this.applyKdsDepletionLockedWithClient(client, event, customResolver);
     });
   }
 
   /**
-   * Internal transaction-client scoped implementation of KDS order depletion.
-   * Guarantees that depletion, outbox enqueue, and quarantine reconciliation all commit
-   * or roll back atomically within the caller-provided client transaction.
-   *
-   * Visibility: protected (accessible to Testable subclass for fault-injection testing).
-   * Prohibited from direct public caller API surface.
+   * Protected helper for backward-compatibility with callers/test harnesses that invoke
+   * depletion with a client directly, acquiring source-event lock upfront.
    */
   protected async applyKdsDepletionWithClient(
     client: pg.PoolClient,
     event: KdsOrderProducedEventDTO,
     customResolver?: ModifierRecipeResolver,
   ): Promise<KdsDepletionResult> {
-    // 1. Source-event level serialization lock to serialize concurrent attempts on the same KDS order
     await this.acquireSourceEventLock(
       client,
       event.organizacionId,
@@ -528,8 +533,24 @@ export class PostgresCloudInventoryService implements CloudInventoryCompositionS
       event.centroConsumoId,
       event.ordenId,
     );
+    return this.applyKdsDepletionLockedWithClient(client, event, customResolver);
+  }
 
-    // 2. Idempotency Check FIRST: if CONSUMO_KDS movements already exist for this order
+  /**
+   * Internal transaction-client scoped implementation of KDS order depletion.
+   * Assumes the caller transaction has already acquired the source-event advisory lock.
+   * Guarantees that depletion, outbox enqueue, and quarantine reconciliation all commit
+   * or roll back atomically within the caller-provided client transaction.
+   *
+   * Visibility: protected (accessible to Testable subclass for fault-injection testing).
+   * Prohibited from direct public caller API surface.
+   */
+  protected async applyKdsDepletionLockedWithClient(
+    client: pg.PoolClient,
+    event: KdsOrderProducedEventDTO,
+    customResolver?: ModifierRecipeResolver,
+  ): Promise<KdsDepletionResult> {
+    // 1. Idempotency Check FIRST: if CONSUMO_KDS movements already exist for this order
     const existingMovementsRes = await client.query<{
       id: string;
       organization_id: string;
@@ -942,8 +963,12 @@ export class PostgresCloudInventoryService implements CloudInventoryCompositionS
 
   /**
    * Replays a quarantined depletion record using an authorized ModifierRecipeResolver.
-   * Single authoritative tenant transaction: locks quarantine record FOR UPDATE,
-   * performs depletion, enqueues outbox, and updates quarantine status to REPLAYED.
+   * Single authoritative tenant transaction with CANONICAL LOCK ORDERING:
+   * 1. Non-locking pre-read to obtain event identity
+   * 2. Source-event advisory lock (STEP 1)
+   * 3. Authoritative quarantine record FOR UPDATE (STEP 2)
+   * 4. Ingredient aggregate locks (STEP 3) inside applyKdsDepletionLockedWithClient
+   * Performs depletion, enqueues outbox, and updates quarantine status to REPLAYED.
    */
   public async replayQuarantinedDepletion(
     organizationId: string,
@@ -951,7 +976,46 @@ export class PostgresCloudInventoryService implements CloudInventoryCompositionS
     resolver: ModifierRecipeResolver,
   ): Promise<KdsDepletionResult> {
     return withTenantTransaction(this.pool, organizationId, async (client) => {
-      const qRes = await client.query<{
+      // 1. Non-locking pre-read to obtain event identity & routing parameters
+      const preRes = await client.query<{
+        id: string;
+        organization_id: string;
+        branch_id: string;
+        source_event_id: string;
+        payload: any;
+        status: string;
+      }>(
+        `SELECT id, organization_id, branch_id, source_event_id, payload, status
+         FROM inventory_quarantine_records
+         WHERE organization_id = $1 AND id = $2;`,
+        [organizationId, quarantineId],
+      );
+
+      if (preRes.rows.length === 0) {
+        throw new Error(
+          `Quarantine record '${quarantineId}' not found for organization '${organizationId}'`,
+        );
+      }
+
+      const preRecord = preRes.rows[0]!;
+      const prePayload: KdsOrderProducedEventDTO =
+        typeof preRecord.payload === 'string' ? JSON.parse(preRecord.payload) : preRecord.payload;
+
+      const branchId = prePayload.sucursalId || preRecord.branch_id;
+      const warehouseId = prePayload.centroConsumoId;
+      const sourceOrderId = prePayload.ordenId || preRecord.source_event_id;
+
+      // 2. STEP 1 IN CANONICAL LOCK ORDER: Acquire SOURCE-EVENT advisory lock FIRST
+      await this.acquireSourceEventLock(
+        client,
+        organizationId,
+        branchId,
+        warehouseId,
+        sourceOrderId,
+      );
+
+      // 3. STEP 2 IN CANONICAL LOCK ORDER: Authoritative locked read with FOR UPDATE
+      const lockedRes = await client.query<{
         id: string;
         organization_id: string;
         branch_id: string;
@@ -966,27 +1030,30 @@ export class PostgresCloudInventoryService implements CloudInventoryCompositionS
         [organizationId, quarantineId],
       );
 
-      if (qRes.rows.length === 0) {
+      if (lockedRes.rows.length === 0) {
         throw new Error(
           `Quarantine record '${quarantineId}' not found for organization '${organizationId}'`,
         );
       }
 
-      const qRecord = qRes.rows[0]!;
+      const lockedRecord = lockedRes.rows[0]!;
       const eventPayload: KdsOrderProducedEventDTO =
-        typeof qRecord.payload === 'string' ? JSON.parse(qRecord.payload) : qRecord.payload;
+        typeof lockedRecord.payload === 'string'
+          ? JSON.parse(lockedRecord.payload)
+          : lockedRecord.payload;
 
-      // Apply depletion directly within the SAME client transaction
-      const depletionResult = await this.applyKdsDepletionWithClient(
+      // 4. Execute locked depletion (source lock already held)
+      const depletionResult = await this.applyKdsDepletionLockedWithClient(
         client,
         eventPayload,
         resolver,
       );
 
+      // 5. Update quarantine record to REPLAYED if applied or already duplicate accepted
       if (depletionResult.status === 'APPLIED' || depletionResult.status === 'DUPLICATE_ACCEPTED') {
         await client.query(
           `UPDATE inventory_quarantine_records
-           SET status = 'REPLAYED', replayed_at = NOW()
+           SET status = 'REPLAYED', replayed_at = COALESCE(replayed_at, NOW())
            WHERE organization_id = $1 AND id = $2;`,
           [organizationId, quarantineId],
         );

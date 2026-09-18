@@ -1,12 +1,12 @@
-# TRIDENTPOS — WP-018 CANONICAL BUILDER EVIDENCE (R3)
+# TRIDENTPOS — WP-018 CANONICAL BUILDER EVIDENCE (R4)
 
 ## 1. Canonical Identification & Lineage
 * **Work Package**: WP-018 — Real-Time Kárdex, Waste Tracking & KDS Depletion Service
 * **Governing Specification**: `ACR-2026-017` / `ACR-2026-017_CURRENT_STATE.md`
 * **Canonical Base SHA**: `ea409360dca4e1f133f516a45eb06890e480c253` (`origin/main`)
 * **Base Verification**: PASS (exact match with canonical baseline)
-* **R2 Frozen Subject**: `931743b5e46b2796b4adca5b72a0f65f20773fa6` (immutable baseline for R3)
-* **Implementation Branch**: `feat/wp-018-kardex-kds-depletion-canonical-r3`
+* **R3 Frozen Subject**: `62920d5bf018a64748ee5fd408917e5a22049fd7` (immutable baseline for R4)
+* **Implementation Branch**: `feat/wp-018-kardex-kds-depletion-canonical-r4`
 * **Role**: `13_Backend_Developer` (BUILDER ONLY)
 * **Governance Enforcement**: Builder Only mode active. Antigravity does not open PRs, merge, self-approve, or alter governing documentation.
 
@@ -65,34 +65,43 @@
 
 ---
 
-## 4. Code Review R3 Surgical Remediations
+## 4. Code Review R4 Surgical Remediations (CR-BLK-018-R3-01 Resolution)
 
-### A. CR-BLK-018-01: Transaction-Scoped Helper Visibility (`applyKdsDepletionWithClient`)
-* Visibility changed from `public` to `protected`.
-* It is not part of the public application API surface (`CloudInventoryCompositionService` interface has no raw-client method).
-* Testing controlled rollbacks is achieved via a test-only subclass `TestablePostgresCloudInventoryService` declared exclusively inside `packages/cloud-server/src/index.test.ts`.
-* Verified by test `R3-CLOUD-01`.
+### A. Canonical Global Lock Ordering
+To prevent any possibility of deadlock from lock-order inversion between normal KDS delivery and quarantined replay, ALL operations for the same KDS source event adhere strictly to the uniform lock hierarchy:
+1. **STEP 1**: `SOURCE-EVENT` advisory transaction lock (`KDS_SOURCE_EVENT:${orgId}:${branchId}:${whId}:${sourceOrderId}`).
+2. **STEP 2**: `QUARANTINE` row lock (`SELECT ... FROM inventory_quarantine_records ... FOR UPDATE` or UPSERT).
+3. **STEP 3**: `INGREDIENT` aggregate locks (`pg_advisory_xact_lock` for each aggregated ingredient).
 
-### B. CR-BLK-018-02: Idempotency Ordering Precedes Quarantine Check
-* Inside `applyKdsDepletionWithClient()`: Source-event serialization and existing-movements check occur **BEFORE** checking modifiers.
-* If a source order was already applied (e.g. via an authorized replay), subsequent arrivals of the same source event return `DUPLICATE_ACCEPTED` immediately.
-* Quarantine records remain in `REPLAYED` status and are **never** reverted to `PENDING`.
-* Verified by test `R3-CLOUD-02`.
+### B. Normal Delivery Lock Order
+* `onKdsOrderProduced()`:
+  1. Opens single tenant transaction.
+  2. Acquires `SOURCE-EVENT` advisory lock upfront (`acquireSourceEventLock`).
+  3. Calls `applyKdsDepletionLockedWithClient()`.
+  4. Checks existing movements (idempotency check).
+  5. If modifiers unresolvable without resolver: inserts/updates `inventory_quarantine_records` (Quarantine write).
+  6. Acquires `INGREDIENT` aggregate locks in ascending order.
+  7. Inserts `stock_ledger` movements and enqueues `InventarioDescontadoPorReceta` outbox event.
 
-### C. CR-BLK-018-03: Deterministic Retry Results for Waste & KDS Negative Stock
-* In `registerWaste()`: If an identical `commandId` is retried, the linked `stock_ledger` movement's `balance_after` is checked. If `balance_after < 0`, a `NegativeStockSignal` is deterministically reconstructed in the return value matching the original call, with 0 duplicate movements or rows created.
-* In `onKdsOrderProduced()` duplicate flow: `negativeStockAlerts` are reconstructed from existing immutable ledger movements where `balance_after < 0`.
-* Verified by tests `R3-CLOUD-03` and `R3-CLOUD-04`.
+### C. Replay Lock Order & Refactored Pre-Lock Read
+* `replayQuarantinedDepletion()`:
+  1. Opens single tenant transaction.
+  2. Performs a **non-locking pre-read** of `inventory_quarantine_records` solely to obtain routing identity (`branch_id`, `warehouse_id`, `source_event_id`).
+  3. Acquires `SOURCE-EVENT` advisory lock upfront (**STEP 1** in lock hierarchy).
+  4. Executes authoritative **locked read** with `SELECT ... FOR UPDATE` (**STEP 2** in lock hierarchy).
+  5. Calls `applyKdsDepletionLockedWithClient()` (source lock already held, zero duplicate lock calls).
+  6. Acquires `INGREDIENT` aggregate locks (**STEP 3** in lock hierarchy).
+  7. Inserts `stock_ledger` movements and enqueues outbox event.
+  8. Updates quarantine row to `REPLAYED` with `COALESCE(replayed_at, NOW())`.
+  9. Single commit without nested transactions or secondary PoolClients.
 
-### D. Exact Outbox Lookup & Missing-Outbox Integrity Error
-* Duplicate outbox query explicitly filters by `event_type = 'InventarioDescontadoPorReceta'`, `organization_id`, `branch_id`, `aggregate_type = 'INVENTORY_STOCK'`, and `aggregate_id = ordenId`.
-* If stock movements exist for an order but the required outbox record is missing, the service throws an explicit integrity error rather than returning `'UNKNOWN'`.
-* Verified by test `R3-CLOUD-05`.
-
-### E. Concurrent Idempotency Hardening
-* `registerWaste()`: Acquires aggregate advisory lock before checking for existing `command_id`, ensuring concurrent duplicate commands serialize cleanly and deterministically return the existing record without database uniqueness errors.
-* `onKdsOrderProduced()`: Acquires source-event transaction advisory lock (`pg_advisory_xact_lock(hashtext('KDS_SOURCE_EVENT:' || org || ':' || branch || ':' || wh || ':' || orderId))`) before checking existing movements, guaranteeing that concurrent submissions of the same KDS order cleanly resolve to one `APPLIED` and one `DUPLICATE_ACCEPTED`.
-* Verified by tests `R3-CLOUD-06` and `R3-CLOUD-07`.
+### D. Concurrency & Deadlock Validation
+* **Deadlock Concurrency Test (`R4-CLOUD-01`)**:
+  * Simultaneously fires `replayQuarantinedDepletion` and `onKdsOrderProduced` for the same quarantined event.
+  * Result: 0 deadlocks, 0 aborted transactions, exactly 1 successful depletion, exactly 3 ledger movements (burger + extra cheese), exactly 1 outbox event, and quarantine state `REPLAYED`.
+* **Reverse Concurrency Order Test (`R4-CLOUD-02`)**:
+  * Redelivery launched first immediately overlapped with replay.
+  * Result: Clean execution, 0 deadlocks, 3 ledger movements, 1 outbox event, quarantine state `REPLAYED`.
 
 ---
 
@@ -128,7 +137,7 @@
 
 ### F. Unit & Domain Tests
 * `@trident/inventory`: 27 passed / 0 failed
-* `@trident/cloud-server`: 27 passed / 0 failed (7 WP-017 + 20 WP-018 composition tests including WP018-CLOUD-01..08, WP018-CLOUD-10..14, R3-CLOUD-01..07)
+* `@trident/cloud-server`: 29 passed / 0 failed (7 WP-017 + 22 WP-018 composition & concurrency tests including WP018-CLOUD-01..08, WP018-CLOUD-10..14, R3-CLOUD-01..07, R4-CLOUD-01..02)
 * `@trident/pos`: 38 passed / 0 failed
 * `@trident/core`: 25 passed / 0 failed
 * `@trident/edge`: 168 passed / 0 failed
@@ -147,12 +156,12 @@
 
 ## 7. Changed Files Inventory
 
-### R2 → R3 Changed Files (Exactly 3 Files)
+### R3 → R4 Changed Files (Exactly 3 Files)
 1. `packages/cloud-server/src/index.ts` [MODIFY]
 2. `packages/cloud-server/src/index.test.ts` [MODIFY]
 3. `evidence/WP-018_CANONICAL_BUILDER_EVIDENCE.md` [MODIFY]
 
-### Effective Canonical Main → R3 Changed Files (13 Files Total)
+### Effective Canonical Main → R4 Changed Files (13 Files Total)
 1. `evidence/WP-018_CANONICAL_BUILDER_EVIDENCE.md` [NEW]
 2. `packages/database/migrations/20260905000000_inventory_kardex_kds_depletion.sql` [NEW]
 3. `packages/database/src/index.test.ts` [MODIFY]
