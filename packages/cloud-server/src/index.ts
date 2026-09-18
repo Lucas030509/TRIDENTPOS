@@ -201,11 +201,11 @@ export class PostgresCloudInventoryService implements CloudInventoryCompositionS
   /**
    * Registers physical waste (MERMA) atomically with mandatory evidence.
    * Guaranteed:
-   * 1. Idempotency on commandId.
-   * 2. Transaction-scoped aggregate advisory lock preventing race conditions.
+   * 1. Transaction-scoped aggregate advisory lock FIRST preventing race conditions.
+   * 2. Idempotency on commandId under lock with deterministic prior result reconstruction.
    * 3. Negative quantity_delta persisted in stock_ledger.
    * 4. Linked inventory_waste_records row created in the same transaction.
-   * 5. Neutral NegativeStockSignal emitted if balance < 0.
+   * 5. Neutral NegativeStockSignal emitted if balance < 0 (both initially and on retry).
    */
   public async registerWaste(command: RegisterWasteCommand): Promise<{
     movement: StockLedgerEntry;
@@ -215,7 +215,16 @@ export class PostgresCloudInventoryService implements CloudInventoryCompositionS
     validateWasteCommand(command);
 
     return withTenantTransaction(this.pool, command.organizationId, async (client) => {
-      // 1. Idempotency Check: if waste command was already applied, return existing record
+      // 1. Concurrency serialization via transaction-scoped advisory lock FIRST
+      await this.acquireAggregateLock(
+        client,
+        command.organizationId,
+        command.branchId,
+        command.warehouseId,
+        command.ingredientId,
+      );
+
+      // 2. Idempotency Check under lock: if waste command was already applied, return existing record
       const existingWasteRes = await client.query<{
         id: string;
         organization_id: string;
@@ -263,6 +272,20 @@ export class PostgresCloudInventoryService implements CloudInventoryCompositionS
         );
 
         const el = ledgerRes.rows[0]!;
+        const balanceAfterScaled = parseDecimal12x4(el.balance_after);
+        let negativeStockAlert: NegativeStockSignal | null = null;
+        if (balanceAfterScaled < 0n) {
+          negativeStockAlert = {
+            organizationId: el.organization_id,
+            branchId: el.branch_id,
+            warehouseId: el.warehouse_id,
+            ingredientId: el.ingredient_id,
+            balanceAfter: el.balance_after,
+            timestamp:
+              typeof el.created_at === 'string' ? el.created_at : el.created_at.toISOString(),
+          };
+        }
+
         return {
           movement: {
             id: el.id,
@@ -295,18 +318,9 @@ export class PostgresCloudInventoryService implements CloudInventoryCompositionS
             createdAt:
               typeof ew.created_at === 'string' ? ew.created_at : ew.created_at.toISOString(),
           },
-          negativeStockAlert: null,
+          negativeStockAlert,
         };
       }
-
-      // 2. Concurrency serialization via transaction-scoped advisory lock
-      await this.acquireAggregateLock(
-        client,
-        command.organizationId,
-        command.branchId,
-        command.warehouseId,
-        command.ingredientId,
-      );
 
       // 3. Retrieve unit cost snapshot
       const unitCostStr = await this.getIngredientAverageCostWithClient(
@@ -497,38 +511,25 @@ export class PostgresCloudInventoryService implements CloudInventoryCompositionS
    * Internal transaction-client scoped implementation of KDS order depletion.
    * Guarantees that depletion, outbox enqueue, and quarantine reconciliation all commit
    * or roll back atomically within the caller-provided client transaction.
+   *
+   * Visibility: protected (accessible to Testable subclass for fault-injection testing).
+   * Prohibited from direct public caller API surface.
    */
-  public async applyKdsDepletionWithClient(
+  protected async applyKdsDepletionWithClient(
     client: pg.PoolClient,
     event: KdsOrderProducedEventDTO,
     customResolver?: ModifierRecipeResolver,
   ): Promise<KdsDepletionResult> {
-    // 1. Check if any item contains modifiers
-    const hasModifiers = event.items.some(
-      (item) => item.selectedModifiers && item.selectedModifiers.length > 0,
+    // 1. Source-event level serialization lock to serialize concurrent attempts on the same KDS order
+    await this.acquireSourceEventLock(
+      client,
+      event.organizacionId,
+      event.sucursalId,
+      event.centroConsumoId,
+      event.ordenId,
     );
 
-    if (hasModifiers && !customResolver) {
-      // Quarantine modifier-bearing event durably with zero stock movements
-      const quarantineRes = await client.query<{ id: string }>(
-        `INSERT INTO inventory_quarantine_records (
-          organization_id, branch_id, source_event_id, payload, reason, status
-        ) VALUES ($1, $2, $3, $4, 'MODIFIER_RECIPE_RESOLUTION_PENDING', 'PENDING')
-        ON CONFLICT (organization_id, branch_id, source_event_id)
-        DO UPDATE SET payload = EXCLUDED.payload, reason = EXCLUDED.reason, status = 'PENDING'
-        RETURNING id;`,
-        [event.organizacionId, event.sucursalId, event.ordenId, JSON.stringify(event)],
-      );
-
-      return {
-        status: 'QUARANTINED',
-        ordenId: event.ordenId,
-        quarantineId: quarantineRes.rows[0]!.id,
-        reason: 'MODIFIER_RECIPE_RESOLUTION_PENDING',
-      };
-    }
-
-    // 2. Idempotency Check: if CONSUMO_KDS movements already exist for this order
+    // 2. Idempotency Check FIRST: if CONSUMO_KDS movements already exist for this order
     const existingMovementsRes = await client.query<{
       id: string;
       organization_id: string;
@@ -555,13 +556,21 @@ export class PostgresCloudInventoryService implements CloudInventoryCompositionS
     );
 
     if (existingMovementsRes.rows.length > 0) {
-      // Query outbox event
+      // Query exact outbox event
       const outboxRes = await client.query<{ id: string }>(
         `SELECT id FROM cloud_integration_outbox
-         WHERE organization_id = $1 AND aggregate_type = 'INVENTORY_STOCK' AND aggregate_id = $2
+         WHERE organization_id = $1 AND branch_id = $2
+           AND aggregate_type = 'INVENTORY_STOCK' AND aggregate_id = $3
+           AND event_type = 'InventarioDescontadoPorReceta'
          LIMIT 1;`,
-        [event.organizacionId, event.ordenId],
+        [event.organizacionId, event.sucursalId, event.ordenId],
       );
+
+      if (outboxRes.rows.length === 0) {
+        throw new Error(
+          `Integrity error: KDS order '${event.ordenId}' has applied stock movements in tenant '${event.organizacionId}' but missing required 'InventarioDescontadoPorReceta' outbox event`,
+        );
+      }
 
       const movements: StockLedgerEntry[] = existingMovementsRes.rows.map((row) => ({
         id: row.id,
@@ -580,16 +589,57 @@ export class PostgresCloudInventoryService implements CloudInventoryCompositionS
           typeof row.created_at === 'string' ? row.created_at : row.created_at.toISOString(),
       }));
 
+      const negativeStockAlerts: NegativeStockSignal[] = [];
+      for (const row of existingMovementsRes.rows) {
+        const balScaled = parseDecimal12x4(row.balance_after);
+        if (balScaled < 0n) {
+          negativeStockAlerts.push({
+            organizationId: row.organization_id,
+            branchId: row.branch_id,
+            warehouseId: row.warehouse_id,
+            ingredientId: row.ingredient_id,
+            balanceAfter: row.balance_after,
+            timestamp:
+              typeof row.created_at === 'string' ? row.created_at : row.created_at.toISOString(),
+          });
+        }
+      }
+
       return {
         status: 'DUPLICATE_ACCEPTED',
         ordenId: event.ordenId,
         movements,
-        negativeStockAlerts: [],
-        outboxEventId: outboxRes.rows[0]?.id ?? 'UNKNOWN',
+        negativeStockAlerts,
+        outboxEventId: outboxRes.rows[0]!.id,
       };
     }
 
-    // 3. Resolve recipes & explode ingredients for all items
+    // 3. Check if any item contains modifiers
+    const hasModifiers = event.items.some(
+      (item) => item.selectedModifiers && item.selectedModifiers.length > 0,
+    );
+
+    if (hasModifiers && !customResolver) {
+      // Quarantine modifier-bearing event durably with zero stock movements
+      const quarantineRes = await client.query<{ id: string }>(
+        `INSERT INTO inventory_quarantine_records (
+          organization_id, branch_id, source_event_id, payload, reason, status
+        ) VALUES ($1, $2, $3, $4, 'MODIFIER_RECIPE_RESOLUTION_PENDING', 'PENDING')
+        ON CONFLICT (organization_id, branch_id, source_event_id)
+        DO UPDATE SET payload = EXCLUDED.payload, reason = EXCLUDED.reason, status = 'PENDING'
+        RETURNING id;`,
+        [event.organizacionId, event.sucursalId, event.ordenId, JSON.stringify(event)],
+      );
+
+      return {
+        status: 'QUARANTINED',
+        ordenId: event.ordenId,
+        quarantineId: quarantineRes.rows[0]!.id,
+        reason: 'MODIFIER_RECIPE_RESOLUTION_PENDING',
+      };
+    }
+
+    // 4. Resolve recipes & explode ingredients for all items
     // First: if customResolver is present and modifiers exist, resolve ALL modifier impacts upfront.
     // If ANY modifier cannot be resolved (returns null/undefined or throws), FAIL CLOSED:
     // Quarantine entire event with ZERO ledger movements and ZERO outbox effects.
@@ -732,14 +782,14 @@ export class PostgresCloudInventoryService implements CloudInventoryCompositionS
       }
     }
 
-    // 4. Deterministically aggregate gross ingredient quantities
+    // 5. Deterministically aggregate gross ingredient quantities
     const aggregatedIngredients = aggregateIngredientQuantities(rawIngredientItems);
 
     const movements: StockLedgerEntry[] = [];
     const negativeStockAlerts: NegativeStockSignal[] = [];
     const outboxMovementItems: InventarioDescontadoMovementItem[] = [];
 
-    // 5. Process each ingredient under advisory lock
+    // 6. Process each ingredient under advisory lock
     for (const agg of aggregatedIngredients) {
       if (agg.totalGrossScaled === 0n) {
         continue;
@@ -861,7 +911,7 @@ export class PostgresCloudInventoryService implements CloudInventoryCompositionS
       }
     }
 
-    // 6. Enqueue InventarioDescontadoPorReceta into Cloud Integration Outbox (same transaction)
+    // 7. Enqueue InventarioDescontadoPorReceta into Cloud Integration Outbox (same transaction)
     const outboxPayload: InventarioDescontadoPorRecetaPayload = {
       organizationId: event.organizacionId,
       branchId: event.sucursalId,
@@ -1012,6 +1062,17 @@ export class PostgresCloudInventoryService implements CloudInventoryCompositionS
     ingredientId: string,
   ): Promise<void> {
     const lockKey = `${organizationId}:${branchId}:${warehouseId}:${ingredientId}`;
+    await client.query(`SELECT pg_advisory_xact_lock(hashtext($1));`, [lockKey]);
+  }
+
+  private async acquireSourceEventLock(
+    client: pg.PoolClient,
+    organizationId: string,
+    branchId: string,
+    warehouseId: string,
+    sourceOrderId: string,
+  ): Promise<void> {
+    const lockKey = `KDS_SOURCE_EVENT:${organizationId}:${branchId}:${warehouseId}:${sourceOrderId}`;
     await client.query(`SELECT pg_advisory_xact_lock(hashtext($1));`, [lockKey]);
   }
 

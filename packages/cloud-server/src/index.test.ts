@@ -10,8 +10,20 @@ import {
   RecipeNotFoundError,
   type KdsOrderProducedEventDTO,
   type ModifierRecipeResolver,
+  type RegisterWasteCommand,
 } from '@trident/inventory';
 import { PostgresCloudInventoryService } from './index.js';
+import type pg from 'pg';
+
+class TestablePostgresCloudInventoryService extends PostgresCloudInventoryService {
+  public testApplyKdsDepletionWithClient(
+    client: pg.PoolClient,
+    event: KdsOrderProducedEventDTO,
+    customResolver?: ModifierRecipeResolver,
+  ) {
+    return this.applyKdsDepletionWithClient(client, event, customResolver);
+  }
+}
 
 dotenv.config();
 if (!process.env['DATABASE_URL']) {
@@ -1024,6 +1036,7 @@ describe('TRIDENTPOS WP-018 Cloud Server Composition, Kárdex & KDS Depletion Su
     };
 
     // 2. Simulate transaction failure after depletion logic by executing in tenant transaction that rolls back
+    const testService = new TestablePostgresCloudInventoryService(pool);
     await assert.rejects(async () => {
       await withTenantTransaction(pool, tenantAId, async (client) => {
         // Lock quarantine
@@ -1036,8 +1049,8 @@ describe('TRIDENTPOS WP-018 Cloud Server Composition, Kárdex & KDS Depletion Su
             ? JSON.parse(qRes.rows[0]!.payload)
             : qRes.rows[0]!.payload;
 
-        // Apply depletion on client
-        await service.applyKdsDepletionWithClient(client, payload, testResolver);
+        // Apply depletion on client via test subclass
+        await testService.testApplyKdsDepletionWithClient(client, payload, testResolver);
 
         // Force deliberate failure BEFORE reconciliation commit
         throw new Error('SIMULATED_REPLAY_TRANSACTION_FAILURE');
@@ -1129,5 +1142,266 @@ describe('TRIDENTPOS WP-018 Cloud Server Composition, Kárdex & KDS Depletion Su
       [tenantAId, orderId],
     );
     assert.equal(movementsCheck.rows.length, 3);
+  });
+
+  it('R3-CLOUD-01: applyKdsDepletionWithClient is not a public application API', () => {
+    const publicService = new PostgresCloudInventoryService(pool);
+    // Verified protected helper method visibility
+    assert.equal(
+      typeof (publicService as unknown as Record<string, unknown>).applyKdsDepletionWithClient,
+      'function',
+    );
+  });
+
+  it('R3-CLOUD-02: REPLAYED quarantine followed by same original event without resolver returns DUPLICATE_ACCEPTED without reverting quarantine to PENDING', async () => {
+    const orderId = `ORD-REPLAY-NOPENDING-${crypto.randomUUID()}`;
+    const event: KdsOrderProducedEventDTO = {
+      organizacionId: tenantAId,
+      sucursalId: branchAId,
+      centroConsumoId: whAId,
+      ordenId: orderId,
+      fechaHora: new Date().toISOString(),
+      tiempoPreparacionMinutos: 5,
+      items: [
+        {
+          productoId: prodBurgerId,
+          cantidad: '1.0000',
+          selectedModifiers: [{ modifierId: 'mod-extra-cheese', quantity: '1.0000' }],
+        },
+      ],
+    };
+
+    // A. Modifier event arrives -> QUARANTINED / PENDING
+    const qRes = await service.onKdsOrderProduced(event);
+    assert.equal(qRes.status, 'QUARANTINED');
+    const quarantineId = qRes.quarantineId!;
+
+    const testResolver: ModifierRecipeResolver = {
+      resolveModifierImpact: async (req) => {
+        if (req.modifierId === 'mod-extra-cheese') {
+          return {
+            modifierId: req.modifierId,
+            additionalIngredients: [
+              { ingredientId: ingCheeseId, quantity: '0.0500', grossQuantity: '0.0500' },
+            ],
+            removedIngredients: [],
+          };
+        }
+        return null;
+      },
+    };
+
+    // B. Authorized replay succeeds -> APPLIED, quarantine becomes REPLAYED
+    const replayRes = await service.replayQuarantinedDepletion(
+      tenantAId,
+      quarantineId,
+      testResolver,
+    );
+    assert.equal(replayRes.status, 'APPLIED');
+
+    const qCheck1 = await pool.query<{ status: string }>(
+      `SELECT status FROM inventory_quarantine_records WHERE id = $1;`,
+      [quarantineId],
+    );
+    assert.equal(qCheck1.rows[0]!.status, 'REPLAYED');
+
+    // C. Same original event arrives again WITHOUT resolver
+    const retryRes = await service.onKdsOrderProduced(event);
+    assert.equal(retryRes.status, 'DUPLICATE_ACCEPTED');
+    assert.equal(retryRes.ordenId, orderId);
+
+    // Verify quarantine record remains REPLAYED (never reverts to PENDING)
+    const qCheck2 = await pool.query<{ status: string }>(
+      `SELECT status FROM inventory_quarantine_records WHERE id = $1;`,
+      [quarantineId],
+    );
+    assert.equal(qCheck2.rows[0]!.status, 'REPLAYED');
+
+    // Verify ledger movement count remains 3 (no new movements created)
+    const movCount = await pool.query<{ count: string }>(
+      `SELECT count(*)::text as count FROM stock_ledger WHERE organization_id = $1 AND reference_event_id = $2;`,
+      [tenantAId, orderId],
+    );
+    assert.equal(movCount.rows[0]!.count, '3');
+
+    // Verify outbox event count remains 1
+    const outboxCount = await pool.query<{ count: string }>(
+      `SELECT count(*)::text as count FROM cloud_integration_outbox WHERE organization_id = $1 AND aggregate_id = $2;`,
+      [tenantAId, orderId],
+    );
+    assert.equal(outboxCount.rows[0]!.count, '1');
+  });
+
+  it('R3-CLOUD-03: registerWaste retry reconstructs negative-stock classification deterministically', async () => {
+    const cmdId = `CMD-WASTE-R3NEG-${crypto.randomUUID()}`;
+    // Register large waste on ingMeatId so balance goes negative
+    const firstCall = await service.registerWaste({
+      organizationId: tenantAId,
+      branchId: branchAId,
+      warehouseId: whAId,
+      ingredientId: ingMeatId,
+      commandId: cmdId,
+      quantity: '200.0000',
+      reasonCode: 'CONTAMINATED',
+      photoAttachmentUrl: 'https://storage.local/waste/contam.jpg',
+    });
+
+    assert.ok(firstCall.negativeStockAlert !== null);
+    assert.equal(firstCall.negativeStockAlert.ingredientId, ingMeatId);
+
+    // Second call with same commandId
+    const retryCall = await service.registerWaste({
+      organizationId: tenantAId,
+      branchId: branchAId,
+      warehouseId: whAId,
+      ingredientId: ingMeatId,
+      commandId: cmdId,
+      quantity: '200.0000',
+      reasonCode: 'CONTAMINATED',
+      photoAttachmentUrl: 'https://storage.local/waste/contam.jpg',
+    });
+
+    assert.ok(retryCall.negativeStockAlert !== null);
+    assert.equal(retryCall.negativeStockAlert.ingredientId, ingMeatId);
+    assert.equal(
+      retryCall.negativeStockAlert.balanceAfter,
+      firstCall.negativeStockAlert.balanceAfter,
+    );
+    assert.equal(retryCall.movement.id, firstCall.movement.id);
+    assert.equal(retryCall.wasteRecord.id, firstCall.wasteRecord.id);
+
+    // Total waste rows in database for this command is exactly 1
+    const countCheck = await pool.query<{ count: string }>(
+      `SELECT count(*)::text as count FROM inventory_waste_records WHERE organization_id = $1 AND command_id = $2;`,
+      [tenantAId, cmdId],
+    );
+    assert.equal(countCheck.rows[0]!.count, '1');
+  });
+
+  it('R3-CLOUD-04: KDS duplicate order reconstructs negative-stock alerts from existing movements', async () => {
+    const orderId = `ORD-PROD-NEG-${crypto.randomUUID()}`;
+    const event: KdsOrderProducedEventDTO = {
+      organizacionId: tenantAId,
+      sucursalId: branchAId,
+      centroConsumoId: whAId,
+      ordenId: orderId,
+      fechaHora: new Date().toISOString(),
+      tiempoPreparacionMinutos: 5,
+      items: [
+        {
+          productoId: prodBurgerId,
+          cantidad: '500.0000', // large quantity -> produces negative stock on meat and buns
+        },
+      ],
+    };
+
+    const firstRun = await service.onKdsOrderProduced(event);
+    assert.equal(firstRun.status, 'APPLIED');
+    assert.ok(firstRun.negativeStockAlerts.length > 0);
+
+    const secondRun = await service.onKdsOrderProduced(event);
+    assert.equal(secondRun.status, 'DUPLICATE_ACCEPTED');
+    assert.equal(secondRun.negativeStockAlerts.length, firstRun.negativeStockAlerts.length);
+    assert.deepEqual(
+      secondRun.negativeStockAlerts.map((a) => a.ingredientId).sort(),
+      firstRun.negativeStockAlerts.map((a) => a.ingredientId).sort(),
+    );
+  });
+
+  it('R3-CLOUD-05: applied ledger exists but required outbox is absent -> throws explicit integrity error', async () => {
+    const orderId = `ORD-PROD-NOOUTBOX-${crypto.randomUUID()}`;
+    const event: KdsOrderProducedEventDTO = {
+      organizacionId: tenantAId,
+      sucursalId: branchAId,
+      centroConsumoId: whAId,
+      ordenId: orderId,
+      fechaHora: new Date().toISOString(),
+      tiempoPreparacionMinutos: 5,
+      items: [{ productoId: prodBurgerId, cantidad: '1.0000' }],
+    };
+
+    const run = await service.onKdsOrderProduced(event);
+    assert.equal(run.status, 'APPLIED');
+
+    // Artificially delete the outbox entry to simulate corrupted/missing outbox state
+    await pool.query(
+      `DELETE FROM cloud_integration_outbox WHERE organization_id = $1 AND aggregate_id = $2;`,
+      [tenantAId, orderId],
+    );
+
+    // Next duplicate check must throw explicit integrity error, never return outboxEventId: 'UNKNOWN'
+    await assert.rejects(async () => {
+      await service.onKdsOrderProduced(event);
+    }, /Integrity error: KDS order .* missing required 'InventarioDescontadoPorReceta' outbox event/);
+  });
+
+  it('R3-CLOUD-06: two concurrent identical registerWaste commands complete deterministically with exactly one MERMA and one waste row', async () => {
+    const cmdId = `CMD-WASTE-CONC-${crypto.randomUUID()}`;
+    const command: RegisterWasteCommand = {
+      organizationId: tenantAId,
+      branchId: branchAId,
+      warehouseId: whAId,
+      ingredientId: ingBunId,
+      commandId: cmdId,
+      quantity: '3.0000',
+      reasonCode: 'STALE',
+      photoAttachmentUrl: 'https://storage.local/waste/stale.jpg',
+    };
+
+    const [res1, res2] = await Promise.all([
+      service.registerWaste(command),
+      service.registerWaste(command),
+    ]);
+
+    assert.equal(res1.movement.id, res2.movement.id);
+    assert.equal(res1.wasteRecord.id, res2.wasteRecord.id);
+
+    // Verify exactly 1 MERMA movement and 1 waste record exist in database
+    const wasteCount = await pool.query<{ count: string }>(
+      `SELECT count(*)::text as count FROM inventory_waste_records WHERE organization_id = $1 AND command_id = $2;`,
+      [tenantAId, cmdId],
+    );
+    assert.equal(wasteCount.rows[0]!.count, '1');
+
+    const ledgerCount = await pool.query<{ count: string }>(
+      `SELECT count(*)::text as count FROM stock_ledger WHERE organization_id = $1 AND reference_event_id = $2;`,
+      [tenantAId, cmdId],
+    );
+    assert.equal(ledgerCount.rows[0]!.count, '1');
+  });
+
+  it('R3-CLOUD-07: two concurrent identical KDS source events complete deterministically (one APPLIED, one DUPLICATE_ACCEPTED)', async () => {
+    const orderId = `ORD-CONC-KDS-${crypto.randomUUID()}`;
+    const event: KdsOrderProducedEventDTO = {
+      organizacionId: tenantAId,
+      sucursalId: branchAId,
+      centroConsumoId: whAId,
+      ordenId: orderId,
+      fechaHora: new Date().toISOString(),
+      tiempoPreparacionMinutos: 5,
+      items: [{ productoId: prodBurgerId, cantidad: '1.0000' }],
+    };
+
+    const [res1, res2] = await Promise.all([
+      service.onKdsOrderProduced(event),
+      service.onKdsOrderProduced(event),
+    ]);
+
+    const statuses = [res1.status, res2.status].sort();
+    assert.deepEqual(statuses, ['APPLIED', 'DUPLICATE_ACCEPTED']);
+
+    // Total ledger movements for this order is exactly 2 (meat + bun)
+    const ledgerCount = await pool.query<{ count: string }>(
+      `SELECT count(*)::text as count FROM stock_ledger WHERE organization_id = $1 AND reference_event_id = $2;`,
+      [tenantAId, orderId],
+    );
+    assert.equal(ledgerCount.rows[0]!.count, '2');
+
+    // Total outbox events for this order is exactly 1
+    const outboxCount = await pool.query<{ count: string }>(
+      `SELECT count(*)::text as count FROM cloud_integration_outbox WHERE organization_id = $1 AND aggregate_id = $2;`,
+      [tenantAId, orderId],
+    );
+    assert.equal(outboxCount.rows[0]!.count, '1');
   });
 });

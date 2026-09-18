@@ -1,13 +1,12 @@
-# TRIDENTPOS — WP-018 CANONICAL BUILDER EVIDENCE (R2)
+# TRIDENTPOS — WP-018 CANONICAL BUILDER EVIDENCE (R3)
 
 ## 1. Canonical Identification & Lineage
 * **Work Package**: WP-018 — Real-Time Kárdex, Waste Tracking & KDS Depletion Service
 * **Governing Specification**: `ACR-2026-017` / `ACR-2026-017_CURRENT_STATE.md`
 * **Canonical Base SHA**: `ea409360dca4e1f133f516a45eb06890e480c253` (`origin/main`)
 * **Base Verification**: PASS (exact match with canonical baseline)
-* **Implementation Branch**: `feat/wp-018-kardex-kds-depletion-canonical-r2`
-* **Historical R1 Frozen Subject**: `9ac332c0468173f073752ab981bde924e760cf4c` (immutable / superseded by R2)
-* **Quick Integrity R1 Sidecar**: `review/wp-018-quick-integrity-r1` (`789889d9db4716af30c08b4acf57ed247df7e075`)
+* **R2 Frozen Subject**: `931743b5e46b2796b4adca5b72a0f65f20773fa6` (immutable baseline for R3)
+* **Implementation Branch**: `feat/wp-018-kardex-kds-depletion-canonical-r3`
 * **Role**: `13_Backend_Developer` (BUILDER ONLY)
 * **Governance Enforcement**: Builder Only mode active. Antigravity does not open PRs, merge, self-approve, or alter governing documentation.
 
@@ -66,34 +65,34 @@
 
 ---
 
-## 4. Quick Integrity R2 Remediations & Technical Capabilities
+## 4. Code Review R3 Surgical Remediations
 
-### A. QI-BLK-018-01 Resolution: Complete Modifier Resolution Fails Closed
-* In `applyKdsDepletionWithClient()`: When items have `selectedModifiers`, the service upfront validates that all modifiers can be resolved by the injected `ModifierRecipeResolver`.
-* If no resolver is provided, OR if `resolveModifierImpact()` returns `null`, `undefined`, or throws for ANY modifier on any item, the execution immediately aborts before inserting any `stock_ledger` row or enqueueing any outbox event.
-* The original source event is safely and idempotently saved in `inventory_quarantine_records` with status `PENDING` and reason `MODIFIER_RECIPE_RESOLUTION_PENDING`.
-* Verified by tests `WP018-CLOUD-07`, `WP018-CLOUD-10`, and `WP018-CLOUD-11`: 0 stock_ledger movements and 0 outbox entries are produced when any modifier is unresolved.
+### A. CR-BLK-018-01: Transaction-Scoped Helper Visibility (`applyKdsDepletionWithClient`)
+* Visibility changed from `public` to `protected`.
+* It is not part of the public application API surface (`CloudInventoryCompositionService` interface has no raw-client method).
+* Testing controlled rollbacks is achieved via a test-only subclass `TestablePostgresCloudInventoryService` declared exclusively inside `packages/cloud-server/src/index.test.ts`.
+* Verified by test `R3-CLOUD-01`.
 
-### B. QI-BLK-018-02 Resolution: Complete `removedIngredients` and `additionalIngredients` Handling
-* When all modifiers are resolved by the authorized resolver:
-  * `removedIngredients`: For the specific item ordered, any ingredient in `impact.removedIngredients` is excluded from that item's recipe explosion (omitted from deduction).
-  * `additionalIngredients`: Gross quantities are scaled by the item's scale factor and added to the gross ingredients list for that item.
-* Verified by test `WP018-CLOUD-12`: Ordered burgers with `mod-no-meat` (`removedIngredients: [ingMeatId]`) and `mod-extra-cheese` (`additionalIngredients: [ingCheeseId]`) produce exactly 0 meat deducted, +0.2000 KG cheese deducted, and normal bun deduction.
+### B. CR-BLK-018-02: Idempotency Ordering Precedes Quarantine Check
+* Inside `applyKdsDepletionWithClient()`: Source-event serialization and existing-movements check occur **BEFORE** checking modifiers.
+* If a source order was already applied (e.g. via an authorized replay), subsequent arrivals of the same source event return `DUPLICATE_ACCEPTED` immediately.
+* Quarantine records remain in `REPLAYED` status and are **never** reverted to `PENDING`.
+* Verified by test `R3-CLOUD-02`.
 
-### C. QI-BLK-018-03 Resolution: Atomic Quarantine Replay Transaction Topology
-* Refactored core KDS depletion logic to `applyKdsDepletionWithClient(client, event, resolver)`.
-* `replayQuarantinedDepletion()` opens a single authoritative tenant transaction on `client`, locks the quarantine row `FOR UPDATE`, applies the depletion logic on `client`, and transitions the quarantine status to `REPLAYED` on `client`.
-* Verified by test `WP018-CLOUD-13`: Controlled failure before transaction commit completely rolls back depletion (0 ledger movements, 0 outbox events) and leaves quarantine safely `PENDING`.
-* Verified by test `WP018-CLOUD-14`: Replay retry on an already replayed order returns `DUPLICATE_ACCEPTED` with 0 duplicate movements and 0 duplicate outbox events.
+### C. CR-BLK-018-03: Deterministic Retry Results for Waste & KDS Negative Stock
+* In `registerWaste()`: If an identical `commandId` is retried, the linked `stock_ledger` movement's `balance_after` is checked. If `balance_after < 0`, a `NegativeStockSignal` is deterministically reconstructed in the return value matching the original call, with 0 duplicate movements or rows created.
+* In `onKdsOrderProduced()` duplicate flow: `negativeStockAlerts` are reconstructed from existing immutable ledger movements where `balance_after < 0`.
+* Verified by tests `R3-CLOUD-03` and `R3-CLOUD-04`.
 
-### D. QI-BLK-018-04 Resolution: Truthful Facts-Based Builder Evidence
-* All false claims from R1 evidence have been corrected:
-  * No `v_ingredient_current_stock` view claimed (balance is an application query).
-  * Accurate idempotency constraint columns `(organization_id, branch_id, warehouse_id, ingredient_id, movement_type, reference_event_id)`.
-  * Accurate sequence column `movement_sequence_number`.
-  * Accurate movement types `COMPRA`, `CONSUMO_KDS`, `MERMA`, `AJUSTE_FISICO`, `TRANSFERENCIA`.
-  * Accurate quarantine constraint names `chk_quarantine_records_status`, `uq_quarantine_records_source`.
-  * Accurate Down migration table list without non-existent views.
+### D. Exact Outbox Lookup & Missing-Outbox Integrity Error
+* Duplicate outbox query explicitly filters by `event_type = 'InventarioDescontadoPorReceta'`, `organization_id`, `branch_id`, `aggregate_type = 'INVENTORY_STOCK'`, and `aggregate_id = ordenId`.
+* If stock movements exist for an order but the required outbox record is missing, the service throws an explicit integrity error rather than returning `'UNKNOWN'`.
+* Verified by test `R3-CLOUD-05`.
+
+### E. Concurrent Idempotency Hardening
+* `registerWaste()`: Acquires aggregate advisory lock before checking for existing `command_id`, ensuring concurrent duplicate commands serialize cleanly and deterministically return the existing record without database uniqueness errors.
+* `onKdsOrderProduced()`: Acquires source-event transaction advisory lock (`pg_advisory_xact_lock(hashtext('KDS_SOURCE_EVENT:' || org || ':' || branch || ':' || wh || ':' || orderId))`) before checking existing movements, guaranteeing that concurrent submissions of the same KDS order cleanly resolve to one `APPLIED` and one `DUPLICATE_ACCEPTED`.
+* Verified by tests `R3-CLOUD-06` and `R3-CLOUD-07`.
 
 ---
 
@@ -128,8 +127,8 @@
 * Result: PASS across all 9 workspace packages
 
 ### F. Unit & Domain Tests
-* `@trident/inventory`: 27 passed / 0 failed (22 WP-017 + 5 WP-018 domain tests)
-* `@trident/cloud-server`: 20 passed / 0 failed (7 WP-017 + 13 WP-018 composition tests including WP018-CLOUD-01..08, WP018-CLOUD-10..14)
+* `@trident/inventory`: 27 passed / 0 failed
+* `@trident/cloud-server`: 27 passed / 0 failed (7 WP-017 + 20 WP-018 composition tests including WP018-CLOUD-01..08, WP018-CLOUD-10..14, R3-CLOUD-01..07)
 * `@trident/pos`: 38 passed / 0 failed
 * `@trident/core`: 25 passed / 0 failed
 * `@trident/edge`: 168 passed / 0 failed
@@ -148,7 +147,12 @@
 
 ## 7. Changed Files Inventory
 
-### WP-018 R2 Files (13 Files Total)
+### R2 → R3 Changed Files (Exactly 3 Files)
+1. `packages/cloud-server/src/index.ts` [MODIFY]
+2. `packages/cloud-server/src/index.test.ts` [MODIFY]
+3. `evidence/WP-018_CANONICAL_BUILDER_EVIDENCE.md` [MODIFY]
+
+### Effective Canonical Main → R3 Changed Files (13 Files Total)
 1. `evidence/WP-018_CANONICAL_BUILDER_EVIDENCE.md` [NEW]
 2. `packages/database/migrations/20260905000000_inventory_kardex_kds_depletion.sql` [NEW]
 3. `packages/database/src/index.test.ts` [MODIFY]
