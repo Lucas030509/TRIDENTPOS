@@ -503,12 +503,11 @@ export class PostgresCloudInventoryService implements CloudInventoryCompositionS
     customResolver?: ModifierRecipeResolver,
   ): Promise<KdsDepletionResult> {
     return withTenantTransaction(this.pool, event.organizacionId, async (client) => {
-      // 1. Acquire source-event advisory lock FIRST (canonical lock order step 1)
+      // 1. Acquire source-event advisory lock FIRST (canonical lock order step 1) using stable event identity
       await this.acquireSourceEventLock(
         client,
         event.organizacionId,
         event.sucursalId,
-        event.centroConsumoId,
         event.ordenId,
       );
 
@@ -530,7 +529,6 @@ export class PostgresCloudInventoryService implements CloudInventoryCompositionS
       client,
       event.organizacionId,
       event.sucursalId,
-      event.centroConsumoId,
       event.ordenId,
     );
     return this.applyKdsDepletionLockedWithClient(client, event, customResolver);
@@ -963,11 +961,12 @@ export class PostgresCloudInventoryService implements CloudInventoryCompositionS
 
   /**
    * Replays a quarantined depletion record using an authorized ModifierRecipeResolver.
-   * Single authoritative tenant transaction with CANONICAL LOCK ORDERING:
-   * 1. Non-locking pre-read to obtain event identity
-   * 2. Source-event advisory lock (STEP 1)
+   * Single authoritative tenant transaction with CANONICAL LOCK ORDERING & STABLE SOURCE IDENTITY:
+   * 1. Non-locking pre-read to obtain stable event identity (organization_id, branch_id, source_event_id)
+   * 2. Source-event advisory lock (STEP 1) using stable (orgId, branchId, sourceEventId)
    * 3. Authoritative quarantine record FOR UPDATE (STEP 2)
-   * 4. Ingredient aggregate locks (STEP 3) inside applyKdsDepletionLockedWithClient
+   * 4. Invariant revalidation of locked record identity against pre-read
+   * 5. Ingredient aggregate locks (STEP 3) inside applyKdsDepletionLockedWithClient using locked payload
    * Performs depletion, enqueues outbox, and updates quarantine status to REPLAYED.
    */
   public async replayQuarantinedDepletion(
@@ -976,16 +975,15 @@ export class PostgresCloudInventoryService implements CloudInventoryCompositionS
     resolver: ModifierRecipeResolver,
   ): Promise<KdsDepletionResult> {
     return withTenantTransaction(this.pool, organizationId, async (client) => {
-      // 1. Non-locking pre-read to obtain event identity & routing parameters
+      // 1. Non-locking pre-read to obtain stable event identity (organization_id, branch_id, source_event_id)
       const preRes = await client.query<{
         id: string;
         organization_id: string;
         branch_id: string;
         source_event_id: string;
-        payload: any;
         status: string;
       }>(
-        `SELECT id, organization_id, branch_id, source_event_id, payload, status
+        `SELECT id, organization_id, branch_id, source_event_id, status
          FROM inventory_quarantine_records
          WHERE organization_id = $1 AND id = $2;`,
         [organizationId, quarantineId],
@@ -998,20 +996,13 @@ export class PostgresCloudInventoryService implements CloudInventoryCompositionS
       }
 
       const preRecord = preRes.rows[0]!;
-      const prePayload: KdsOrderProducedEventDTO =
-        typeof preRecord.payload === 'string' ? JSON.parse(preRecord.payload) : preRecord.payload;
 
-      const branchId = prePayload.sucursalId || preRecord.branch_id;
-      const warehouseId = prePayload.centroConsumoId;
-      const sourceOrderId = prePayload.ordenId || preRecord.source_event_id;
-
-      // 2. STEP 1 IN CANONICAL LOCK ORDER: Acquire SOURCE-EVENT advisory lock FIRST
+      // 2. STEP 1 IN CANONICAL LOCK ORDER: Acquire SOURCE-EVENT advisory lock FIRST using stable event identity
       await this.acquireSourceEventLock(
         client,
         organizationId,
-        branchId,
-        warehouseId,
-        sourceOrderId,
+        preRecord.branch_id,
+        preRecord.source_event_id,
       );
 
       // 3. STEP 2 IN CANONICAL LOCK ORDER: Authoritative locked read with FOR UPDATE
@@ -1037,6 +1028,19 @@ export class PostgresCloudInventoryService implements CloudInventoryCompositionS
       }
 
       const lockedRecord = lockedRes.rows[0]!;
+
+      // Section 11: SOURCE IDENTITY REVALIDATION
+      if (
+        lockedRecord.organization_id !== organizationId ||
+        lockedRecord.branch_id !== preRecord.branch_id ||
+        lockedRecord.source_event_id !== preRecord.source_event_id
+      ) {
+        throw new Error(
+          `Integrity error: Locked quarantine record '${quarantineId}' identity mismatch (pre-read: org=${organizationId}, branch=${preRecord.branch_id}, source=${preRecord.source_event_id}; locked: org=${lockedRecord.organization_id}, branch=${lockedRecord.branch_id}, source=${lockedRecord.source_event_id})`,
+        );
+      }
+
+      // Section 10: Authoritative payload from locked read ONLY
       const eventPayload: KdsOrderProducedEventDTO =
         typeof lockedRecord.payload === 'string'
           ? JSON.parse(lockedRecord.payload)
@@ -1136,10 +1140,9 @@ export class PostgresCloudInventoryService implements CloudInventoryCompositionS
     client: pg.PoolClient,
     organizationId: string,
     branchId: string,
-    warehouseId: string,
     sourceOrderId: string,
   ): Promise<void> {
-    const lockKey = `KDS_SOURCE_EVENT:${organizationId}:${branchId}:${warehouseId}:${sourceOrderId}`;
+    const lockKey = `KDS_SOURCE_EVENT:${organizationId}:${branchId}:${sourceOrderId}`;
     await client.query(`SELECT pg_advisory_xact_lock(hashtext($1));`, [lockKey]);
   }
 

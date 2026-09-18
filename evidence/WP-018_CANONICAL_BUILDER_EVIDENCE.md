@@ -1,12 +1,12 @@
-# TRIDENTPOS — WP-018 CANONICAL BUILDER EVIDENCE (R4)
+# TRIDENTPOS — WP-018 CANONICAL BUILDER EVIDENCE (R5)
 
 ## 1. Canonical Identification & Lineage
 * **Work Package**: WP-018 — Real-Time Kárdex, Waste Tracking & KDS Depletion Service
 * **Governing Specification**: `ACR-2026-017` / `ACR-2026-017_CURRENT_STATE.md`
 * **Canonical Base SHA**: `ea409360dca4e1f133f516a45eb06890e480c253` (`origin/main`)
 * **Base Verification**: PASS (exact match with canonical baseline)
-* **R3 Frozen Subject**: `62920d5bf018a64748ee5fd408917e5a22049fd7` (immutable baseline for R4)
-* **Implementation Branch**: `feat/wp-018-kardex-kds-depletion-canonical-r4`
+* **R4 Frozen Subject**: `b3bb62cf28c127d0243ce69471315d98f6e20d4d` (immutable baseline for R5)
+* **Implementation Branch**: `feat/wp-018-kardex-kds-depletion-canonical-r5`
 * **Role**: `13_Backend_Developer` (BUILDER ONLY)
 * **Governance Enforcement**: Builder Only mode active. Antigravity does not open PRs, merge, self-approve, or alter governing documentation.
 
@@ -65,43 +65,41 @@
 
 ---
 
-## 4. Code Review R4 Surgical Remediations (CR-BLK-018-R3-01 Resolution)
+## 4. R5 Source-Event Lock Identity Remediation (CR-BLK-018-R4-01 Resolution)
 
-### A. Canonical Global Lock Ordering
-To prevent any possibility of deadlock from lock-order inversion between normal KDS delivery and quarantined replay, ALL operations for the same KDS source event adhere strictly to the uniform lock hierarchy:
-1. **STEP 1**: `SOURCE-EVENT` advisory transaction lock (`KDS_SOURCE_EVENT:${orgId}:${branchId}:${whId}:${sourceOrderId}`).
-2. **STEP 2**: `QUARANTINE` row lock (`SELECT ... FROM inventory_quarantine_records ... FOR UPDATE` or UPSERT).
-3. **STEP 3**: `INGREDIENT` aggregate locks (`pg_advisory_xact_lock` for each aggregated ingredient).
+### A. Stable Source-Event Advisory Lock Key
+* **Previous (R4)**: `KDS_SOURCE_EVENT:${orgId}:${branchId}:${whId}:${sourceOrderId}` (included `warehouseId` derived from mutable pre-read payload).
+* **Remediated (R5)**: `KDS_SOURCE_EVENT:${organizationId}:${branchId}:${sourceOrderId}`.
+* **Warehouse In Source-Event Advisory Lock**: **NO**.
+* **Rationale**: Source-event serialization strictly answers whether a specific KDS source event/order has already been processed within the tenant branch. `warehouseId` participates strictly in inventory aggregate lock, ledger movement persistence, and foreign keys, but MUST NOT fragment source-event serialization.
 
 ### B. Normal Delivery Lock Order
 * `onKdsOrderProduced()`:
-  1. Opens single tenant transaction.
-  2. Acquires `SOURCE-EVENT` advisory lock upfront (`acquireSourceEventLock`).
+  1. Opens single tenant transaction via `withTenantTransaction()`.
+  2. Acquires `SOURCE-EVENT` advisory lock upfront using stable identity `(orgId, branchId, sourceOrderId)` (**STEP 1**).
   3. Calls `applyKdsDepletionLockedWithClient()`.
   4. Checks existing movements (idempotency check).
-  5. If modifiers unresolvable without resolver: inserts/updates `inventory_quarantine_records` (Quarantine write).
-  6. Acquires `INGREDIENT` aggregate locks in ascending order.
+  5. If modifiers unresolvable without resolver: inserts/updates `inventory_quarantine_records` (**STEP 2**).
+  6. Acquires `INGREDIENT` aggregate locks in ascending order (**STEP 3**).
   7. Inserts `stock_ledger` movements and enqueues `InventarioDescontadoPorReceta` outbox event.
 
-### C. Replay Lock Order & Refactored Pre-Lock Read
+### C. Replay Lock Order & Authoritative Locked Read
 * `replayQuarantinedDepletion()`:
-  1. Opens single tenant transaction.
-  2. Performs a **non-locking pre-read** of `inventory_quarantine_records` solely to obtain routing identity (`branch_id`, `warehouse_id`, `source_event_id`).
-  3. Acquires `SOURCE-EVENT` advisory lock upfront (**STEP 1** in lock hierarchy).
-  4. Executes authoritative **locked read** with `SELECT ... FOR UPDATE` (**STEP 2** in lock hierarchy).
-  5. Calls `applyKdsDepletionLockedWithClient()` (source lock already held, zero duplicate lock calls).
-  6. Acquires `INGREDIENT` aggregate locks (**STEP 3** in lock hierarchy).
-  7. Inserts `stock_ledger` movements and enqueues outbox event.
-  8. Updates quarantine row to `REPLAYED` with `COALESCE(replayed_at, NOW())`.
-  9. Single commit without nested transactions or secondary PoolClients.
+  1. Opens single tenant transaction via `withTenantTransaction()`.
+  2. Performs a **non-locking pre-read** of `inventory_quarantine_records` solely for stable identity columns `(organization_id, branch_id, source_event_id)`.
+  3. Acquires `SOURCE-EVENT` advisory lock upfront (**STEP 1** in global lock hierarchy).
+  4. Executes authoritative **locked read** with `SELECT ... FOR UPDATE` (**STEP 2** in global lock hierarchy).
+  5. **Revalidates Invariants**: verifies `lockedRecord.organization_id === organizationId`, `lockedRecord.branch_id === preRecord.branch_id`, and `lockedRecord.source_event_id === preRecord.source_event_id` (throws explicit integrity error on violation).
+  6. Derives depletion payload strictly from `lockedRecord.payload` (authoritative locked read ONLY).
+  7. Calls `applyKdsDepletionLockedWithClient()`.
+  8. Acquires `INGREDIENT` aggregate locks in ascending order (**STEP 3** in global lock hierarchy).
+  9. Inserts `stock_ledger` movements and enqueues outbox event.
+  10. Updates quarantine row to `REPLAYED` with `COALESCE(replayed_at, NOW())`.
 
 ### D. Concurrency & Deadlock Validation
-* **Deadlock Concurrency Test (`R4-CLOUD-01`)**:
-  * Simultaneously fires `replayQuarantinedDepletion` and `onKdsOrderProduced` for the same quarantined event.
-  * Result: 0 deadlocks, 0 aborted transactions, exactly 1 successful depletion, exactly 3 ledger movements (burger + extra cheese), exactly 1 outbox event, and quarantine state `REPLAYED`.
-* **Reverse Concurrency Order Test (`R4-CLOUD-02`)**:
-  * Redelivery launched first immediately overlapped with replay.
-  * Result: Clean execution, 0 deadlocks, 3 ledger movements, 1 outbox event, quarantine state `REPLAYED`.
+* **`R5-CLOUD-01`**: Proves two otherwise identical source events with same `(org, branch, orderId)` derive the SAME source-event advisory lock key regardless of warehouse difference. (PASS)
+* **`R5-CLOUD-02`**: Concurrently triggers replay and source redelivery where pending quarantine payload metadata changes. Proves identical source-event lock identity, 0 deadlocks, exactly 1 logical depletion (3 ledger movements), exactly 1 outbox event, and final quarantine state `REPLAYED`. (PASS)
+* **`R4-CLOUD-01` / `R4-CLOUD-02`**: Canonical and reverse concurrency ordering tests both pass cleanly with 0 deadlocks.
 
 ---
 
@@ -137,7 +135,7 @@ To prevent any possibility of deadlock from lock-order inversion between normal 
 
 ### F. Unit & Domain Tests
 * `@trident/inventory`: 27 passed / 0 failed
-* `@trident/cloud-server`: 29 passed / 0 failed (7 WP-017 + 22 WP-018 composition & concurrency tests including WP018-CLOUD-01..08, WP018-CLOUD-10..14, R3-CLOUD-01..07, R4-CLOUD-01..02)
+* `@trident/cloud-server`: 31 passed / 0 failed (7 WP-017 + 24 WP-018 composition & concurrency tests including WP018-CLOUD-01..08, WP018-CLOUD-10..14, R3-CLOUD-01..07, R4-CLOUD-01..02, R5-CLOUD-01..02)
 * `@trident/pos`: 38 passed / 0 failed
 * `@trident/core`: 25 passed / 0 failed
 * `@trident/edge`: 168 passed / 0 failed
@@ -156,12 +154,12 @@ To prevent any possibility of deadlock from lock-order inversion between normal 
 
 ## 7. Changed Files Inventory
 
-### R3 → R4 Changed Files (Exactly 3 Files)
+### R4 → R5 Changed Files (Exactly 3 Files)
 1. `packages/cloud-server/src/index.ts` [MODIFY]
 2. `packages/cloud-server/src/index.test.ts` [MODIFY]
 3. `evidence/WP-018_CANONICAL_BUILDER_EVIDENCE.md` [MODIFY]
 
-### Effective Canonical Main → R4 Changed Files (13 Files Total)
+### Effective Canonical Main → R5 Changed Files (13 Files Total)
 1. `evidence/WP-018_CANONICAL_BUILDER_EVIDENCE.md` [NEW]
 2. `packages/database/migrations/20260905000000_inventory_kardex_kds_depletion.sql` [NEW]
 3. `packages/database/src/index.test.ts` [MODIFY]

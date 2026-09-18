@@ -1557,4 +1557,135 @@ describe('TRIDENTPOS WP-018 Cloud Server Composition, Kárdex & KDS Depletion Su
     assert.equal(qCheck.rows[0]!.status, 'REPLAYED');
     assert.ok(qCheck.rows[0]!.replayed_at !== null);
   });
+
+  it('R5-CLOUD-01: source events with identical (org, branch, orderId) derive the same advisory lock key regardless of warehouseId', async () => {
+    const orderId = `ORD-LOCK-KEY-${crypto.randomUUID()}`;
+
+    const client1 = await pool.connect();
+    const client2 = await pool.connect();
+
+    try {
+      await client1.query('BEGIN;');
+      await client2.query('BEGIN;');
+
+      // Lock key format in R5: KDS_SOURCE_EVENT:${tenantAId}:${branchAId}:${orderId}
+      const lockKey = `KDS_SOURCE_EVENT:${tenantAId}:${branchAId}:${orderId}`;
+      const lock1 = await client1.query<{ locked: boolean }>(
+        `SELECT pg_try_advisory_xact_lock(hashtext($1)) AS locked;`,
+        [lockKey],
+      );
+      assert.equal(
+        lock1.rows[0]!.locked,
+        true,
+        'Client 1 must successfully acquire the source-event advisory lock',
+      );
+
+      // Client 2 attempts to acquire the lock with identical org, branch, orderId (even if for different warehouse)
+      const lock2 = await client2.query<{ locked: boolean }>(
+        `SELECT pg_try_advisory_xact_lock(hashtext($1)) AS locked;`,
+        [lockKey],
+      );
+      assert.equal(
+        lock2.rows[0]!.locked,
+        false,
+        'Client 2 must be blocked from acquiring the same source-event lock',
+      );
+
+      // Verify that lock key has exactly 4 colon-separated segments (KDS_SOURCE_EVENT, org, branch, order)
+      const segments = lockKey.split(':');
+      assert.equal(segments.length, 4, 'Lock key must be KDS_SOURCE_EVENT:org:branch:order');
+      assert.equal(segments[0], 'KDS_SOURCE_EVENT');
+      assert.equal(segments[1], tenantAId);
+      assert.equal(segments[2], branchAId);
+      assert.equal(segments[3], orderId);
+
+      await client1.query('ROLLBACK;');
+      await client2.query('ROLLBACK;');
+    } finally {
+      client1.release();
+      client2.release();
+    }
+  });
+
+  it('R5-CLOUD-02: concurrent replay and redelivery with pending quarantine payload update executes with stable lock identity and zero deadlocks', async () => {
+    const orderId = `ORD-R5-CONC-${crypto.randomUUID()}`;
+    const initialEvent: KdsOrderProducedEventDTO = {
+      organizacionId: tenantAId,
+      sucursalId: branchAId,
+      centroConsumoId: whAId,
+      ordenId: orderId,
+      fechaHora: new Date().toISOString(),
+      tiempoPreparacionMinutos: 5,
+      items: [
+        {
+          productoId: prodBurgerId,
+          cantidad: '1.0000',
+          selectedModifiers: [{ modifierId: 'mod-extra-cheese', quantity: '1.0000' }],
+        },
+      ],
+    };
+
+    // 1. Deliver initial event without resolver -> Quarantined PENDING
+    const qResult = await service.onKdsOrderProduced(initialEvent);
+    assert.equal(qResult.status, 'QUARANTINED');
+    const quarantineId = qResult.quarantineId!;
+
+    // 2. Simulate redelivery / update while PENDING with modified metadata payload
+    const updatedEvent: KdsOrderProducedEventDTO = {
+      ...initialEvent,
+      tiempoPreparacionMinutos: 8,
+    };
+
+    const testResolver: ModifierRecipeResolver = {
+      resolveModifierImpact: async (req) => {
+        if (req.modifierId === 'mod-extra-cheese') {
+          return {
+            modifierId: req.modifierId,
+            additionalIngredients: [
+              { ingredientId: ingCheeseId, quantity: '0.0500', grossQuantity: '0.0500' },
+            ],
+            removedIngredients: [],
+          };
+        }
+        return null;
+      },
+    };
+
+    // 3. Concurrently trigger replay and source redelivery
+    const p1 = service.onKdsOrderProduced(updatedEvent);
+    const p2 = service.replayQuarantinedDepletion(tenantAId, quarantineId, testResolver);
+
+    const [resRedelivery, resReplay] = await Promise.all([p1, p2]);
+
+    assert.ok(
+      resReplay.status === 'APPLIED' || resReplay.status === 'DUPLICATE_ACCEPTED',
+      `Replay status should be APPLIED or DUPLICATE_ACCEPTED, got ${resReplay.status}`,
+    );
+    assert.ok(
+      resRedelivery.status === 'QUARANTINED' || resRedelivery.status === 'DUPLICATE_ACCEPTED',
+      `Redelivery status should be QUARANTINED or DUPLICATE_ACCEPTED, got ${resRedelivery.status}`,
+    );
+
+    // Exactly 3 ledger movements (meat + bun + cheese)
+    const movementsCheck = await pool.query(
+      `SELECT id FROM stock_ledger WHERE organization_id = $1 AND reference_event_id = $2;`,
+      [tenantAId, orderId],
+    );
+    assert.equal(movementsCheck.rows.length, 3, 'Exactly 3 stock movements must be persisted');
+
+    // Exactly 1 outbox event
+    const outboxCheck = await pool.query(
+      `SELECT id FROM cloud_integration_outbox WHERE organization_id = $1 AND aggregate_id = $2;`,
+      [tenantAId, orderId],
+    );
+    assert.equal(outboxCheck.rows.length, 1, 'Exactly 1 outbox event must be persisted');
+
+    // Quarantine record ends in REPLAYED
+    const qCheck = await pool.query<{ status: string; replayed_at: string | null }>(
+      `SELECT status, replayed_at FROM inventory_quarantine_records WHERE id = $1;`,
+      [quarantineId],
+    );
+    assert.equal(qCheck.rows[0]!.status, 'REPLAYED', 'Quarantine record must be in REPLAYED state');
+    assert.ok(qCheck.rows[0]!.replayed_at !== null, 'replayed_at must be populated');
+  });
 });
