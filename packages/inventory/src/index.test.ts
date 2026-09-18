@@ -5,6 +5,10 @@ import {
   InvalidRecipeItemError,
   RecipeNotFoundError,
   ZeroDivisorError,
+  InvalidWasteCommandError,
+  InvalidMovementTypeError,
+  InvalidQuantityDeltaError,
+  ModifierQuarantineError,
   RecipeEngine,
   explodeIngredients,
   calculateRecipeCost,
@@ -14,6 +18,11 @@ import {
   divideScale4,
   addScale4,
   subtractScale4,
+  negateScale4,
+  absScale4,
+  validateMovementType,
+  validateWasteCommand,
+  aggregateIngredientQuantities,
   type Recipe,
   type RecipeItem,
   type ModifierRecipeResolver,
@@ -1219,5 +1228,128 @@ describe('@trident/inventory - ModifierRecipeResolver contract (INV-15, OQ-SSOT-
     assert.notEqual(impact, null);
     assert.equal(impact!.additionalIngredients[0]!.ingredientId, 'ing-cheese');
     assert.equal(impact!.additionalIngredients[0]!.quantity, '0.0500');
+  });
+});
+
+describe('@trident/inventory - WP-018 Pure Domain Suite (Kárdex, Waste & Depletion)', () => {
+  it('validates canonical stock movement types', () => {
+    assert.equal(validateMovementType('COMPRA'), 'COMPRA');
+    assert.equal(validateMovementType('CONSUMO_KDS'), 'CONSUMO_KDS');
+    assert.equal(validateMovementType('MERMA'), 'MERMA');
+    assert.equal(validateMovementType('AJUSTE_FISICO'), 'AJUSTE_FISICO');
+    assert.equal(validateMovementType('TRANSFERENCIA'), 'TRANSFERENCIA');
+
+    assert.throws(
+      () => validateMovementType('INVALID_TYPE'),
+      (err: unknown) => {
+        assert(err instanceof InvalidMovementTypeError);
+        assert.equal(err.code, 'INVALID_MOVEMENT_TYPE');
+        return true;
+      },
+    );
+  });
+
+  it('validates RegisterWasteCommand strictly and fails closed on invalid inputs', () => {
+    const validCmd = {
+      organizationId: '00000000-0000-0000-0000-000000000001',
+      branchId: '00000000-0000-0000-0000-000000000002',
+      warehouseId: '00000000-0000-0000-0000-000000000003',
+      ingredientId: '00000000-0000-0000-0000-000000000004',
+      quantity: '2.5000',
+      reasonCode: 'EXPIRED',
+      photoAttachmentUrl: 'https://storage.local/waste/photo1.jpg',
+      commandId: 'cmd-waste-001',
+    };
+
+    // Valid command passes without error
+    assert.doesNotThrow(() => validateWasteCommand(validCmd));
+
+    // Blank commandId
+    assert.throws(
+      () => validateWasteCommand({ ...validCmd, commandId: '   ' }),
+      (err: unknown) => {
+        assert(err instanceof InvalidWasteCommandError);
+        assert.match(err.message, /commandId is mandatory/);
+        return true;
+      },
+    );
+
+    // Blank reasonCode
+    assert.throws(
+      () => validateWasteCommand({ ...validCmd, reasonCode: '  ' }),
+      (err: unknown) => {
+        assert(err instanceof InvalidWasteCommandError);
+        assert.match(err.message, /reasonCode is mandatory/);
+        return true;
+      },
+    );
+
+    // Blank photoAttachmentUrl
+    assert.throws(
+      () => validateWasteCommand({ ...validCmd, photoAttachmentUrl: ' ' }),
+      (err: unknown) => {
+        assert(err instanceof InvalidWasteCommandError);
+        assert.match(err.message, /photoAttachmentUrl is mandatory/);
+        return true;
+      },
+    );
+
+    // Zero quantity
+    assert.throws(
+      () => validateWasteCommand({ ...validCmd, quantity: '0.0000' }),
+      (err: unknown) => {
+        assert(err instanceof InvalidQuantityDeltaError);
+        assert.match(err.message, /must be strictly positive/);
+        return true;
+      },
+    );
+
+    // Negative caller waste quantity
+    assert.throws(
+      () => validateWasteCommand({ ...validCmd, quantity: '-1.5000' }),
+      (err: unknown) => {
+        assert(err instanceof InvalidQuantityDeltaError);
+        assert.match(err.message, /must be strictly positive/);
+        return true;
+      },
+    );
+  });
+
+  it('aggregates ingredient quantities deterministically with exact scale-4 arithmetic', () => {
+    const rawItems = [
+      { ingredientId: 'ing-b', grossScaled: parseDecimal12x4('1.2500') },
+      { ingredientId: 'ing-a', grossScaled: parseDecimal12x4('0.5000') },
+      { ingredientId: 'ing-b', grossScaled: parseDecimal12x4('2.7500') },
+      { ingredientId: 'ing-c', grossScaled: parseDecimal12x4('0.1000') },
+      { ingredientId: 'ing-a', grossScaled: parseDecimal12x4('1.5000') },
+    ];
+
+    const aggregated = aggregateIngredientQuantities(rawItems);
+
+    assert.equal(aggregated.length, 3);
+    // Deterministic sort by ingredientId ASC
+    assert.equal(aggregated[0]!.ingredientId, 'ing-a');
+    assert.equal(formatDecimal12x4(aggregated[0]!.totalGrossScaled), '2.0000');
+
+    assert.equal(aggregated[1]!.ingredientId, 'ing-b');
+    assert.equal(formatDecimal12x4(aggregated[1]!.totalGrossScaled), '4.0000');
+
+    assert.equal(aggregated[2]!.ingredientId, 'ing-c');
+    assert.equal(formatDecimal12x4(aggregated[2]!.totalGrossScaled), '0.1000');
+  });
+
+  it('performs exact scale-4 negation and absolute value', () => {
+    const v = parseDecimal12x4('12.3456');
+    assert.equal(formatDecimal12x4(negateScale4(v)), '-12.3456');
+    assert.equal(formatDecimal12x4(absScale4(negateScale4(v))), '12.3456');
+    assert.equal(formatDecimal12x4(absScale4(v)), '12.3456');
+  });
+
+  it('instantiates ModifierQuarantineError with message and properties', () => {
+    const err = new ModifierQuarantineError('Modifier recipe resolution required');
+    assert.equal(err.name, 'ModifierQuarantineError');
+    assert.equal(err.code, 'MODIFIER_QUARANTINE_ERROR');
+    assert.equal(err.statusCode, 422);
+    assert.match(err.message, /Modifier recipe resolution required/);
   });
 });

@@ -3,7 +3,7 @@
  *
  * Cloud PostgreSQL numeric arithmetic per DECIMAL(12,4).
  * Built directly upon canonical @trident/core exact fixed-point primitives.
- * Scoped strictly to inventory domain arithmetic per ADR-012/WP-017.
+ * Scoped strictly to inventory domain arithmetic per ADR-012/WP-017/WP-018.
  * Zero IEEE 754 floating-point numbers in authoritative calculations.
  */
 
@@ -90,4 +90,22 @@ export function subtractScale4(a: bigint, b: bigint): bigint {
     throw new RangeError(`Result ${result} exceeds DECIMAL(12,4) range`);
   }
   return result;
+}
+
+/**
+ * Negates a scale-4 number with bounds checking.
+ */
+export function negateScale4(a: bigint): bigint {
+  const result = -a;
+  if (result < MIN_DECIMAL_12X4_SCALED || result > MAX_DECIMAL_12X4_SCALED) {
+    throw new RangeError(`Result ${result} exceeds DECIMAL(12,4) range`);
+  }
+  return result;
+}
+
+/**
+ * Absolute value of a scale-4 number.
+ */
+export function absScale4(a: bigint): bigint {
+  return a < 0n ? -a : a;
 }
