@@ -102,3 +102,17 @@ export class DuplicateReceiptNumberError extends ProcurementError {
     this.name = 'DuplicateReceiptNumberError';
   }
 }
+
+export class ReceiptIdempotencyConflictError extends ProcurementError {
+  constructor(message: string) {
+    super(`RECEIPT_IDEMPOTENCY_CONFLICT: ${message}`);
+    this.name = 'ReceiptIdempotencyConflictError';
+  }
+}
+
+export class ReceiptOutboxIntegrityError extends ProcurementError {
+  constructor(message: string) {
+    super(`RECEIPT_OUTBOX_INTEGRITY_ERROR: ${message}`);
+    this.name = 'ReceiptOutboxIntegrityError';
+  }
+}

@@ -72,6 +72,8 @@ import {
   InvalidPurchaseOrderError,
   PurchaseOrderCancelledError,
   InvalidReceiptItemError,
+  ReceiptIdempotencyConflictError,
+  ReceiptOutboxIntegrityError,
   CreatePurchaseOrderItemInput,
 } from '@trident/procurement';
 import { getPool, withTenantTransaction, CloudIntegrationOutboxService } from '@trident/database';
@@ -1782,6 +1784,18 @@ export class PostgresProcurementService implements CloudProcurementCompositionSe
 
       if (existingReceiptRes.rows.length > 0) {
         const er = existingReceiptRes.rows[0]!;
+
+        // 1. Revalidate stable identity
+        if (
+          er.purchase_order_id !== command.purchaseOrderId ||
+          er.supplier_id !== command.supplierId ||
+          er.warehouse_id !== command.warehouseId
+        ) {
+          throw new ReceiptIdempotencyConflictError(
+            `Receipt number '${command.receiptNumber}' already exists with conflicting stable identity (purchaseOrderId, supplierId, or warehouseId mismatch)`,
+          );
+        }
+
         const existingItemsRes = await client.query<{
           id: string;
           organization_id: string;
@@ -1811,6 +1825,64 @@ export class PostgresProcurementService implements CloudProcurementCompositionSe
           createdAt: typeof r.created_at === 'string' ? r.created_at : r.created_at.toISOString(),
         }));
 
+        // 2. Line-level duplicate revalidation (order-independent comparison)
+        if (existingItems.length !== command.items.length) {
+          throw new ReceiptIdempotencyConflictError(
+            `Receipt number '${command.receiptNumber}' already exists with conflicting number of items (existing: ${existingItems.length}, incoming: ${command.items.length})`,
+          );
+        }
+
+        const sortedExisting = [...existingItems].sort((a, b) => {
+          const c1 = a.purchaseOrderItemId.localeCompare(b.purchaseOrderItemId);
+          return c1 !== 0 ? c1 : a.ingredientId.localeCompare(b.ingredientId);
+        });
+
+        const sortedIncoming = [...command.items].sort((a, b) => {
+          const c1 = a.purchaseOrderItemId.localeCompare(b.purchaseOrderItemId);
+          return c1 !== 0 ? c1 : a.ingredientId.localeCompare(b.ingredientId);
+        });
+
+        for (let i = 0; i < sortedExisting.length; i++) {
+          const ex = sortedExisting[i]!;
+          const inc = sortedIncoming[i]!;
+
+          if (
+            ex.purchaseOrderItemId !== inc.purchaseOrderItemId ||
+            ex.ingredientId !== inc.ingredientId ||
+            parseDecimal12x4(ex.receivedQuantity) !== parseDecimal12x4(inc.receivedQuantity) ||
+            parseDecimal12x4(ex.acceptedUnitCost) !== parseDecimal12x4(inc.acceptedUnitCost)
+          ) {
+            throw new ReceiptIdempotencyConflictError(
+              `Receipt number '${command.receiptNumber}' already exists with conflicting line details for item '${inc.purchaseOrderItemId}'`,
+            );
+          }
+        }
+
+        // 3. Authoritative prior-event reconstruction from durable cloud_integration_outbox
+        const outboxRes = await client.query<{
+          id: string;
+          payload: any;
+        }>(
+          `SELECT id, payload
+           FROM cloud_integration_outbox
+           WHERE organization_id = $1
+             AND branch_id = $2
+             AND event_type = 'RecepcionCompraRegistrada'
+             AND aggregate_type = 'PURCHASE_RECEIPT'
+             AND aggregate_id = $3;`,
+          [command.organizationId, command.branchId, er.id],
+        );
+
+        if (outboxRes.rows.length === 0) {
+          throw new ReceiptOutboxIntegrityError(
+            `Canonical prior outbox event 'RecepcionCompraRegistrada' missing for receipt '${er.id}'`,
+          );
+        }
+
+        const outboxRow = outboxRes.rows[0]!;
+        const priorEventPayload: RecepcionCompraRegistradaPayload =
+          typeof outboxRow.payload === 'string' ? JSON.parse(outboxRow.payload) : outboxRow.payload;
+
         const existingReceipt: PurchaseReceipt = {
           id: er.id,
           organizationId: er.organization_id,
@@ -1829,35 +1901,10 @@ export class PostgresProcurementService implements CloudProcurementCompositionSe
           items: existingItems,
         };
 
-        const eventPayload: RecepcionCompraRegistradaPayload = {
-          recepcionId: existingReceipt.id,
-          organizationId: existingReceipt.organizationId,
-          branchId: existingReceipt.branchId,
-          supplierId: existingReceipt.supplierId,
-          purchaseOrderId: existingReceipt.purchaseOrderId,
-          warehouseId: existingReceipt.warehouseId,
-          receiptNumber: existingReceipt.receiptNumber,
-          invoiceReference: existingReceipt.invoiceReference ?? null,
-          receivedAt: existingReceipt.receivedAt,
-          paymentTerms: command.paymentTerms ?? null,
-          totalAmount: existingReceipt.totalAmount,
-          items: existingItems.map((it) => ({
-            ingredientId: it.ingredientId,
-            purchaseOrderItemId: it.purchaseOrderItemId,
-            orderedQuantity: '0.0000',
-            previouslyReceivedQuantity: '0.0000',
-            receivedQuantity: it.receivedQuantity,
-            cumulativeReceivedQuantity: it.receivedQuantity,
-            remainingQuantity: '0.0000',
-            acceptedUnitCost: it.acceptedUnitCost,
-            lineAmount: it.lineAmount,
-          })),
-        };
-
         return {
           status: 'DUPLICATE_ACCEPTED',
           receipt: existingReceipt,
-          eventPayload,
+          eventPayload: priorEventPayload,
           updatedPurchaseOrderStatus: po.status,
         };
       }

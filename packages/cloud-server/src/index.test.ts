@@ -2106,6 +2106,7 @@ describe('TRIDENTPOS WP-019 Cloud Server Procurement & Supplier Receiving Suite'
     });
     assert.equal(res2.status, 'DUPLICATE_ACCEPTED');
     assert.equal(res2.receipt.id, res1.receipt.id);
+    assert.deepEqual(res2.eventPayload, res1.eventPayload);
 
     const outboxCheck2 = await pool.query(
       `SELECT id FROM cloud_integration_outbox
@@ -2228,5 +2229,571 @@ describe('TRIDENTPOS WP-019 Cloud Server Procurement & Supplier Receiving Suite'
       );
       assert.equal(apCount.rows[0]!.count, '0');
     }
+  });
+
+  it('R2-CLOUD-01: same receipt retry returns exact durable prior event payload from outbox', async () => {
+    const sup = await procurementService.createSupplier({
+      organizationId: tenantAId,
+      code: 'SUP-R2-01',
+      tradeName: 'Supplier R2-01',
+      taxId: 'RFC-R2-01',
+    });
+
+    const po = await procurementService.createPurchaseOrder({
+      organizationId: tenantAId,
+      branchId: branchAId,
+      supplierId: sup.id,
+      orderNumber: 'PO-R2-01',
+      items: [{ ingredientId: ingredientA1Id, orderedQuantity: '10.0000', unitCost: '15.0000' }],
+    });
+    await procurementService.sendPurchaseOrder(tenantAId, po.id);
+    const poItemId = po.items![0]!.id;
+
+    const cmd = {
+      organizationId: tenantAId,
+      branchId: branchAId,
+      purchaseOrderId: po.id,
+      supplierId: sup.id,
+      warehouseId: warehouseAId,
+      receiptNumber: 'REC-R2-01',
+      paymentTerms: 'NET_30',
+      items: [
+        {
+          purchaseOrderItemId: poItemId,
+          ingredientId: ingredientA1Id,
+          receivedQuantity: '4.0000',
+          acceptedUnitCost: '15.0000',
+        },
+      ],
+    };
+
+    const first = await procurementService.confirmPurchaseReceipt(cmd);
+    assert.equal(first.status, 'APPLIED');
+    assert.equal(first.eventPayload.paymentTerms, 'NET_30');
+    assert.equal(first.eventPayload.items[0]!.orderedQuantity, '10.0000');
+    assert.equal(first.eventPayload.items[0]!.previouslyReceivedQuantity, '0.0000');
+    assert.equal(first.eventPayload.items[0]!.receivedQuantity, '4.0000');
+    assert.equal(first.eventPayload.items[0]!.cumulativeReceivedQuantity, '4.0000');
+    assert.equal(first.eventPayload.items[0]!.remainingQuantity, '6.0000');
+
+    // Retry with different payment terms in the retry command -> MUST NOT override durable historical event
+    const retryCmd = { ...cmd, paymentTerms: 'CONTADO_CASH' };
+    const retry = await procurementService.confirmPurchaseReceipt(retryCmd);
+    assert.equal(retry.status, 'DUPLICATE_ACCEPTED');
+    assert.equal(retry.eventPayload.paymentTerms, 'NET_30'); // Preserves original durable event!
+    assert.equal(retry.eventPayload.items[0]!.orderedQuantity, '10.0000');
+    assert.equal(retry.eventPayload.items[0]!.remainingQuantity, '6.0000');
+    assert.deepEqual(retry.eventPayload, first.eventPayload);
+  });
+
+  it('R2-CLOUD-02: receipt number reused for different PO fails closed (RECEIPT_IDEMPOTENCY_CONFLICT)', async () => {
+    const sup = await procurementService.createSupplier({
+      organizationId: tenantAId,
+      code: 'SUP-R2-02',
+      tradeName: 'Supplier R2-02',
+      taxId: 'RFC-R2-02',
+    });
+
+    const po1 = await procurementService.createPurchaseOrder({
+      organizationId: tenantAId,
+      branchId: branchAId,
+      supplierId: sup.id,
+      orderNumber: 'PO-R2-02-A',
+      items: [{ ingredientId: ingredientA1Id, orderedQuantity: '5.0000', unitCost: '10.0000' }],
+    });
+    await procurementService.sendPurchaseOrder(tenantAId, po1.id);
+
+    const po2 = await procurementService.createPurchaseOrder({
+      organizationId: tenantAId,
+      branchId: branchAId,
+      supplierId: sup.id,
+      orderNumber: 'PO-R2-02-B',
+      items: [{ ingredientId: ingredientA1Id, orderedQuantity: '5.0000', unitCost: '10.0000' }],
+    });
+    await procurementService.sendPurchaseOrder(tenantAId, po2.id);
+
+    await procurementService.confirmPurchaseReceipt({
+      organizationId: tenantAId,
+      branchId: branchAId,
+      purchaseOrderId: po1.id,
+      supplierId: sup.id,
+      warehouseId: warehouseAId,
+      receiptNumber: 'REC-R2-02-CONFLICT',
+      items: [
+        {
+          purchaseOrderItemId: po1.items![0]!.id,
+          ingredientId: ingredientA1Id,
+          receivedQuantity: '5.0000',
+          acceptedUnitCost: '10.0000',
+        },
+      ],
+    });
+
+    // Attempting to reuse same receiptNumber for po2 -> FAILS CLOSED
+    await assert.rejects(
+      async () =>
+        procurementService.confirmPurchaseReceipt({
+          organizationId: tenantAId,
+          branchId: branchAId,
+          purchaseOrderId: po2.id,
+          supplierId: sup.id,
+          warehouseId: warehouseAId,
+          receiptNumber: 'REC-R2-02-CONFLICT',
+          items: [
+            {
+              purchaseOrderItemId: po2.items![0]!.id,
+              ingredientId: ingredientA1Id,
+              receivedQuantity: '5.0000',
+              acceptedUnitCost: '10.0000',
+            },
+          ],
+        }),
+      /RECEIPT_IDEMPOTENCY_CONFLICT/i,
+    );
+  });
+
+  it('R2-CLOUD-03: receipt number reused with different supplier or warehouse fails closed', async () => {
+    const supA = await procurementService.createSupplier({
+      organizationId: tenantAId,
+      code: 'SUP-R2-03-A',
+      tradeName: 'Supplier R2-03-A',
+      taxId: 'RFC-R2-03-A',
+    });
+    const supB = await procurementService.createSupplier({
+      organizationId: tenantAId,
+      code: 'SUP-R2-03-B',
+      tradeName: 'Supplier R2-03-B',
+      taxId: 'RFC-R2-03-B',
+    });
+
+    const po = await procurementService.createPurchaseOrder({
+      organizationId: tenantAId,
+      branchId: branchAId,
+      supplierId: supA.id,
+      orderNumber: 'PO-R2-03',
+      items: [{ ingredientId: ingredientA1Id, orderedQuantity: '5.0000', unitCost: '10.0000' }],
+    });
+    await procurementService.sendPurchaseOrder(tenantAId, po.id);
+
+    await procurementService.confirmPurchaseReceipt({
+      organizationId: tenantAId,
+      branchId: branchAId,
+      purchaseOrderId: po.id,
+      supplierId: supA.id,
+      warehouseId: warehouseAId,
+      receiptNumber: 'REC-R2-03-CONFLICT',
+      items: [
+        {
+          purchaseOrderItemId: po.items![0]!.id,
+          ingredientId: ingredientA1Id,
+          receivedQuantity: '5.0000',
+          acceptedUnitCost: '10.0000',
+        },
+      ],
+    });
+
+    // 1. Different supplier
+    await assert.rejects(
+      async () =>
+        procurementService.confirmPurchaseReceipt({
+          organizationId: tenantAId,
+          branchId: branchAId,
+          purchaseOrderId: po.id,
+          supplierId: supB.id,
+          warehouseId: warehouseAId,
+          receiptNumber: 'REC-R2-03-CONFLICT',
+          items: [
+            {
+              purchaseOrderItemId: po.items![0]!.id,
+              ingredientId: ingredientA1Id,
+              receivedQuantity: '5.0000',
+              acceptedUnitCost: '10.0000',
+            },
+          ],
+        }),
+      /RECEIPT_IDEMPOTENCY_CONFLICT/i,
+    );
+
+    // 2. Different warehouse
+    const fakeWarehouseId = crypto.randomUUID();
+    await assert.rejects(
+      async () =>
+        procurementService.confirmPurchaseReceipt({
+          organizationId: tenantAId,
+          branchId: branchAId,
+          purchaseOrderId: po.id,
+          supplierId: supA.id,
+          warehouseId: fakeWarehouseId,
+          receiptNumber: 'REC-R2-03-CONFLICT',
+          items: [
+            {
+              purchaseOrderItemId: po.items![0]!.id,
+              ingredientId: ingredientA1Id,
+              receivedQuantity: '5.0000',
+              acceptedUnitCost: '10.0000',
+            },
+          ],
+        }),
+      /RECEIPT_IDEMPOTENCY_CONFLICT/i,
+    );
+  });
+
+  it('R2-CLOUD-04: receipt number reused with different line quantities/costs/items fails closed', async () => {
+    const sup = await procurementService.createSupplier({
+      organizationId: tenantAId,
+      code: 'SUP-R2-04',
+      tradeName: 'Supplier R2-04',
+      taxId: 'RFC-R2-04',
+    });
+
+    const po = await procurementService.createPurchaseOrder({
+      organizationId: tenantAId,
+      branchId: branchAId,
+      supplierId: sup.id,
+      orderNumber: 'PO-R2-04',
+      items: [
+        { ingredientId: ingredientA1Id, orderedQuantity: '10.0000', unitCost: '20.0000' },
+        { ingredientId: ingredientA2Id, orderedQuantity: '10.0000', unitCost: '30.0000' },
+      ],
+    });
+    await procurementService.sendPurchaseOrder(tenantAId, po.id);
+    const poItem1Id = po.items![0]!.id;
+    const poItem2Id = po.items![1]!.id;
+
+    await procurementService.confirmPurchaseReceipt({
+      organizationId: tenantAId,
+      branchId: branchAId,
+      purchaseOrderId: po.id,
+      supplierId: sup.id,
+      warehouseId: warehouseAId,
+      receiptNumber: 'REC-R2-04-CONFLICT',
+      items: [
+        {
+          purchaseOrderItemId: poItem1Id,
+          ingredientId: ingredientA1Id,
+          receivedQuantity: '5.0000',
+          acceptedUnitCost: '20.0000',
+        },
+      ],
+    });
+
+    // 1. Different quantity (6.0000 instead of 5.0000)
+    await assert.rejects(
+      async () =>
+        procurementService.confirmPurchaseReceipt({
+          organizationId: tenantAId,
+          branchId: branchAId,
+          purchaseOrderId: po.id,
+          supplierId: sup.id,
+          warehouseId: warehouseAId,
+          receiptNumber: 'REC-R2-04-CONFLICT',
+          items: [
+            {
+              purchaseOrderItemId: poItem1Id,
+              ingredientId: ingredientA1Id,
+              receivedQuantity: '6.0000',
+              acceptedUnitCost: '20.0000',
+            },
+          ],
+        }),
+      /RECEIPT_IDEMPOTENCY_CONFLICT/i,
+    );
+
+    // 2. Different cost (25.0000 instead of 20.0000)
+    await assert.rejects(
+      async () =>
+        procurementService.confirmPurchaseReceipt({
+          organizationId: tenantAId,
+          branchId: branchAId,
+          purchaseOrderId: po.id,
+          supplierId: sup.id,
+          warehouseId: warehouseAId,
+          receiptNumber: 'REC-R2-04-CONFLICT',
+          items: [
+            {
+              purchaseOrderItemId: poItem1Id,
+              ingredientId: ingredientA1Id,
+              receivedQuantity: '5.0000',
+              acceptedUnitCost: '25.0000',
+            },
+          ],
+        }),
+      /RECEIPT_IDEMPOTENCY_CONFLICT/i,
+    );
+
+    // 3. Different number of items (attempting to add 2nd line)
+    await assert.rejects(
+      async () =>
+        procurementService.confirmPurchaseReceipt({
+          organizationId: tenantAId,
+          branchId: branchAId,
+          purchaseOrderId: po.id,
+          supplierId: sup.id,
+          warehouseId: warehouseAId,
+          receiptNumber: 'REC-R2-04-CONFLICT',
+          items: [
+            {
+              purchaseOrderItemId: poItem1Id,
+              ingredientId: ingredientA1Id,
+              receivedQuantity: '5.0000',
+              acceptedUnitCost: '20.0000',
+            },
+            {
+              purchaseOrderItemId: poItem2Id,
+              ingredientId: ingredientA2Id,
+              receivedQuantity: '2.0000',
+              acceptedUnitCost: '30.0000',
+            },
+          ],
+        }),
+      /RECEIPT_IDEMPOTENCY_CONFLICT/i,
+    );
+  });
+
+  it('R2-CLOUD-05: concurrent DISTINCT partial receipts cannot over-receive (6.0000 + 6.0000 on 10.0000 PO item)', async () => {
+    const sup = await procurementService.createSupplier({
+      organizationId: tenantAId,
+      code: 'SUP-R2-05',
+      tradeName: 'Supplier R2-05',
+      taxId: 'RFC-R2-05',
+    });
+
+    const po = await procurementService.createPurchaseOrder({
+      organizationId: tenantAId,
+      branchId: branchAId,
+      supplierId: sup.id,
+      orderNumber: 'PO-R2-CONC-DIST',
+      items: [{ ingredientId: ingredientA1Id, orderedQuantity: '10.0000', unitCost: '10.0000' }],
+    });
+    await procurementService.sendPurchaseOrder(tenantAId, po.id);
+    const poItemId = po.items![0]!.id;
+
+    const cmdA = {
+      organizationId: tenantAId,
+      branchId: branchAId,
+      purchaseOrderId: po.id,
+      supplierId: sup.id,
+      warehouseId: warehouseAId,
+      receiptNumber: 'REC-R2-CONC-DIST-A',
+      items: [
+        {
+          purchaseOrderItemId: poItemId,
+          ingredientId: ingredientA1Id,
+          receivedQuantity: '6.0000',
+          acceptedUnitCost: '10.0000',
+        },
+      ],
+    };
+
+    const cmdB = {
+      organizationId: tenantAId,
+      branchId: branchAId,
+      purchaseOrderId: po.id,
+      supplierId: sup.id,
+      warehouseId: warehouseAId,
+      receiptNumber: 'REC-R2-CONC-DIST-B',
+      items: [
+        {
+          purchaseOrderItemId: poItemId,
+          ingredientId: ingredientA1Id,
+          receivedQuantity: '6.0000',
+          acceptedUnitCost: '10.0000',
+        },
+      ],
+    };
+
+    // Execute simultaneously
+    const results = await Promise.allSettled([
+      procurementService.confirmPurchaseReceipt(cmdA),
+      procurementService.confirmPurchaseReceipt(cmdB),
+    ]);
+
+    const fulfilled = results.filter(
+      (r) => r.status === 'fulfilled',
+    ) as PromiseFulfilledResult<any>[];
+    const rejected = results.filter((r) => r.status === 'rejected') as PromiseRejectedResult[];
+
+    assert.equal(fulfilled.length, 1, 'Exactly one distinct receipt must succeed');
+    assert.equal(
+      rejected.length,
+      1,
+      'The other distinct receipt must be rejected to prevent over-receipt',
+    );
+    assert.equal(fulfilled[0]!.value.status, 'APPLIED');
+    assert.match(
+      rejected[0]!.reason.message,
+      /OVER_RECEIPT_NOT_AUTHORIZED|OverReceiptNotAuthorizedError/i,
+    );
+
+    // Verify DB cumulative received quantity is 6.0000, never 12.0000
+    const dbSum = await pool.query<{ total: string }>(
+      `SELECT COALESCE(SUM(received_quantity), 0.0000)::text as total
+       FROM purchase_receipt_items pri
+       JOIN purchase_receipts pr ON pr.id = pri.purchase_receipt_id
+       WHERE pr.organization_id = $1 AND pri.purchase_order_item_id = $2 AND pr.status = 'CONFIRMED';`,
+      [tenantAId, poItemId],
+    );
+    assert.equal(dbSum.rows[0]!.total, '6.0000');
+
+    // Verify outbox count is exactly 1
+    const appliedReceiptId = fulfilled[0]!.value.receipt.id;
+    const outboxRows = await pool.query(
+      `SELECT id FROM cloud_integration_outbox WHERE organization_id = $1 AND aggregate_id = $2;`,
+      [tenantAId, appliedReceiptId],
+    );
+    assert.equal(outboxRows.rows.length, 1, 'Exactly one outbox event for applied receipt');
+  });
+
+  it('R2-CLOUD-06: failed conflicting retry creates zero new receipt/items/outbox', async () => {
+    const sup = await procurementService.createSupplier({
+      organizationId: tenantAId,
+      code: 'SUP-R2-06',
+      tradeName: 'Supplier R2-06',
+      taxId: 'RFC-R2-06',
+    });
+
+    const po = await procurementService.createPurchaseOrder({
+      organizationId: tenantAId,
+      branchId: branchAId,
+      supplierId: sup.id,
+      orderNumber: 'PO-R2-06',
+      items: [{ ingredientId: ingredientA1Id, orderedQuantity: '5.0000', unitCost: '10.0000' }],
+    });
+    await procurementService.sendPurchaseOrder(tenantAId, po.id);
+    const poItemId = po.items![0]!.id;
+
+    await procurementService.confirmPurchaseReceipt({
+      organizationId: tenantAId,
+      branchId: branchAId,
+      purchaseOrderId: po.id,
+      supplierId: sup.id,
+      warehouseId: warehouseAId,
+      receiptNumber: 'REC-R2-06',
+      items: [
+        {
+          purchaseOrderItemId: poItemId,
+          ingredientId: ingredientA1Id,
+          receivedQuantity: '5.0000',
+          acceptedUnitCost: '10.0000',
+        },
+      ],
+    });
+
+    const preCountReceipts = await pool.query<{ count: string }>(
+      `SELECT COUNT(*)::text as count FROM purchase_receipts WHERE organization_id = $1;`,
+      [tenantAId],
+    );
+    const preCountItems = await pool.query<{ count: string }>(
+      `SELECT COUNT(*)::text as count FROM purchase_receipt_items WHERE organization_id = $1;`,
+      [tenantAId],
+    );
+    const preCountOutbox = await pool.query<{ count: string }>(
+      `SELECT COUNT(*)::text as count FROM cloud_integration_outbox WHERE organization_id = $1;`,
+      [tenantAId],
+    );
+
+    // Attempt conflicting retry
+    await assert.rejects(
+      async () =>
+        procurementService.confirmPurchaseReceipt({
+          organizationId: tenantAId,
+          branchId: branchAId,
+          purchaseOrderId: po.id,
+          supplierId: sup.id,
+          warehouseId: warehouseAId,
+          receiptNumber: 'REC-R2-06',
+          items: [
+            {
+              purchaseOrderItemId: poItemId,
+              ingredientId: ingredientA1Id,
+              receivedQuantity: '3.0000', // Conflicting quantity
+              acceptedUnitCost: '10.0000',
+            },
+          ],
+        }),
+      /RECEIPT_IDEMPOTENCY_CONFLICT/i,
+    );
+
+    const postCountReceipts = await pool.query<{ count: string }>(
+      `SELECT COUNT(*)::text as count FROM purchase_receipts WHERE organization_id = $1;`,
+      [tenantAId],
+    );
+    const postCountItems = await pool.query<{ count: string }>(
+      `SELECT COUNT(*)::text as count FROM purchase_receipt_items WHERE organization_id = $1;`,
+      [tenantAId],
+    );
+    const postCountOutbox = await pool.query<{ count: string }>(
+      `SELECT COUNT(*)::text as count FROM cloud_integration_outbox WHERE organization_id = $1;`,
+      [tenantAId],
+    );
+
+    assert.equal(postCountReceipts.rows[0]!.count, preCountReceipts.rows[0]!.count);
+    assert.equal(postCountItems.rows[0]!.count, preCountItems.rows[0]!.count);
+    assert.equal(postCountOutbox.rows[0]!.count, preCountOutbox.rows[0]!.count);
+  });
+
+  it('R2-CLOUD-07: missing canonical prior outbox event fails closed with RECEIPT_OUTBOX_INTEGRITY_ERROR', async () => {
+    const sup = await procurementService.createSupplier({
+      organizationId: tenantAId,
+      code: 'SUP-R2-07',
+      tradeName: 'Supplier R2-07',
+      taxId: 'RFC-R2-07',
+    });
+
+    const po = await procurementService.createPurchaseOrder({
+      organizationId: tenantAId,
+      branchId: branchAId,
+      supplierId: sup.id,
+      orderNumber: 'PO-R2-07',
+      items: [{ ingredientId: ingredientA1Id, orderedQuantity: '5.0000', unitCost: '10.0000' }],
+    });
+    await procurementService.sendPurchaseOrder(tenantAId, po.id);
+    const poItemId = po.items![0]!.id;
+
+    const res1 = await procurementService.confirmPurchaseReceipt({
+      organizationId: tenantAId,
+      branchId: branchAId,
+      purchaseOrderId: po.id,
+      supplierId: sup.id,
+      warehouseId: warehouseAId,
+      receiptNumber: 'REC-R2-07',
+      items: [
+        {
+          purchaseOrderItemId: poItemId,
+          ingredientId: ingredientA1Id,
+          receivedQuantity: '5.0000',
+          acceptedUnitCost: '10.0000',
+        },
+      ],
+    });
+    assert.equal(res1.status, 'APPLIED');
+
+    // Simulate missing outbox event
+    await pool.query(
+      `DELETE FROM cloud_integration_outbox WHERE organization_id = $1 AND aggregate_id = $2;`,
+      [tenantAId, res1.receipt.id],
+    );
+
+    // Retry should fail closed
+    await assert.rejects(
+      async () =>
+        procurementService.confirmPurchaseReceipt({
+          organizationId: tenantAId,
+          branchId: branchAId,
+          purchaseOrderId: po.id,
+          supplierId: sup.id,
+          warehouseId: warehouseAId,
+          receiptNumber: 'REC-R2-07',
+          items: [
+            {
+              purchaseOrderItemId: poItemId,
+              ingredientId: ingredientA1Id,
+              receivedQuantity: '5.0000',
+              acceptedUnitCost: '10.0000',
+            },
+          ],
+        }),
+      /RECEIPT_OUTBOX_INTEGRITY_ERROR/i,
+    );
   });
 });
