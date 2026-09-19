@@ -44,6 +44,36 @@ import {
   validateWasteCommand,
   aggregateIngredientQuantities,
 } from '@trident/inventory';
+import {
+  type Supplier,
+  type CreateSupplierCommand,
+  type PurchaseOrder,
+  type PurchaseOrderItem,
+  type CreatePurchaseOrderCommand,
+  type PurchaseReceipt,
+  type PurchaseReceiptItem,
+  type ConfirmPurchaseReceiptCommand,
+  type ConfirmReceiptResult,
+  type RecepcionCompraRegistradaPayload,
+  type PurchaseOrderStatus,
+  type PurchasePriceVarianceAuthorizationPolicy,
+  calculatePoItemLineAmount,
+  calculatePoTotalAmount,
+  validatePoTransition,
+  validateCanCancelPo,
+  calculateReceiptItemLineAmount,
+  calculateReceiptTotalAmount,
+  deriveCumulativeReceivingQuantities,
+  evaluateOverReceipt,
+  determinePostReceiptPoStatus,
+  evaluatePriceVariance,
+  cmpScale4,
+  InvalidSupplierError,
+  InvalidPurchaseOrderError,
+  PurchaseOrderCancelledError,
+  InvalidReceiptItemError,
+  CreatePurchaseOrderItemInput,
+} from '@trident/procurement';
 import { getPool, withTenantTransaction, CloudIntegrationOutboxService } from '@trident/database';
 
 export interface CloudInventoryCompositionService {
@@ -1289,3 +1319,1030 @@ export class PostgresCloudInventoryService implements CloudInventoryCompositionS
     return res.rows[0]!.current_average_cost;
   }
 }
+
+export interface CloudProcurementCompositionService {
+  createSupplier(command: CreateSupplierCommand): Promise<Supplier>;
+  getSupplier(organizationId: string, supplierId: string): Promise<Supplier | null>;
+  createPurchaseOrder(command: CreatePurchaseOrderCommand): Promise<PurchaseOrder>;
+  getPurchaseOrder(organizationId: string, purchaseOrderId: string): Promise<PurchaseOrder | null>;
+  sendPurchaseOrder(organizationId: string, purchaseOrderId: string): Promise<PurchaseOrder>;
+  cancelPurchaseOrder(organizationId: string, purchaseOrderId: string): Promise<PurchaseOrder>;
+  confirmPurchaseReceipt(
+    command: ConfirmPurchaseReceiptCommand,
+    priceVariancePolicy?: PurchasePriceVarianceAuthorizationPolicy,
+  ): Promise<ConfirmReceiptResult>;
+  getPurchaseReceipt(
+    organizationId: string,
+    purchaseReceiptId: string,
+  ): Promise<PurchaseReceipt | null>;
+}
+
+export class PostgresProcurementService implements CloudProcurementCompositionService {
+  private readonly pool: pg.Pool;
+  private readonly outboxService: CloudIntegrationOutboxService;
+
+  public constructor(pool?: pg.Pool, outboxService?: CloudIntegrationOutboxService) {
+    this.pool = pool ?? getPool();
+    this.outboxService = outboxService ?? new CloudIntegrationOutboxService();
+  }
+
+  public async createSupplier(command: CreateSupplierCommand): Promise<Supplier> {
+    if (!command.code || command.code.trim().length === 0) {
+      throw new InvalidSupplierError('Supplier code cannot be empty');
+    }
+    if (!command.tradeName || command.tradeName.trim().length === 0) {
+      throw new InvalidSupplierError('Supplier trade name cannot be empty');
+    }
+    if (!command.taxId || command.taxId.trim().length === 0) {
+      throw new InvalidSupplierError('Supplier tax ID cannot be empty');
+    }
+    const creditDays = command.creditDays ?? 0;
+    if (creditDays < 0) {
+      throw new InvalidSupplierError('Credit days must be non-negative');
+    }
+    const isActive = command.isActive ?? true;
+
+    return withTenantTransaction(this.pool, command.organizationId, async (client) => {
+      const res = await client.query<{
+        id: string;
+        organization_id: string;
+        code: string;
+        trade_name: string;
+        tax_id: string;
+        credit_days: number;
+        is_active: boolean;
+        created_at: string | Date;
+      }>(
+        `INSERT INTO suppliers (
+          organization_id,
+          code,
+          trade_name,
+          tax_id,
+          credit_days,
+          is_active
+        ) VALUES ($1, $2, $3, $4, $5, $6)
+        RETURNING
+          id,
+          organization_id,
+          code,
+          trade_name,
+          tax_id,
+          credit_days,
+          is_active,
+          created_at;`,
+        [
+          command.organizationId,
+          command.code.trim(),
+          command.tradeName.trim(),
+          command.taxId.trim(),
+          creditDays,
+          isActive,
+        ],
+      );
+
+      const row = res.rows[0]!;
+      return {
+        id: row.id,
+        organizationId: row.organization_id,
+        code: row.code,
+        tradeName: row.trade_name,
+        taxId: row.tax_id,
+        creditDays: row.credit_days,
+        isActive: row.is_active,
+        createdAt:
+          typeof row.created_at === 'string' ? row.created_at : row.created_at.toISOString(),
+      };
+    });
+  }
+
+  public async getSupplier(organizationId: string, supplierId: string): Promise<Supplier | null> {
+    return withTenantTransaction(this.pool, organizationId, async (client) => {
+      const res = await client.query<{
+        id: string;
+        organization_id: string;
+        code: string;
+        trade_name: string;
+        tax_id: string;
+        credit_days: number;
+        is_active: boolean;
+        created_at: string | Date;
+      }>(
+        `SELECT id, organization_id, code, trade_name, tax_id, credit_days, is_active, created_at
+         FROM suppliers
+         WHERE organization_id = $1 AND id = $2;`,
+        [organizationId, supplierId],
+      );
+
+      if (res.rows.length === 0) {
+        return null;
+      }
+
+      const row = res.rows[0]!;
+      return {
+        id: row.id,
+        organizationId: row.organization_id,
+        code: row.code,
+        tradeName: row.trade_name,
+        taxId: row.tax_id,
+        creditDays: row.credit_days,
+        isActive: row.is_active,
+        createdAt:
+          typeof row.created_at === 'string' ? row.created_at : row.created_at.toISOString(),
+      };
+    });
+  }
+
+  public async createPurchaseOrder(command: CreatePurchaseOrderCommand): Promise<PurchaseOrder> {
+    if (!command.orderNumber || command.orderNumber.trim().length === 0) {
+      throw new InvalidPurchaseOrderError('Order number cannot be empty');
+    }
+    if (!command.items || command.items.length === 0) {
+      throw new InvalidPurchaseOrderError('Purchase order must contain at least one line item');
+    }
+
+    // Pre-calculate line amounts and total amount
+    const processedItems = command.items.map((item: CreatePurchaseOrderItemInput) => {
+      const lineAmount = calculatePoItemLineAmount(item.orderedQuantity, item.unitCost);
+      return {
+        ingredientId: item.ingredientId,
+        orderedQuantity: item.orderedQuantity,
+        unitCost: item.unitCost,
+        lineAmount,
+      };
+    });
+
+    const totalAmount = calculatePoTotalAmount(processedItems);
+
+    return withTenantTransaction(this.pool, command.organizationId, async (client) => {
+      // Validate supplier exists and belongs to tenant
+      const supCheck = await client.query(
+        `SELECT id FROM suppliers WHERE organization_id = $1 AND id = $2 AND is_active = TRUE;`,
+        [command.organizationId, command.supplierId],
+      );
+      if (supCheck.rows.length === 0) {
+        throw new InvalidPurchaseOrderError(
+          `Active supplier '${command.supplierId}' not found in organization`,
+        );
+      }
+
+      // Validate branch exists and belongs to tenant
+      const branchCheck = await client.query(
+        `SELECT id FROM branches WHERE organization_id = $1 AND id = $2;`,
+        [command.organizationId, command.branchId],
+      );
+      if (branchCheck.rows.length === 0) {
+        throw new InvalidPurchaseOrderError(
+          `Branch '${command.branchId}' not found in organization`,
+        );
+      }
+
+      // Validate ingredients exist
+      const ingredientIds = processedItems.map((i: { ingredientId: string }) => i.ingredientId);
+      const ingCheck = await client.query(
+        `SELECT id FROM ingredients WHERE organization_id = $1 AND id = ANY($2::uuid[]);`,
+        [command.organizationId, ingredientIds],
+      );
+      if (ingCheck.rows.length !== ingredientIds.length) {
+        throw new InvalidPurchaseOrderError(
+          'One or more ingredient IDs do not exist in organization',
+        );
+      }
+
+      // Insert purchase order
+      const poRes = await client.query<{
+        id: string;
+        organization_id: string;
+        branch_id: string;
+        supplier_id: string;
+        order_number: string;
+        status: PurchaseOrderStatus;
+        total_amount: string;
+        created_at: string | Date;
+        updated_at: string | Date;
+      }>(
+        `INSERT INTO purchase_orders (
+          organization_id,
+          branch_id,
+          supplier_id,
+          order_number,
+          status,
+          total_amount
+        ) VALUES ($1, $2, $3, $4, 'DRAFT', $5)
+        RETURNING
+          id,
+          organization_id,
+          branch_id,
+          supplier_id,
+          order_number,
+          status,
+          total_amount::text,
+          created_at,
+          updated_at;`,
+        [
+          command.organizationId,
+          command.branchId,
+          command.supplierId,
+          command.orderNumber.trim(),
+          totalAmount,
+        ],
+      );
+
+      const poRow = poRes.rows[0]!;
+      const poId = poRow.id;
+
+      // Insert items
+      const savedItems: PurchaseOrderItem[] = [];
+      for (const item of processedItems) {
+        const itemRes = await client.query<{
+          id: string;
+          organization_id: string;
+          purchase_order_id: string;
+          ingredient_id: string;
+          ordered_quantity: string;
+          unit_cost: string;
+          line_amount: string;
+          created_at: string | Date;
+        }>(
+          `INSERT INTO purchase_order_items (
+            organization_id,
+            purchase_order_id,
+            ingredient_id,
+            ordered_quantity,
+            unit_cost,
+            line_amount
+          ) VALUES ($1, $2, $3, $4, $5, $6)
+          RETURNING
+            id,
+            organization_id,
+            purchase_order_id,
+            ingredient_id,
+            ordered_quantity::text,
+            unit_cost::text,
+            line_amount::text,
+            created_at;`,
+          [
+            command.organizationId,
+            poId,
+            item.ingredientId,
+            item.orderedQuantity,
+            item.unitCost,
+            item.lineAmount,
+          ],
+        );
+        const ir = itemRes.rows[0]!;
+        savedItems.push({
+          id: ir.id,
+          organizationId: ir.organization_id,
+          purchaseOrderId: ir.purchase_order_id,
+          ingredientId: ir.ingredient_id,
+          orderedQuantity: ir.ordered_quantity,
+          unitCost: ir.unit_cost,
+          lineAmount: ir.line_amount,
+          createdAt:
+            typeof ir.created_at === 'string' ? ir.created_at : ir.created_at.toISOString(),
+        });
+      }
+
+      return {
+        id: poRow.id,
+        organizationId: poRow.organization_id,
+        branchId: poRow.branch_id,
+        supplierId: poRow.supplier_id,
+        orderNumber: poRow.order_number,
+        status: poRow.status,
+        totalAmount: poRow.total_amount,
+        items: savedItems,
+        createdAt:
+          typeof poRow.created_at === 'string' ? poRow.created_at : poRow.created_at.toISOString(),
+        updatedAt:
+          typeof poRow.updated_at === 'string' ? poRow.updated_at : poRow.updated_at.toISOString(),
+      };
+    });
+  }
+
+  public async getPurchaseOrder(
+    organizationId: string,
+    purchaseOrderId: string,
+  ): Promise<PurchaseOrder | null> {
+    return withTenantTransaction(this.pool, organizationId, async (client) => {
+      return this.getPurchaseOrderWithClient(client, organizationId, purchaseOrderId);
+    });
+  }
+
+  public async sendPurchaseOrder(
+    organizationId: string,
+    purchaseOrderId: string,
+  ): Promise<PurchaseOrder> {
+    return withTenantTransaction(this.pool, organizationId, async (client) => {
+      const poRes = await client.query<{
+        id: string;
+        organization_id: string;
+        branch_id: string;
+        supplier_id: string;
+        order_number: string;
+        status: PurchaseOrderStatus;
+        total_amount: string;
+        created_at: string | Date;
+        updated_at: string | Date;
+      }>(
+        `SELECT id, organization_id, branch_id, supplier_id, order_number, status, total_amount::text, created_at, updated_at
+         FROM purchase_orders
+         WHERE organization_id = $1 AND id = $2
+         FOR UPDATE;`,
+        [organizationId, purchaseOrderId],
+      );
+
+      if (poRes.rows.length === 0) {
+        throw new InvalidPurchaseOrderError(`Purchase order '${purchaseOrderId}' not found`);
+      }
+
+      const po = poRes.rows[0]!;
+      validatePoTransition(po.status, 'SENT');
+
+      await client.query(
+        `UPDATE purchase_orders SET status = 'SENT', updated_at = NOW() WHERE organization_id = $1 AND id = $2;`,
+        [organizationId, purchaseOrderId],
+      );
+
+      return this.getPurchaseOrderWithClient(
+        client,
+        organizationId,
+        purchaseOrderId,
+      ) as Promise<PurchaseOrder>;
+    });
+  }
+
+  public async cancelPurchaseOrder(
+    organizationId: string,
+    purchaseOrderId: string,
+  ): Promise<PurchaseOrder> {
+    return withTenantTransaction(this.pool, organizationId, async (client) => {
+      const poRes = await client.query<{
+        id: string;
+        organization_id: string;
+        branch_id: string;
+        supplier_id: string;
+        order_number: string;
+        status: PurchaseOrderStatus;
+        total_amount: string;
+        created_at: string | Date;
+        updated_at: string | Date;
+      }>(
+        `SELECT id, organization_id, branch_id, supplier_id, order_number, status, total_amount::text, created_at, updated_at
+         FROM purchase_orders
+         WHERE organization_id = $1 AND id = $2
+         FOR UPDATE;`,
+        [organizationId, purchaseOrderId],
+      );
+
+      if (poRes.rows.length === 0) {
+        throw new InvalidPurchaseOrderError(`Purchase order '${purchaseOrderId}' not found`);
+      }
+
+      const po = poRes.rows[0]!;
+
+      // Check if any confirmed receipts exist
+      const receiptCheck = await client.query<{ count: string }>(
+        `SELECT COUNT(*)::text AS count FROM purchase_receipts WHERE organization_id = $1 AND purchase_order_id = $2 AND status = 'CONFIRMED';`,
+        [organizationId, purchaseOrderId],
+      );
+      const receiptCount = Number.parseInt(receiptCheck.rows[0]?.count ?? '0', 10);
+      validateCanCancelPo(po.status, receiptCount > 0);
+
+      await client.query(
+        `UPDATE purchase_orders SET status = 'CANCELLED', updated_at = NOW() WHERE organization_id = $1 AND id = $2;`,
+        [organizationId, purchaseOrderId],
+      );
+
+      return this.getPurchaseOrderWithClient(
+        client,
+        organizationId,
+        purchaseOrderId,
+      ) as Promise<PurchaseOrder>;
+    });
+  }
+
+  public async confirmPurchaseReceipt(
+    command: ConfirmPurchaseReceiptCommand,
+    priceVariancePolicy?: PurchasePriceVarianceAuthorizationPolicy,
+  ): Promise<ConfirmReceiptResult> {
+    if (!command.receiptNumber || command.receiptNumber.trim().length === 0) {
+      throw new InvalidReceiptItemError('Receipt number cannot be empty');
+    }
+    if (!command.items || command.items.length === 0) {
+      throw new InvalidReceiptItemError('Receipt must contain at least one item');
+    }
+
+    return withTenantTransaction(this.pool, command.organizationId, async (client) => {
+      // 1. Lock Purchase Order FOR UPDATE to serialize all concurrent receipts
+      const poRes = await client.query<{
+        id: string;
+        organization_id: string;
+        branch_id: string;
+        supplier_id: string;
+        order_number: string;
+        status: PurchaseOrderStatus;
+        total_amount: string;
+      }>(
+        `SELECT id, organization_id, branch_id, supplier_id, order_number, status, total_amount::text
+         FROM purchase_orders
+         WHERE organization_id = $1 AND id = $2
+         FOR UPDATE;`,
+        [command.organizationId, command.purchaseOrderId],
+      );
+
+      if (poRes.rows.length === 0) {
+        throw new InvalidPurchaseOrderError(
+          `Purchase order '${command.purchaseOrderId}' not found`,
+        );
+      }
+
+      const po = poRes.rows[0]!;
+
+      // Check idempotency: if receipt already exists by (organization_id, branch_id, receipt_number)
+      const existingReceiptRes = await client.query<{
+        id: string;
+        organization_id: string;
+        branch_id: string;
+        purchase_order_id: string;
+        supplier_id: string;
+        warehouse_id: string;
+        receipt_number: string;
+        invoice_reference: string | null;
+        total_amount: string;
+        status: 'CONFIRMED' | 'CANCELLED';
+        received_at: string | Date;
+        created_at: string | Date;
+      }>(
+        `SELECT id, organization_id, branch_id, purchase_order_id, supplier_id, warehouse_id, receipt_number, invoice_reference, total_amount::text, status, received_at, created_at
+         FROM purchase_receipts
+         WHERE organization_id = $1 AND branch_id = $2 AND receipt_number = $3;`,
+        [command.organizationId, command.branchId, command.receiptNumber.trim()],
+      );
+
+      if (existingReceiptRes.rows.length > 0) {
+        const er = existingReceiptRes.rows[0]!;
+        const existingItemsRes = await client.query<{
+          id: string;
+          organization_id: string;
+          purchase_receipt_id: string;
+          purchase_order_item_id: string;
+          ingredient_id: string;
+          received_quantity: string;
+          accepted_unit_cost: string;
+          line_amount: string;
+          created_at: string | Date;
+        }>(
+          `SELECT id, organization_id, purchase_receipt_id, purchase_order_item_id, ingredient_id, received_quantity::text, accepted_unit_cost::text, line_amount::text, created_at
+           FROM purchase_receipt_items
+           WHERE organization_id = $1 AND purchase_receipt_id = $2;`,
+          [command.organizationId, er.id],
+        );
+
+        const existingItems: PurchaseReceiptItem[] = existingItemsRes.rows.map((r) => ({
+          id: r.id,
+          organizationId: r.organization_id,
+          purchaseReceiptId: r.purchase_receipt_id,
+          purchaseOrderItemId: r.purchase_order_item_id,
+          ingredientId: r.ingredient_id,
+          receivedQuantity: r.received_quantity,
+          acceptedUnitCost: r.accepted_unit_cost,
+          lineAmount: r.line_amount,
+          createdAt: typeof r.created_at === 'string' ? r.created_at : r.created_at.toISOString(),
+        }));
+
+        const existingReceipt: PurchaseReceipt = {
+          id: er.id,
+          organizationId: er.organization_id,
+          branchId: er.branch_id,
+          purchaseOrderId: er.purchase_order_id,
+          supplierId: er.supplier_id,
+          warehouseId: er.warehouse_id,
+          receiptNumber: er.receipt_number,
+          invoiceReference: er.invoice_reference,
+          totalAmount: er.total_amount,
+          status: er.status,
+          receivedAt:
+            typeof er.received_at === 'string' ? er.received_at : er.received_at.toISOString(),
+          createdAt:
+            typeof er.created_at === 'string' ? er.created_at : er.created_at.toISOString(),
+          items: existingItems,
+        };
+
+        const eventPayload: RecepcionCompraRegistradaPayload = {
+          recepcionId: existingReceipt.id,
+          organizationId: existingReceipt.organizationId,
+          branchId: existingReceipt.branchId,
+          supplierId: existingReceipt.supplierId,
+          purchaseOrderId: existingReceipt.purchaseOrderId,
+          warehouseId: existingReceipt.warehouseId,
+          receiptNumber: existingReceipt.receiptNumber,
+          invoiceReference: existingReceipt.invoiceReference ?? null,
+          receivedAt: existingReceipt.receivedAt,
+          paymentTerms: command.paymentTerms ?? null,
+          totalAmount: existingReceipt.totalAmount,
+          items: existingItems.map((it) => ({
+            ingredientId: it.ingredientId,
+            purchaseOrderItemId: it.purchaseOrderItemId,
+            orderedQuantity: '0.0000',
+            previouslyReceivedQuantity: '0.0000',
+            receivedQuantity: it.receivedQuantity,
+            cumulativeReceivedQuantity: it.receivedQuantity,
+            remainingQuantity: '0.0000',
+            acceptedUnitCost: it.acceptedUnitCost,
+            lineAmount: it.lineAmount,
+          })),
+        };
+
+        return {
+          status: 'DUPLICATE_ACCEPTED',
+          receipt: existingReceipt,
+          eventPayload,
+          updatedPurchaseOrderStatus: po.status,
+        };
+      }
+
+      if (po.status === 'CANCELLED') {
+        throw new PurchaseOrderCancelledError(command.purchaseOrderId);
+      }
+      if (po.status === 'RECEIVED') {
+        throw new InvalidPurchaseOrderError('Purchase order is already fully received');
+      }
+      if (po.status === 'DRAFT') {
+        throw new InvalidPurchaseOrderError(
+          'Cannot receive against DRAFT purchase order; order must be in SENT or PARTIAL status',
+        );
+      }
+      if (po.supplier_id !== command.supplierId) {
+        throw new InvalidPurchaseOrderError('Supplier does not match purchase order supplier');
+      }
+      if (po.branch_id !== command.branchId) {
+        throw new InvalidPurchaseOrderError('Branch does not match purchase order branch');
+      }
+
+      // Validate warehouse belongs to organization and branch
+      const whCheck = await client.query(
+        `SELECT id FROM warehouses WHERE organization_id = $1 AND id = $2 AND branch_id = $3;`,
+        [command.organizationId, command.warehouseId, command.branchId],
+      );
+      if (whCheck.rows.length === 0) {
+        throw new InvalidReceiptItemError(
+          `Warehouse '${command.warehouseId}' does not belong to organization and branch`,
+        );
+      }
+
+      // Load all PO items with FOR UPDATE
+      const allPoItemsRes = await client.query<{
+        id: string;
+        ingredient_id: string;
+        ordered_quantity: string;
+        unit_cost: string;
+        line_amount: string;
+      }>(
+        `SELECT id, ingredient_id, ordered_quantity::text, unit_cost::text, line_amount::text
+         FROM purchase_order_items
+         WHERE organization_id = $1 AND purchase_order_id = $2
+         FOR UPDATE;`,
+        [command.organizationId, command.purchaseOrderId],
+      );
+      const allPoItems = allPoItemsRes.rows;
+      const poItemMap = new Map(allPoItems.map((it) => [it.id, it]));
+
+      // Validate and calculate receipt lines
+      const processedReceiptLines: Array<{
+        purchaseOrderItemId: string;
+        ingredientId: string;
+        orderedQuantity: string;
+        previouslyReceivedQuantity: string;
+        receivedQuantity: string;
+        cumulativeReceivedQuantity: string;
+        remainingQuantity: string;
+        acceptedUnitCost: string;
+        lineAmount: string;
+      }> = [];
+
+      for (const itemInput of command.items) {
+        const poItem = poItemMap.get(itemInput.purchaseOrderItemId);
+        if (!poItem) {
+          throw new InvalidReceiptItemError(
+            `Purchase order item '${itemInput.purchaseOrderItemId}' does not belong to purchase order '${command.purchaseOrderId}'`,
+          );
+        }
+        if (poItem.ingredient_id !== itemInput.ingredientId) {
+          throw new InvalidReceiptItemError(
+            `Ingredient '${itemInput.ingredientId}' does not match purchase order item ingredient '${poItem.ingredient_id}'`,
+          );
+        }
+
+        // Query cumulative previously received quantity for this PO item
+        const prevRecRes = await client.query<{ total_received: string }>(
+          `SELECT COALESCE(SUM(pri.received_quantity), 0.0000)::text AS total_received
+           FROM purchase_receipt_items pri
+           JOIN purchase_receipts pr ON pr.id = pri.purchase_receipt_id
+           WHERE pr.organization_id = $1
+             AND pri.purchase_order_item_id = $2
+             AND pr.status = 'CONFIRMED';`,
+          [command.organizationId, itemInput.purchaseOrderItemId],
+        );
+        const previouslyReceived = prevRecRes.rows[0]?.total_received ?? '0.0000';
+
+        // 1. Evaluate price variance policy
+        await evaluatePriceVariance(
+          {
+            organizationId: command.organizationId,
+            branchId: command.branchId,
+            supplierId: command.supplierId,
+            ingredientId: itemInput.ingredientId,
+            orderedUnitCost: poItem.unit_cost,
+            receivedUnitCost: itemInput.acceptedUnitCost,
+            supervisorAuthorizationToken: command.supervisorAuthorizationToken,
+          },
+          priceVariancePolicy,
+        );
+
+        // 2. Evaluate over-receipt (fail closed)
+        evaluateOverReceipt(
+          itemInput.ingredientId,
+          poItem.ordered_quantity,
+          previouslyReceived,
+          itemInput.receivedQuantity,
+        );
+
+        // 3. Derive exact amounts & remaining
+        const lineAmount = calculateReceiptItemLineAmount(
+          itemInput.receivedQuantity,
+          itemInput.acceptedUnitCost,
+        );
+        const cumResult = deriveCumulativeReceivingQuantities(
+          poItem.ordered_quantity,
+          previouslyReceived,
+          itemInput.receivedQuantity,
+        );
+
+        processedReceiptLines.push({
+          purchaseOrderItemId: itemInput.purchaseOrderItemId,
+          ingredientId: itemInput.ingredientId,
+          orderedQuantity: poItem.ordered_quantity,
+          previouslyReceivedQuantity: previouslyReceived,
+          receivedQuantity: itemInput.receivedQuantity,
+          cumulativeReceivedQuantity: cumResult.cumulativeReceivedQuantity,
+          remainingQuantity: cumResult.remainingQuantity,
+          acceptedUnitCost: itemInput.acceptedUnitCost,
+          lineAmount,
+        });
+      }
+
+      const totalReceiptAmount = calculateReceiptTotalAmount(processedReceiptLines);
+
+      // Insert purchase receipt
+      const recRes = await client.query<{
+        id: string;
+        organization_id: string;
+        branch_id: string;
+        purchase_order_id: string;
+        supplier_id: string;
+        warehouse_id: string;
+        receipt_number: string;
+        invoice_reference: string | null;
+        total_amount: string;
+        status: 'CONFIRMED' | 'CANCELLED';
+        received_at: string | Date;
+        created_at: string | Date;
+      }>(
+        `INSERT INTO purchase_receipts (
+          organization_id,
+          branch_id,
+          purchase_order_id,
+          supplier_id,
+          warehouse_id,
+          receipt_number,
+          invoice_reference,
+          total_amount,
+          status,
+          received_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'CONFIRMED', COALESCE($9::timestamptz, NOW()))
+        RETURNING
+          id,
+          organization_id,
+          branch_id,
+          purchase_order_id,
+          supplier_id,
+          warehouse_id,
+          receipt_number,
+          invoice_reference,
+          total_amount::text,
+          status,
+          received_at,
+          created_at;`,
+        [
+          command.organizationId,
+          command.branchId,
+          command.purchaseOrderId,
+          command.supplierId,
+          command.warehouseId,
+          command.receiptNumber.trim(),
+          command.invoiceReference?.trim() ?? null,
+          totalReceiptAmount,
+          command.receivedAt ?? null,
+        ],
+      );
+
+      const receiptRow = recRes.rows[0]!;
+      const receiptId = receiptRow.id;
+
+      // Insert receipt items
+      const savedReceiptItems: PurchaseReceiptItem[] = [];
+      for (const line of processedReceiptLines) {
+        const itemRes = await client.query<{
+          id: string;
+          organization_id: string;
+          purchase_receipt_id: string;
+          purchase_order_item_id: string;
+          ingredient_id: string;
+          received_quantity: string;
+          accepted_unit_cost: string;
+          line_amount: string;
+          created_at: string | Date;
+        }>(
+          `INSERT INTO purchase_receipt_items (
+            organization_id,
+            purchase_receipt_id,
+            purchase_order_item_id,
+            ingredient_id,
+            received_quantity,
+            accepted_unit_cost,
+            line_amount
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+          RETURNING
+            id,
+            organization_id,
+            purchase_receipt_id,
+            purchase_order_item_id,
+            ingredient_id,
+            received_quantity::text,
+            accepted_unit_cost::text,
+            line_amount::text,
+            created_at;`,
+          [
+            command.organizationId,
+            receiptId,
+            line.purchaseOrderItemId,
+            line.ingredientId,
+            line.receivedQuantity,
+            line.acceptedUnitCost,
+            line.lineAmount,
+          ],
+        );
+        const ir = itemRes.rows[0]!;
+        savedReceiptItems.push({
+          id: ir.id,
+          organizationId: ir.organization_id,
+          purchaseReceiptId: ir.purchase_receipt_id,
+          purchaseOrderItemId: ir.purchase_order_item_id,
+          ingredientId: ir.ingredient_id,
+          receivedQuantity: ir.received_quantity,
+          acceptedUnitCost: ir.accepted_unit_cost,
+          lineAmount: ir.line_amount,
+          createdAt:
+            typeof ir.created_at === 'string' ? ir.created_at : ir.created_at.toISOString(),
+        });
+      }
+
+      // Recompute whether all PO items are fully received
+      let allItemsFullyReceived = true;
+      for (const poItem of allPoItems) {
+        const recSummary = await client.query<{ total_received: string }>(
+          `SELECT COALESCE(SUM(pri.received_quantity), 0.0000)::text AS total_received
+           FROM purchase_receipt_items pri
+           JOIN purchase_receipts pr ON pr.id = pri.purchase_receipt_id
+           WHERE pr.organization_id = $1
+             AND pri.purchase_order_item_id = $2
+             AND pr.status = 'CONFIRMED';`,
+          [command.organizationId, poItem.id],
+        );
+        const totalReceived = recSummary.rows[0]?.total_received ?? '0.0000';
+        if (cmpScale4(totalReceived, poItem.ordered_quantity) < 0) {
+          allItemsFullyReceived = false;
+        }
+      }
+
+      const updatedPoStatus = determinePostReceiptPoStatus(allItemsFullyReceived);
+      await client.query(
+        `UPDATE purchase_orders SET status = $1, updated_at = NOW() WHERE organization_id = $2 AND id = $3;`,
+        [updatedPoStatus, command.organizationId, command.purchaseOrderId],
+      );
+
+      const createdReceipt: PurchaseReceipt = {
+        id: receiptRow.id,
+        organizationId: receiptRow.organization_id,
+        branchId: receiptRow.branch_id,
+        purchaseOrderId: receiptRow.purchase_order_id,
+        supplierId: receiptRow.supplier_id,
+        warehouseId: receiptRow.warehouse_id,
+        receiptNumber: receiptRow.receipt_number,
+        invoiceReference: receiptRow.invoice_reference,
+        totalAmount: receiptRow.total_amount,
+        status: receiptRow.status,
+        receivedAt:
+          typeof receiptRow.received_at === 'string'
+            ? receiptRow.received_at
+            : receiptRow.received_at.toISOString(),
+        createdAt:
+          typeof receiptRow.created_at === 'string'
+            ? receiptRow.created_at
+            : receiptRow.created_at.toISOString(),
+        items: savedReceiptItems,
+      };
+
+      const eventPayload: RecepcionCompraRegistradaPayload = {
+        recepcionId: createdReceipt.id,
+        organizationId: createdReceipt.organizationId,
+        branchId: createdReceipt.branchId,
+        supplierId: createdReceipt.supplierId,
+        purchaseOrderId: createdReceipt.purchaseOrderId,
+        warehouseId: createdReceipt.warehouseId,
+        receiptNumber: createdReceipt.receiptNumber,
+        invoiceReference: createdReceipt.invoiceReference ?? null,
+        receivedAt: createdReceipt.receivedAt,
+        paymentTerms: command.paymentTerms ?? null,
+        totalAmount: createdReceipt.totalAmount,
+        items: processedReceiptLines.map((l) => ({
+          ingredientId: l.ingredientId,
+          purchaseOrderItemId: l.purchaseOrderItemId,
+          orderedQuantity: l.orderedQuantity,
+          previouslyReceivedQuantity: l.previouslyReceivedQuantity,
+          receivedQuantity: l.receivedQuantity,
+          cumulativeReceivedQuantity: l.cumulativeReceivedQuantity,
+          remainingQuantity: l.remainingQuantity,
+          acceptedUnitCost: l.acceptedUnitCost,
+          lineAmount: l.lineAmount,
+        })),
+      };
+
+      // Enqueue durable integration event in the SAME transaction
+      await this.outboxService.enqueue(client, {
+        organizationId: command.organizationId,
+        branchId: command.branchId,
+        eventType: 'RecepcionCompraRegistrada',
+        aggregateType: 'PURCHASE_RECEIPT',
+        aggregateId: createdReceipt.id,
+        payload: eventPayload,
+      });
+
+      return {
+        status: 'APPLIED',
+        receipt: createdReceipt,
+        eventPayload,
+        updatedPurchaseOrderStatus: updatedPoStatus,
+      };
+    });
+  }
+
+  public async getPurchaseReceipt(
+    organizationId: string,
+    purchaseReceiptId: string,
+  ): Promise<PurchaseReceipt | null> {
+    return withTenantTransaction(this.pool, organizationId, async (client) => {
+      const res = await client.query<{
+        id: string;
+        organization_id: string;
+        branch_id: string;
+        purchase_order_id: string;
+        supplier_id: string;
+        warehouse_id: string;
+        receipt_number: string;
+        invoice_reference: string | null;
+        total_amount: string;
+        status: 'CONFIRMED' | 'CANCELLED';
+        received_at: string | Date;
+        created_at: string | Date;
+      }>(
+        `SELECT id, organization_id, branch_id, purchase_order_id, supplier_id, warehouse_id, receipt_number, invoice_reference, total_amount::text, status, received_at, created_at
+         FROM purchase_receipts
+         WHERE organization_id = $1 AND id = $2;`,
+        [organizationId, purchaseReceiptId],
+      );
+
+      if (res.rows.length === 0) {
+        return null;
+      }
+
+      const r = res.rows[0]!;
+      const itemsRes = await client.query<{
+        id: string;
+        organization_id: string;
+        purchase_receipt_id: string;
+        purchase_order_item_id: string;
+        ingredient_id: string;
+        received_quantity: string;
+        accepted_unit_cost: string;
+        line_amount: string;
+        created_at: string | Date;
+      }>(
+        `SELECT id, organization_id, purchase_receipt_id, purchase_order_item_id, ingredient_id, received_quantity::text, accepted_unit_cost::text, line_amount::text, created_at
+         FROM purchase_receipt_items
+         WHERE organization_id = $1 AND purchase_receipt_id = $2;`,
+        [organizationId, r.id],
+      );
+
+      const items: PurchaseReceiptItem[] = itemsRes.rows.map((row) => ({
+        id: row.id,
+        organizationId: row.organization_id,
+        purchaseReceiptId: row.purchase_receipt_id,
+        purchaseOrderItemId: row.purchase_order_item_id,
+        ingredientId: row.ingredient_id,
+        receivedQuantity: row.received_quantity,
+        acceptedUnitCost: row.accepted_unit_cost,
+        lineAmount: row.line_amount,
+        createdAt:
+          typeof row.created_at === 'string' ? row.created_at : row.created_at.toISOString(),
+      }));
+
+      return {
+        id: r.id,
+        organizationId: r.organization_id,
+        branchId: r.branch_id,
+        purchaseOrderId: r.purchase_order_id,
+        supplierId: r.supplier_id,
+        warehouseId: r.warehouse_id,
+        receiptNumber: r.receipt_number,
+        invoiceReference: r.invoice_reference,
+        totalAmount: r.total_amount,
+        status: r.status,
+        receivedAt: typeof r.received_at === 'string' ? r.received_at : r.received_at.toISOString(),
+        createdAt: typeof r.created_at === 'string' ? r.created_at : r.created_at.toISOString(),
+        items,
+      };
+    });
+  }
+
+  private async getPurchaseOrderWithClient(
+    client: pg.PoolClient,
+    organizationId: string,
+    purchaseOrderId: string,
+  ): Promise<PurchaseOrder | null> {
+    const res = await client.query<{
+      id: string;
+      organization_id: string;
+      branch_id: string;
+      supplier_id: string;
+      order_number: string;
+      status: PurchaseOrderStatus;
+      total_amount: string;
+      created_at: string | Date;
+      updated_at: string | Date;
+    }>(
+      `SELECT id, organization_id, branch_id, supplier_id, order_number, status, total_amount::text, created_at, updated_at
+       FROM purchase_orders
+       WHERE organization_id = $1 AND id = $2;`,
+      [organizationId, purchaseOrderId],
+    );
+
+    if (res.rows.length === 0) {
+      return null;
+    }
+
+    const po = res.rows[0]!;
+    const itemsRes = await client.query<{
+      id: string;
+      organization_id: string;
+      purchase_order_id: string;
+      ingredient_id: string;
+      ordered_quantity: string;
+      unit_cost: string;
+      line_amount: string;
+      created_at: string | Date;
+    }>(
+      `SELECT id, organization_id, purchase_order_id, ingredient_id, ordered_quantity::text, unit_cost::text, line_amount::text, created_at
+       FROM purchase_order_items
+       WHERE organization_id = $1 AND purchase_order_id = $2;`,
+      [organizationId, po.id],
+    );
+
+    const items: PurchaseOrderItem[] = itemsRes.rows.map((row) => ({
+      id: row.id,
+      organizationId: row.organization_id,
+      purchaseOrderId: row.purchase_order_id,
+      ingredientId: row.ingredient_id,
+      orderedQuantity: row.ordered_quantity,
+      unitCost: row.unit_cost,
+      lineAmount: row.line_amount,
+      createdAt: typeof row.created_at === 'string' ? row.created_at : row.created_at.toISOString(),
+    }));
+
+    return {
+      id: po.id,
+      organizationId: po.organization_id,
+      branchId: po.branch_id,
+      supplierId: po.supplier_id,
+      orderNumber: po.order_number,
+      status: po.status,
+      totalAmount: po.total_amount,
+      items,
+      createdAt: typeof po.created_at === 'string' ? po.created_at : po.created_at.toISOString(),
+      updatedAt: typeof po.updated_at === 'string' ? po.updated_at : po.updated_at.toISOString(),
+    };
+  }
+}
+
+export * from '@trident/procurement';

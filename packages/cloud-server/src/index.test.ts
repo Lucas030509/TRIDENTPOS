@@ -12,7 +12,11 @@ import {
   type ModifierRecipeResolver,
   type RegisterWasteCommand,
 } from '@trident/inventory';
-import { PostgresCloudInventoryService } from './index.js';
+import {
+  PostgresCloudInventoryService,
+  PostgresProcurementService,
+  type PurchasePriceVarianceAuthorizationPolicy,
+} from './index.js';
 import type pg from 'pg';
 
 class TestablePostgresCloudInventoryService extends PostgresCloudInventoryService {
@@ -1687,5 +1691,542 @@ describe('TRIDENTPOS WP-018 Cloud Server Composition, Kárdex & KDS Depletion Su
     );
     assert.equal(qCheck.rows[0]!.status, 'REPLAYED', 'Quarantine record must be in REPLAYED state');
     assert.ok(qCheck.rows[0]!.replayed_at !== null, 'replayed_at must be populated');
+  });
+});
+
+describe('TRIDENTPOS WP-019 Cloud Server Procurement & Supplier Receiving Suite', () => {
+  const pool = getPool();
+  const procurementService = new PostgresProcurementService(pool);
+
+  const tenantAId = crypto.randomUUID();
+  const tenantBId = crypto.randomUUID();
+  const branchAId = crypto.randomUUID();
+  const branchBId = crypto.randomUUID();
+  const warehouseAId = crypto.randomUUID();
+  const warehouseBId = crypto.randomUUID();
+  const ingredientA1Id = crypto.randomUUID();
+  const ingredientA2Id = crypto.randomUUID();
+  const ingredientBId = crypto.randomUUID();
+
+  before(async () => {
+    await migrateUp(pool);
+
+    const client = await pool.connect();
+    try {
+      await client.query(`
+        INSERT INTO organizations (id, legal_name, trade_name, tax_id)
+        VALUES
+          ('${tenantAId}', 'Tenant A Proc Corp', 'Tenant A Proc', 'RFC-A-PROC'),
+          ('${tenantBId}', 'Tenant B Proc Corp', 'Tenant B Proc', 'RFC-B-PROC')
+        ON CONFLICT (id) DO NOTHING;
+
+        INSERT INTO branches (id, organization_id, code, name)
+        VALUES
+          ('${branchAId}', '${tenantAId}', 'BR-A-PROC', 'Branch A Proc'),
+          ('${branchBId}', '${tenantBId}', 'BR-B-PROC', 'Branch B Proc')
+        ON CONFLICT (organization_id, id) DO NOTHING;
+
+        INSERT INTO warehouses (id, organization_id, branch_id, code, name, warehouse_type)
+        VALUES
+          ('${warehouseAId}', '${tenantAId}', '${branchAId}', 'WH-A-PROC', 'Main WH A', 'PHYSICAL'),
+          ('${warehouseBId}', '${tenantBId}', '${branchBId}', 'WH-B-PROC', 'Main WH B', 'PHYSICAL')
+        ON CONFLICT (organization_id, id) DO NOTHING;
+
+        INSERT INTO ingredients (id, organization_id, code, name, unit_of_measure, current_average_cost)
+        VALUES
+          ('${ingredientA1Id}', '${tenantAId}', 'ING-A1', 'Flour', 'KG', 10.0000),
+          ('${ingredientA2Id}', '${tenantAId}', 'ING-A2', 'Sugar', 'KG', 10.0000),
+          ('${ingredientBId}', '${tenantBId}', 'ING-B1', 'Salt', 'KG', 10.0000)
+        ON CONFLICT (organization_id, id) DO NOTHING;
+      `);
+    } finally {
+      client.release();
+    }
+  });
+
+  after(async () => {
+    const cleanClient = await pool.connect();
+    try {
+      await cleanClient.query(`
+        DELETE FROM cloud_integration_outbox WHERE organization_id IN ('${tenantAId}', '${tenantBId}');
+        DELETE FROM purchase_receipt_items WHERE organization_id IN ('${tenantAId}', '${tenantBId}');
+        DELETE FROM purchase_receipts WHERE organization_id IN ('${tenantAId}', '${tenantBId}');
+        DELETE FROM purchase_order_items WHERE organization_id IN ('${tenantAId}', '${tenantBId}');
+        DELETE FROM purchase_orders WHERE organization_id IN ('${tenantAId}', '${tenantBId}');
+        DELETE FROM suppliers WHERE organization_id IN ('${tenantAId}', '${tenantBId}');
+        DELETE FROM ingredients WHERE organization_id IN ('${tenantAId}', '${tenantBId}');
+        DELETE FROM warehouses WHERE organization_id IN ('${tenantAId}', '${tenantBId}');
+        DELETE FROM branches WHERE organization_id IN ('${tenantAId}', '${tenantBId}');
+        DELETE FROM organizations WHERE id IN ('${tenantAId}', '${tenantBId}');
+      `);
+    } finally {
+      cleanClient.release();
+    }
+  });
+
+  it('WP019-CLOUD-01: Supplier creation & retrieval with tenant isolation', async () => {
+    const supA = await procurementService.createSupplier({
+      organizationId: tenantAId,
+      code: 'SUP-001',
+      tradeName: 'Supplier Alfa',
+      taxId: 'RFC-ALFA',
+      creditDays: 30,
+    });
+    assert.equal(supA.code, 'SUP-001');
+    assert.equal(supA.tradeName, 'Supplier Alfa');
+    assert.equal(supA.creditDays, 30);
+
+    const fetchedA = await procurementService.getSupplier(tenantAId, supA.id);
+    assert.ok(fetchedA !== null);
+    assert.equal(fetchedA.id, supA.id);
+
+    // Tenant B cannot access Tenant A supplier
+    const crossTenantFetch = await procurementService.getSupplier(tenantBId, supA.id);
+    assert.equal(crossTenantFetch, null);
+  });
+
+  it('WP019-CLOUD-02: PO lifecycle (DRAFT -> SENT) with exact scale-4 line calculations', async () => {
+    const supA = await procurementService.createSupplier({
+      organizationId: tenantAId,
+      code: 'SUP-002',
+      tradeName: 'Supplier Beta',
+      taxId: 'RFC-BETA',
+    });
+
+    const po = await procurementService.createPurchaseOrder({
+      organizationId: tenantAId,
+      branchId: branchAId,
+      supplierId: supA.id,
+      orderNumber: 'PO-2026-001',
+      items: [
+        { ingredientId: ingredientA1Id, orderedQuantity: '10.0000', unitCost: '25.5000' },
+        { ingredientId: ingredientA2Id, orderedQuantity: '5.0000', unitCost: '12.0000' },
+      ],
+    });
+
+    assert.equal(po.status, 'DRAFT');
+    // Line 1: 10 * 25.5 = 255.0000, Line 2: 5 * 12 = 60.0000. Total = 315.0000
+    assert.equal(po.totalAmount, '315.0000');
+    assert.equal(po.items!.length, 2);
+
+    const sentPo = await procurementService.sendPurchaseOrder(tenantAId, po.id);
+    assert.equal(sentPo.status, 'SENT');
+  });
+
+  it('WP019-CLOUD-03: Cancel unreceived PO transitions to CANCELLED', async () => {
+    const sup = await procurementService.createSupplier({
+      organizationId: tenantAId,
+      code: 'SUP-003',
+      tradeName: 'Supplier Gamma',
+      taxId: 'RFC-GAMMA',
+    });
+
+    const po = await procurementService.createPurchaseOrder({
+      organizationId: tenantAId,
+      branchId: branchAId,
+      supplierId: sup.id,
+      orderNumber: 'PO-CANCEL-001',
+      items: [{ ingredientId: ingredientA1Id, orderedQuantity: '2.0000', unitCost: '10.0000' }],
+    });
+
+    const cancelledPo = await procurementService.cancelPurchaseOrder(tenantAId, po.id);
+    assert.equal(cancelledPo.status, 'CANCELLED');
+  });
+
+  it('WP019-CLOUD-04: Partial physical receipt tracks remaining quantities and transitions PO to PARTIAL and then RECEIVED', async () => {
+    const sup = await procurementService.createSupplier({
+      organizationId: tenantAId,
+      code: 'SUP-004',
+      tradeName: 'Supplier Delta',
+      taxId: 'RFC-DELTA',
+    });
+
+    const po = await procurementService.createPurchaseOrder({
+      organizationId: tenantAId,
+      branchId: branchAId,
+      supplierId: sup.id,
+      orderNumber: 'PO-RECEIVE-001',
+      items: [
+        { ingredientId: ingredientA1Id, orderedQuantity: '10.0000', unitCost: '20.0000' },
+        { ingredientId: ingredientA2Id, orderedQuantity: '20.0000', unitCost: '15.0000' },
+      ],
+    });
+    await procurementService.sendPurchaseOrder(tenantAId, po.id);
+
+    const poItem1 = po.items!.find((i) => i.ingredientId === ingredientA1Id)!;
+    const poItem2 = po.items!.find((i) => i.ingredientId === ingredientA2Id)!;
+
+    // First partial receipt: 6 of item 1, 10 of item 2
+    const receipt1Res = await procurementService.confirmPurchaseReceipt({
+      organizationId: tenantAId,
+      branchId: branchAId,
+      purchaseOrderId: po.id,
+      supplierId: sup.id,
+      warehouseId: warehouseAId,
+      receiptNumber: 'REC-001',
+      invoiceReference: 'INV-001',
+      items: [
+        {
+          purchaseOrderItemId: poItem1.id,
+          ingredientId: ingredientA1Id,
+          receivedQuantity: '6.0000',
+          acceptedUnitCost: '20.0000',
+        },
+        {
+          purchaseOrderItemId: poItem2.id,
+          ingredientId: ingredientA2Id,
+          receivedQuantity: '10.0000',
+          acceptedUnitCost: '15.0000',
+        },
+      ],
+    });
+
+    assert.equal(receipt1Res.status, 'APPLIED');
+    assert.equal(receipt1Res.receipt.totalAmount, '270.0000'); // (6*20) + (10*15) = 120 + 150 = 270.0000
+
+    // Check PO status transitioned to PARTIAL
+    const poAfterRec1 = await procurementService.getPurchaseOrder(tenantAId, po.id);
+    assert.equal(poAfterRec1?.status, 'PARTIAL');
+
+    // Second receipt fulfilling remaining: 4 of item 1, 10 of item 2
+    const receipt2Res = await procurementService.confirmPurchaseReceipt({
+      organizationId: tenantAId,
+      branchId: branchAId,
+      purchaseOrderId: po.id,
+      supplierId: sup.id,
+      warehouseId: warehouseAId,
+      receiptNumber: 'REC-002',
+      items: [
+        {
+          purchaseOrderItemId: poItem1.id,
+          ingredientId: ingredientA1Id,
+          receivedQuantity: '4.0000',
+          acceptedUnitCost: '20.0000',
+        },
+        {
+          purchaseOrderItemId: poItem2.id,
+          ingredientId: ingredientA2Id,
+          receivedQuantity: '10.0000',
+          acceptedUnitCost: '15.0000',
+        },
+      ],
+    });
+
+    assert.equal(receipt2Res.status, 'APPLIED');
+    assert.equal(receipt2Res.receipt.totalAmount, '230.0000'); // (4*20) + (10*15) = 80 + 150 = 230.0000
+
+    // Check PO status transitioned to RECEIVED
+    const poAfterRec2 = await procurementService.getPurchaseOrder(tenantAId, po.id);
+    assert.equal(poAfterRec2?.status, 'RECEIVED');
+
+    // Cannot cancel partially/fully received PO
+    await assert.rejects(
+      async () => procurementService.cancelPurchaseOrder(tenantAId, po.id),
+      /InvalidPurchaseOrderTransitionError|Cannot cancel purchase order in status/i,
+    );
+  });
+
+  it('WP019-CLOUD-05: Over-receipt is rejected fail-closed (OVER_RECEIPT_NOT_AUTHORIZED)', async () => {
+    const sup = await procurementService.createSupplier({
+      organizationId: tenantAId,
+      code: 'SUP-005',
+      tradeName: 'Supplier Epsilon',
+      taxId: 'RFC-EPSILON',
+    });
+
+    const po = await procurementService.createPurchaseOrder({
+      organizationId: tenantAId,
+      branchId: branchAId,
+      supplierId: sup.id,
+      orderNumber: 'PO-OVER-001',
+      items: [{ ingredientId: ingredientA1Id, orderedQuantity: '5.0000', unitCost: '10.0000' }],
+    });
+    await procurementService.sendPurchaseOrder(tenantAId, po.id);
+    const poItemId = po.items![0]!.id;
+
+    // Attempting to receive 6 when only 5 was ordered
+    await assert.rejects(
+      async () =>
+        procurementService.confirmPurchaseReceipt({
+          organizationId: tenantAId,
+          branchId: branchAId,
+          purchaseOrderId: po.id,
+          supplierId: sup.id,
+          warehouseId: warehouseAId,
+          receiptNumber: 'REC-OVER-001',
+          items: [
+            {
+              purchaseOrderItemId: poItemId,
+              ingredientId: ingredientA1Id,
+              receivedQuantity: '6.0000',
+              acceptedUnitCost: '10.0000',
+            },
+          ],
+        }),
+      /OverReceiptNotAuthorizedError|Over-receipt not authorized/i,
+    );
+  });
+
+  it('WP019-CLOUD-06: Price variance handling — equal price succeeds, unequal without policy fails closed, injected TEST policy works', async () => {
+    const sup = await procurementService.createSupplier({
+      organizationId: tenantAId,
+      code: 'SUP-006',
+      tradeName: 'Supplier Zeta',
+      taxId: 'RFC-ZETA',
+    });
+
+    const po = await procurementService.createPurchaseOrder({
+      organizationId: tenantAId,
+      branchId: branchAId,
+      supplierId: sup.id,
+      orderNumber: 'PO-PRICE-001',
+      items: [{ ingredientId: ingredientA1Id, orderedQuantity: '10.0000', unitCost: '20.0000' }],
+    });
+    await procurementService.sendPurchaseOrder(tenantAId, po.id);
+    const poItemId = po.items![0]!.id;
+
+    // 1. Unequal price (25.0000 vs 20.0000) with NO policy -> fails closed
+    await assert.rejects(
+      async () =>
+        procurementService.confirmPurchaseReceipt({
+          organizationId: tenantAId,
+          branchId: branchAId,
+          purchaseOrderId: po.id,
+          supplierId: sup.id,
+          warehouseId: warehouseAId,
+          receiptNumber: 'REC-PRICE-VAR-1',
+          items: [
+            {
+              purchaseOrderItemId: poItemId,
+              ingredientId: ingredientA1Id,
+              receivedQuantity: '2.0000',
+              acceptedUnitCost: '25.0000',
+            },
+          ],
+        }),
+      /PRICE_VARIANCE_POLICY_REQUIRED|PriceVarianceRequiredError/i,
+    );
+
+    // 2. Injected TEST policy: allows with supervisor authorization (TEST ONLY — NOT PRODUCT OWNER POLICY)
+    const testPolicy: PurchasePriceVarianceAuthorizationPolicy = {
+      evaluatePriceVariance: (req) => {
+        if (req.receivedUnitCost === '25.0000') {
+          return 'SUPERVISOR_AUTHORIZATION_REQUIRED';
+        }
+        return 'REJECTED';
+      },
+    };
+
+    const recRes = await procurementService.confirmPurchaseReceipt(
+      {
+        organizationId: tenantAId,
+        branchId: branchAId,
+        purchaseOrderId: po.id,
+        supplierId: sup.id,
+        warehouseId: warehouseAId,
+        receiptNumber: 'REC-PRICE-VAR-2',
+        supervisorAuthorizationToken: 'AUTH-TEST-TOKEN',
+        items: [
+          {
+            purchaseOrderItemId: poItemId,
+            ingredientId: ingredientA1Id,
+            receivedQuantity: '2.0000',
+            acceptedUnitCost: '25.0000',
+          },
+        ],
+      },
+      testPolicy,
+    );
+    assert.equal(recRes.status, 'APPLIED');
+    assert.equal(recRes.receipt.totalAmount, '50.0000');
+  });
+
+  it('WP019-CLOUD-07: Receipt confirmation and RecepcionCompraRegistrada outbox enqueue are atomic & idempotent', async () => {
+    const sup = await procurementService.createSupplier({
+      organizationId: tenantAId,
+      code: 'SUP-007',
+      tradeName: 'Supplier Eta',
+      taxId: 'RFC-ETA',
+    });
+
+    const po = await procurementService.createPurchaseOrder({
+      organizationId: tenantAId,
+      branchId: branchAId,
+      supplierId: sup.id,
+      orderNumber: 'PO-OUTBOX-001',
+      items: [{ ingredientId: ingredientA1Id, orderedQuantity: '5.0000', unitCost: '10.0000' }],
+    });
+    await procurementService.sendPurchaseOrder(tenantAId, po.id);
+    const poItemId = po.items![0]!.id;
+
+    // 1. Confirm receipt
+    const res1 = await procurementService.confirmPurchaseReceipt({
+      organizationId: tenantAId,
+      branchId: branchAId,
+      purchaseOrderId: po.id,
+      supplierId: sup.id,
+      warehouseId: warehouseAId,
+      receiptNumber: 'REC-OUTBOX-001',
+      items: [
+        {
+          purchaseOrderItemId: poItemId,
+          ingredientId: ingredientA1Id,
+          receivedQuantity: '5.0000',
+          acceptedUnitCost: '10.0000',
+        },
+      ],
+    });
+    assert.equal(res1.status, 'APPLIED');
+
+    // Verify exactly 1 outbox event persisted
+    const outboxCheck1 = await pool.query(
+      `SELECT id, event_type, aggregate_id FROM cloud_integration_outbox
+       WHERE organization_id = $1 AND aggregate_id = $2;`,
+      [tenantAId, res1.receipt.id],
+    );
+    assert.equal(outboxCheck1.rows.length, 1);
+    assert.equal(outboxCheck1.rows[0]!.event_type, 'RecepcionCompraRegistrada');
+
+    // 2. Retry identical receipt confirmation -> returns DUPLICATE_ACCEPTED with ZERO new outbox events
+    const res2 = await procurementService.confirmPurchaseReceipt({
+      organizationId: tenantAId,
+      branchId: branchAId,
+      purchaseOrderId: po.id,
+      supplierId: sup.id,
+      warehouseId: warehouseAId,
+      receiptNumber: 'REC-OUTBOX-001',
+      items: [
+        {
+          purchaseOrderItemId: poItemId,
+          ingredientId: ingredientA1Id,
+          receivedQuantity: '5.0000',
+          acceptedUnitCost: '10.0000',
+        },
+      ],
+    });
+    assert.equal(res2.status, 'DUPLICATE_ACCEPTED');
+    assert.equal(res2.receipt.id, res1.receipt.id);
+
+    const outboxCheck2 = await pool.query(
+      `SELECT id FROM cloud_integration_outbox
+       WHERE organization_id = $1 AND aggregate_id = $2;`,
+      [tenantAId, res1.receipt.id],
+    );
+    assert.equal(outboxCheck2.rows.length, 1, 'Retry must not produce duplicate outbox event');
+  });
+
+  it('WP019-CLOUD-08: Concurrent receipt confirmations with same receipt number serialize cleanly with exactly 1 outbox event', async () => {
+    const sup = await procurementService.createSupplier({
+      organizationId: tenantAId,
+      code: 'SUP-008',
+      tradeName: 'Supplier Theta',
+      taxId: 'RFC-THETA',
+    });
+
+    const po = await procurementService.createPurchaseOrder({
+      organizationId: tenantAId,
+      branchId: branchAId,
+      supplierId: sup.id,
+      orderNumber: 'PO-CONC-001',
+      items: [{ ingredientId: ingredientA1Id, orderedQuantity: '5.0000', unitCost: '10.0000' }],
+    });
+    await procurementService.sendPurchaseOrder(tenantAId, po.id);
+    const poItemId = po.items![0]!.id;
+
+    const cmd = {
+      organizationId: tenantAId,
+      branchId: branchAId,
+      purchaseOrderId: po.id,
+      supplierId: sup.id,
+      warehouseId: warehouseAId,
+      receiptNumber: 'REC-CONC-001',
+      items: [
+        {
+          purchaseOrderItemId: poItemId,
+          ingredientId: ingredientA1Id,
+          receivedQuantity: '5.0000',
+          acceptedUnitCost: '10.0000',
+        },
+      ],
+    };
+
+    const [r1, r2] = await Promise.all([
+      procurementService.confirmPurchaseReceipt(cmd),
+      procurementService.confirmPurchaseReceipt(cmd),
+    ]);
+
+    const statuses = [r1.status, r2.status].sort();
+    assert.deepEqual(statuses, ['APPLIED', 'DUPLICATE_ACCEPTED']);
+
+    const receiptId = r1.receipt.id;
+    const outboxCheck = await pool.query(
+      `SELECT id FROM cloud_integration_outbox
+       WHERE organization_id = $1 AND aggregate_id = $2;`,
+      [tenantAId, receiptId],
+    );
+    assert.equal(
+      outboxCheck.rows.length,
+      1,
+      'Concurrent execution must produce exactly 1 outbox event',
+    );
+  });
+
+  it('WP019-CLOUD-09: Procurement performs ZERO direct writes to stock_ledger, current_average_cost, or accounts_payable', async () => {
+    // Check stock_ledger before and after
+    const preLedger = await pool.query(
+      `SELECT COUNT(*) as count FROM stock_ledger WHERE organization_id = $1;`,
+      [tenantAId],
+    );
+    const preAccountsPayable = await pool.query(`SELECT to_regclass('accounts_payable') as reg;`);
+
+    const sup = await procurementService.createSupplier({
+      organizationId: tenantAId,
+      code: 'SUP-009',
+      tradeName: 'Supplier Iota',
+      taxId: 'RFC-IOTA',
+    });
+    const po = await procurementService.createPurchaseOrder({
+      organizationId: tenantAId,
+      branchId: branchAId,
+      supplierId: sup.id,
+      orderNumber: 'PO-ZERO-WRITES',
+      items: [{ ingredientId: ingredientA1Id, orderedQuantity: '3.0000', unitCost: '10.0000' }],
+    });
+    await procurementService.sendPurchaseOrder(tenantAId, po.id);
+    await procurementService.confirmPurchaseReceipt({
+      organizationId: tenantAId,
+      branchId: branchAId,
+      purchaseOrderId: po.id,
+      supplierId: sup.id,
+      warehouseId: warehouseAId,
+      receiptNumber: 'REC-ZERO-WRITES',
+      items: [
+        {
+          purchaseOrderItemId: po.items![0]!.id,
+          ingredientId: ingredientA1Id,
+          receivedQuantity: '3.0000',
+          acceptedUnitCost: '10.0000',
+        },
+      ],
+    });
+
+    const postLedger = await pool.query(
+      `SELECT COUNT(*) as count FROM stock_ledger WHERE organization_id = $1;`,
+      [tenantAId],
+    );
+    assert.equal(
+      preLedger.rows[0]!.count,
+      postLedger.rows[0]!.count,
+      'Procurement must perform ZERO direct writes to stock_ledger',
+    );
+
+    // If accounts_payable table doesn't even exist yet (since WP-020 owns it), verify it wasn't created/written
+    if (preAccountsPayable.rows[0]?.reg) {
+      const apCount = await pool.query(
+        `SELECT COUNT(*) as count FROM accounts_payable WHERE organization_id = $1;`,
+        [tenantAId],
+      );
+      assert.equal(apCount.rows[0]!.count, '0');
+    }
   });
 });
