@@ -77,6 +77,13 @@ describe('TRIDENTPOS WP-017 Inventory & Recipes Database Suite', () => {
       if (!orgCheck.rows[0]?.reg) {
         await prepClient.query(`
           DROP TABLE IF EXISTS
+            purchase_receipt_items,
+            purchase_receipts,
+            receiving_voucher_items,
+            receiving_vouchers,
+            purchase_order_items,
+            purchase_orders,
+            suppliers,
             inventory_quarantine_records,
             inventory_waste_records,
             stock_ledger,
@@ -722,18 +729,18 @@ describe('TRIDENTPOS WP-017 Inventory & Recipes Database Suite', () => {
     assert.ok(pre.branches !== null, 'branches must exist before rollback');
 
     try {
-      // 3. Execute authorized non-production migrateDown (if WP-018 is present, roll it down first)
+      // 3. Execute authorized non-production migrateDown (roll down any migrations newer than WP-017 first)
       const checkClientBefore = await pool.connect();
-      let hasWp018Applied = false;
       try {
         const appliedBefore = await getAppliedMigrations(checkClientBefore);
-        hasWp018Applied = appliedBefore.some((m) => m.id === '20260905000000');
+        for (let i = appliedBefore.length - 1; i >= 0; i--) {
+          const entry = appliedBefore[i];
+          if (entry && entry.id > '20260904230000') {
+            await migrateDown(pool, { allowDestructiveDown: true });
+          }
+        }
       } finally {
         checkClientBefore.release();
-      }
-
-      if (hasWp018Applied) {
-        await migrateDown(pool, { allowDestructiveDown: true });
       }
 
       const revertResult = await migrateDown(pool, { allowDestructiveDown: true });
@@ -1639,7 +1646,20 @@ describe('TRIDENTPOS WP-018 Real-Time Kárdex, Waste & KDS Depletion Database Su
     }
 
     try {
-      // 2. Execute authorized non-production migrateDown
+      // 2. Execute authorized non-production migrateDown (roll down any migrations newer than WP-018 first)
+      const checkClientBefore = await pool.connect();
+      try {
+        const appliedBefore = await getAppliedMigrations(checkClientBefore);
+        for (let i = appliedBefore.length - 1; i >= 0; i--) {
+          const entry = appliedBefore[i];
+          if (entry && entry.id > '20260905000000') {
+            await migrateDown(pool, { allowDestructiveDown: true });
+          }
+        }
+      } finally {
+        checkClientBefore.release();
+      }
+
       const revertResult = await migrateDown(pool, { allowDestructiveDown: true });
       assert.equal(
         revertResult.reverted,
@@ -1761,7 +1781,6 @@ describe('TRIDENTPOS WP-018 Real-Time Kárdex, Waste & KDS Depletion Database Su
         await cleanClient.query(`
           DELETE FROM inventory_quarantine_records WHERE organization_id = '${markerOrgId}';
           DELETE FROM inventory_waste_records WHERE organization_id = '${markerOrgId}';
-          DELETE FROM stock_ledger WHERE organization_id = '${markerOrgId}';
           DELETE FROM recipes WHERE organization_id = '${markerOrgId}';
           DELETE FROM ingredients WHERE organization_id = '${markerOrgId}';
           DELETE FROM warehouses WHERE organization_id = '${markerOrgId}';
