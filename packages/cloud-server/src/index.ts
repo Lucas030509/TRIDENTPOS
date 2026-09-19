@@ -2402,7 +2402,9 @@ import {
   type BranchOperatingExpense,
   type CashReconciliation,
   type RecepcionCompraRegistradaEvent,
-  type CorteZGeneradoEvent,
+  type CashClosingFacts,
+  type PaymentTermsDueDateResolverContext,
+  type PaymentTermsDueDateResolver,
   type ApplyAccountsPayablePaymentCommand,
   type CreateScheduledPaymentCommand,
   type CreateReceivableChargeCommand,
@@ -2414,17 +2416,21 @@ import {
   type ReconcileCashResult,
   type CreditLimitValidator,
   type CreditLimitEvaluationContext,
-  parseCreditDaysFromPaymentTerms,
   calculateDueDate,
   applyPaymentToAccountsPayable,
   applySettlementToAccountsReceivable,
   calculateCashReconciliation,
   parseDecimal12x4 as parseFinanceDecimal12x4,
+  cmpScale4 as cmpFinanceScale4,
   AccountsPayableOverpaymentError,
   AccountsReceivableOverpaymentError,
   AccountsPayableInvalidStateError,
   AccountsReceivableInvalidStateError,
   CreditPolicyRequiredError,
+  PaymentTermsResolverRequiredError,
+  APIdempotencyConflictError,
+  ARIdempotencyConflictError,
+  CashReconciliationIdempotencyConflictError,
   CreditLimitExceededError,
   InvalidPaymentTermsError,
   InvalidFinancialAmountError,
@@ -2442,7 +2448,9 @@ export type {
   BranchOperatingExpense,
   CashReconciliation,
   RecepcionCompraRegistradaEvent,
-  CorteZGeneradoEvent,
+  CashClosingFacts,
+  PaymentTermsDueDateResolverContext,
+  PaymentTermsDueDateResolver,
   ApplyAccountsPayablePaymentCommand,
   CreateScheduledPaymentCommand,
   CreateReceivableChargeCommand,
@@ -2457,7 +2465,6 @@ export type {
 };
 
 export {
-  parseCreditDaysFromPaymentTerms,
   calculateDueDate,
   applyPaymentToAccountsPayable,
   applySettlementToAccountsReceivable,
@@ -2467,6 +2474,10 @@ export {
   AccountsPayableInvalidStateError,
   AccountsReceivableInvalidStateError,
   CreditPolicyRequiredError,
+  PaymentTermsResolverRequiredError,
+  APIdempotencyConflictError,
+  ARIdempotencyConflictError,
+  CashReconciliationIdempotencyConflictError,
   CreditLimitExceededError,
   InvalidPaymentTermsError,
   InvalidFinancialAmountError,
@@ -2474,12 +2485,19 @@ export {
   CashReconciliationError,
 };
 
+export interface ProcessPurchaseReceiptOptions {
+  resolver?: PaymentTermsDueDateResolver;
+  dueDate?: string;
+}
+
 export interface CloudFinanceCompositionService {
   processPurchaseReceiptEvent(
     event: RecepcionCompraRegistradaPayload | RecepcionCompraRegistradaEvent,
+    optionsOrResolver?: ProcessPurchaseReceiptOptions | PaymentTermsDueDateResolver,
   ): Promise<ProcessPurchaseReceiptResult>;
   onPurchaseReceiptConfirmed(
     event: RecepcionCompraRegistradaPayload | RecepcionCompraRegistradaEvent,
+    optionsOrResolver?: ProcessPurchaseReceiptOptions | PaymentTermsDueDateResolver,
   ): Promise<ProcessPurchaseReceiptResult>;
   getAccountsPayable(organizationId: string, id: string): Promise<AccountsPayable | null>;
   getAccountsPayableByReceipt(
@@ -2505,7 +2523,7 @@ export interface CloudFinanceCompositionService {
   registerOperatingExpense(
     command: RegisterOperatingExpenseCommand,
   ): Promise<BranchOperatingExpense>;
-  reconcileCashFromCorteZ(event: CorteZGeneradoEvent): Promise<ReconcileCashResult>;
+  reconcileCash(facts: CashClosingFacts): Promise<ReconcileCashResult>;
   getCashReconciliation(organizationId: string, id: string): Promise<CashReconciliation | null>;
   getCashReconciliationBySourceCut(
     organizationId: string,
@@ -2513,13 +2531,22 @@ export interface CloudFinanceCompositionService {
   ): Promise<CashReconciliation | null>;
 }
 
+function normalizeDateStr(d: string | Date | null | undefined): string {
+  if (!d) return '';
+  if (typeof d === 'string') {
+    return d.slice(0, 10);
+  }
+  return d.toISOString().slice(0, 10);
+}
+
 export class PostgresFinanceService implements CloudFinanceCompositionService {
   constructor(private readonly pool: pg.Pool = getPool()) {}
 
   async onPurchaseReceiptConfirmed(
     event: RecepcionCompraRegistradaPayload | RecepcionCompraRegistradaEvent,
+    optionsOrResolver?: ProcessPurchaseReceiptOptions | PaymentTermsDueDateResolver,
   ): Promise<ProcessPurchaseReceiptResult> {
-    return this.processPurchaseReceiptEvent(event);
+    return this.processPurchaseReceiptEvent(event, optionsOrResolver);
   }
 
   async settlePayable(command: ApplyAccountsPayablePaymentCommand): Promise<AccountsPayable> {
@@ -2532,9 +2559,38 @@ export class PostgresFinanceService implements CloudFinanceCompositionService {
 
   async processPurchaseReceiptEvent(
     event: RecepcionCompraRegistradaPayload | RecepcionCompraRegistradaEvent,
+    optionsOrResolver?: ProcessPurchaseReceiptOptions | PaymentTermsDueDateResolver,
   ): Promise<ProcessPurchaseReceiptResult> {
-    const creditDays = parseCreditDaysFromPaymentTerms(event.paymentTerms);
-    const dueDate = calculateDueDate(event.receivedAt, creditDays);
+    let resolver: PaymentTermsDueDateResolver | undefined;
+    let explicitDueDate: string | undefined;
+
+    if (optionsOrResolver) {
+      if ('resolveDueDate' in optionsOrResolver) {
+        resolver = optionsOrResolver;
+      } else {
+        resolver = optionsOrResolver.resolver;
+        explicitDueDate = optionsOrResolver.dueDate;
+      }
+    }
+
+    let dueDate = explicitDueDate;
+    if (!dueDate) {
+      if (!resolver) {
+        throw new PaymentTermsResolverRequiredError();
+      }
+      const resolved = await resolver.resolveDueDate({
+        organizationId: event.organizationId,
+        branchId: event.branchId,
+        supplierId: event.supplierId,
+        purchaseReceiptId: event.recepcionId,
+        receivedAt: event.receivedAt,
+        paymentTerms: event.paymentTerms,
+      });
+      dueDate =
+        typeof resolved === 'string' ? resolved : (resolved as Date).toISOString().slice(0, 10);
+    }
+
+    const resolvedDueDate = normalizeDateStr(dueDate);
     parseFinanceDecimal12x4(event.totalAmount);
 
     return withTenantTransaction(this.pool, event.organizationId, async (client) => {
@@ -2562,6 +2618,17 @@ export class PostgresFinanceService implements CloudFinanceCompositionService {
 
       if (existingRes.rows.length > 0) {
         const row = existingRes.rows[0]!;
+        if (
+          row.branch_id !== event.branchId ||
+          row.supplier_id !== event.supplierId ||
+          cmpFinanceScale4(row.total_amount, event.totalAmount) !== 0 ||
+          normalizeDateStr(row.due_date) !== resolvedDueDate
+        ) {
+          throw new APIdempotencyConflictError(
+            `Accounts payable idempotency conflict for receipt '${event.recepcionId}': existing record differs from incoming event facts`,
+          );
+        }
+
         return {
           status: 'DUPLICATE_ACCEPTED',
           accountsPayable: this.mapApRow(row),
@@ -2596,7 +2663,7 @@ export class PostgresFinanceService implements CloudFinanceCompositionService {
           event.supplierId,
           event.recepcionId,
           event.totalAmount,
-          dueDate,
+          resolvedDueDate,
         ],
       );
 
@@ -2629,9 +2696,21 @@ export class PostgresFinanceService implements CloudFinanceCompositionService {
         [event.organizationId, event.recepcionId],
       );
 
+      const row = concurrentRes.rows[0]!;
+      if (
+        row.branch_id !== event.branchId ||
+        row.supplier_id !== event.supplierId ||
+        cmpFinanceScale4(row.total_amount, event.totalAmount) !== 0 ||
+        normalizeDateStr(row.due_date) !== resolvedDueDate
+      ) {
+        throw new APIdempotencyConflictError(
+          `Accounts payable idempotency conflict for receipt '${event.recepcionId}': existing record differs from incoming event facts`,
+        );
+      }
+
       return {
         status: 'DUPLICATE_ACCEPTED',
-        accountsPayable: this.mapApRow(concurrentRes.rows[0]!),
+        accountsPayable: this.mapApRow(row),
       };
     });
   }
@@ -2851,9 +2930,21 @@ export class PostgresFinanceService implements CloudFinanceCompositionService {
       );
 
       if (existingRes.rows.length > 0) {
+        const row = existingRes.rows[0]!;
+        if (
+          row.branch_id !== command.branchId ||
+          row.customer_id !== command.customerId ||
+          cmpFinanceScale4(row.total_amount, command.totalAmount) !== 0 ||
+          normalizeDateStr(row.due_date) !== normalizeDateStr(command.dueDate)
+        ) {
+          throw new ARIdempotencyConflictError(
+            `Accounts receivable idempotency conflict for reference '${command.referenceAccountId}': existing record differs from incoming charge facts`,
+          );
+        }
+
         return {
           status: 'DUPLICATE_ACCEPTED',
-          accountsReceivable: this.mapArRow(existingRes.rows[0]!),
+          accountsReceivable: this.mapArRow(row),
         };
       }
 
@@ -2948,9 +3039,21 @@ export class PostgresFinanceService implements CloudFinanceCompositionService {
         [command.organizationId, command.referenceAccountId],
       );
 
+      const row = concurrentRes.rows[0]!;
+      if (
+        row.branch_id !== command.branchId ||
+        row.customer_id !== command.customerId ||
+        cmpFinanceScale4(row.total_amount, command.totalAmount) !== 0 ||
+        normalizeDateStr(row.due_date) !== normalizeDateStr(command.dueDate)
+      ) {
+        throw new ARIdempotencyConflictError(
+          `Accounts receivable idempotency conflict for reference '${command.referenceAccountId}': existing record differs from incoming charge facts`,
+        );
+      }
+
       return {
         status: 'DUPLICATE_ACCEPTED',
-        accountsReceivable: this.mapArRow(concurrentRes.rows[0]!),
+        accountsReceivable: this.mapArRow(row),
       };
     });
   }
@@ -3134,18 +3237,17 @@ export class PostgresFinanceService implements CloudFinanceCompositionService {
     });
   }
 
-  async reconcileCashFromCorteZ(event: CorteZGeneradoEvent): Promise<ReconcileCashResult> {
-    const sourceCutId = event.corteZId ?? event.sourceCutId ?? event.folio;
-    if (!sourceCutId || sourceCutId.trim().length === 0) {
+  async reconcileCash(facts: CashClosingFacts): Promise<ReconcileCashResult> {
+    if (!facts.sourceCutId || facts.sourceCutId.trim().length === 0) {
       throw new CashReconciliationError(
-        'Corte Z closing event must provide a deterministic source cut identifier',
+        'Closing facts must provide a deterministic source cut identifier',
       );
     }
 
-    parseFinanceDecimal12x4(event.expectedCash);
-    parseFinanceDecimal12x4(event.actualCash);
+    parseFinanceDecimal12x4(facts.expectedCash);
+    parseFinanceDecimal12x4(facts.actualCash);
 
-    return withTenantTransaction(this.pool, event.organizationId, async (client) => {
+    return withTenantTransaction(this.pool, facts.organizationId, async (client) => {
       // 1. Check if reconciliation already exists
       const existingRes = await client.query<{
         id: string;
@@ -3163,20 +3265,32 @@ export class PostgresFinanceService implements CloudFinanceCompositionService {
                 expected_cash::text, actual_cash::text, variance::text, has_variance, created_at
          FROM cash_reconciliations
          WHERE organization_id = $1 AND source_cut_id = $2;`,
-        [event.organizationId, sourceCutId.trim()],
+        [facts.organizationId, facts.sourceCutId.trim()],
       );
 
       if (existingRes.rows.length > 0) {
+        const row = existingRes.rows[0]!;
+        if (
+          row.branch_id !== facts.branchId ||
+          normalizeDateStr(row.operational_date) !== normalizeDateStr(facts.operationalDate) ||
+          cmpFinanceScale4(row.expected_cash, facts.expectedCash) !== 0 ||
+          cmpFinanceScale4(row.actual_cash, facts.actualCash) !== 0
+        ) {
+          throw new CashReconciliationIdempotencyConflictError(
+            `Cash reconciliation idempotency conflict for source cut '${facts.sourceCutId}': existing record differs from incoming closing facts`,
+          );
+        }
+
         return {
           status: 'DUPLICATE_ACCEPTED',
-          reconciliation: this.mapRecRow(existingRes.rows[0]!),
+          reconciliation: this.mapRecRow(row),
         };
       }
 
       // 2. Pure domain calculation
       const calculated = calculateCashReconciliation({
-        expectedCash: event.expectedCash,
-        actualCash: event.actualCash,
+        expectedCash: facts.expectedCash,
+        actualCash: facts.actualCash,
       });
 
       // 3. Insert reconciliation record
@@ -3200,10 +3314,10 @@ export class PostgresFinanceService implements CloudFinanceCompositionService {
         RETURNING id, organization_id, branch_id, source_cut_id, operational_date::text,
                   expected_cash::text, actual_cash::text, variance::text, has_variance, created_at;`,
         [
-          event.organizationId,
-          event.branchId,
-          sourceCutId.trim(),
-          event.operationalDate,
+          facts.organizationId,
+          facts.branchId,
+          facts.sourceCutId.trim(),
+          facts.operationalDate,
           calculated.expectedCash,
           calculated.actualCash,
           calculated.variance,
@@ -3235,12 +3349,24 @@ export class PostgresFinanceService implements CloudFinanceCompositionService {
                 expected_cash::text, actual_cash::text, variance::text, has_variance, created_at
          FROM cash_reconciliations
          WHERE organization_id = $1 AND source_cut_id = $2;`,
-        [event.organizationId, sourceCutId.trim()],
+        [facts.organizationId, facts.sourceCutId.trim()],
       );
+
+      const row = concurrentRes.rows[0]!;
+      if (
+        row.branch_id !== facts.branchId ||
+        normalizeDateStr(row.operational_date) !== normalizeDateStr(facts.operationalDate) ||
+        cmpFinanceScale4(row.expected_cash, facts.expectedCash) !== 0 ||
+        cmpFinanceScale4(row.actual_cash, facts.actualCash) !== 0
+      ) {
+        throw new CashReconciliationIdempotencyConflictError(
+          `Cash reconciliation idempotency conflict for source cut '${facts.sourceCutId}': existing record differs from incoming closing facts`,
+        );
+      }
 
       return {
         status: 'DUPLICATE_ACCEPTED',
-        reconciliation: this.mapRecRow(concurrentRes.rows[0]!),
+        reconciliation: this.mapRecRow(row),
       };
     });
   }

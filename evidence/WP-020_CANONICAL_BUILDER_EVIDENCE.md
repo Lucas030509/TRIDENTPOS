@@ -1,12 +1,13 @@
-# WP-020 CANONICAL BUILDER EVIDENCE
+# WP-020 CANONICAL BUILDER EVIDENCE (R2 REMEDIATION)
 
 ## Work Package Information
 - **Work Package:** WP-020 — Finance, Accounts Payable / Receivable & Cash Reconciliation
 - **Role:** 13_Backend_Developer
 - **Mode:** BUILDER ONLY
 - **Canonical Base SHA:** `16b41e3d471eeaf5a5d439f448626de05c318b1e`
-- **Implementation Branch:** `feat/wp-020-finance-ap-ar-reconciliation`
-- **Direct Parent:** Canonical `main` (`16b41e3d471eeaf5a5d439f448626de05c318b1e`)
+- **R1 Frozen Subject SHA:** `c762e2522c3e4845611614e9c27e414a8e532199`
+- **R2 Branch:** `feat/wp-020-finance-ap-ar-reconciliation-r2`
+- **Direct Parent:** R1 Frozen Subject (`c762e2522c3e4845611614e9c27e414a8e532199`)
 - **WP-019 Status:** CANONICAL / VERIFIED (PR #55 merged at `16b41e3d471eeaf5a5d439f448626de05c318b1e`)
 
 ---
@@ -26,7 +27,7 @@
   2. `scheduled_payments` — Payment scheduling intent linked to accounts payable.
   3. `accounts_receivable` — Accounts receivable charges and customer credit tracking.
   4. `branch_operating_expenses` — Branch-level operating expenses with receipt attachment references.
-  5. `cash_reconciliations` — Finance-side reconciliation between POS closing facts and cash expenses.
+  5. `cash_reconciliations` — Finance-side reconciliation between closing facts and cash expenses.
 
 ### RLS & Security Hardening
 - `ENABLE ROW LEVEL SECURITY` executed on all 5 tables.
@@ -50,18 +51,29 @@
 
 ---
 
-## 4. Accounts Payable Lifecycle
-- **Creation Trigger:** Consumes canonical `RecepcionCompraRegistrada` event emitted by WP-019.
+## 4. Accounts Payable Lifecycle & Neutral Payment Terms Resolver
+- **Creation Trigger:** Consumes canonical `RecepcionCompraRegistradaPayload` event emitted by WP-019.
 - **Initial Values:** `total_amount = event.totalAmount`, `balance_due = event.totalAmount`.
-- **Payment Terms & Due Date:** Derived deterministically from event `paymentTerms` (e.g. `NET_30` -> `receivedAt + 30 days`, `CONTADO` -> `receivedAt + 0 days`).
-- **Payment Lifecycle:** `PENDING` -> `PARTIAL` -> `PAID`. Overpayment is rejected fail-closed (`APOverpaymentError`).
-- **Concurrent RecepcionCompraRegistrada Delivery:** Tested with real PostgreSQL concurrency; concurrent delivery serializes cleanly and produces exactly one AP row with deterministic `DUPLICATE_ACCEPTED` result.
+- **Payment Terms Neutralization (R2 Blocker 1 Resolution):**
+  - Removed all hardcoded commercial payment terms string parsers (`NET_30`, `CONTADO`, `CASH`, etc.) from production domain code.
+  - Introduced neutral contract interface `PaymentTermsDueDateResolver` with context `PaymentTermsDueDateResolverContext`.
+  - When processing purchase receipts, if no resolver or explicit due date is provided, fails closed with `PaymentTermsResolverRequiredError` (`PAYMENT_TERMS_RESOLVER_REQUIRED`).
+  - In unit and composition tests, an explicit test resolver is injected and labeled `TEST ONLY — NOT PRODUCT OWNER / CANONICAL PAYMENT TERMS POLICY`.
+- **AP Semantic Idempotency Revalidation (R2):**
+  - Stable identity: `organization_id + purchase_receipt_id`.
+  - When an existing AP row is found (or after `ON CONFLICT DO NOTHING`), Finance revalidates semantic equivalence:
+    - `branchId` match
+    - `supplierId` match
+    - `totalAmount` exact scale-4 match
+    - `dueDate` match
+  - If any business fact conflicts, fails closed with `APIdempotencyConflictError` (`AP_IDEMPOTENCY_CONFLICT`).
+  - Only identical retries return `DUPLICATE_ACCEPTED`.
 
 ---
 
 ## 5. Scheduled Payments
 - **Table:** `scheduled_payments`.
-- **Purpose:** Payment scheduling intent only; no third-party payment gateways, bank transfers, SPEI, or ACH.
+- **Purpose:** Payment scheduling intent only; zero third-party payment gateways, bank transfers, SPEI, or ACH.
 
 ---
 
@@ -75,18 +87,43 @@
   - Default credit policies / hardcoded thresholds / manager PIN overrides: **NONE**.
   - Fail-Closed Behavior: When credit check is required and no authorized `CreditLimitValidator` is supplied, throws `CreditPolicyRequiredError` (`CREDIT_POLICY_REQUIRED`).
   - Test policies: Explicitly marked `TEST ONLY — NOT PRODUCT OWNER POLICY`.
+- **AR Semantic Idempotency Revalidation (R2):**
+  - Stable identity: `organization_id + reference_account_id`.
+  - When an existing AR row is found (or after `ON CONFLICT DO NOTHING`), Finance revalidates semantic equivalence:
+    - `branchId` match
+    - `customerId` match
+    - `totalAmount` exact scale-4 match
+    - `dueDate` match
+  - If any business fact conflicts, fails closed with `ARIdempotencyConflictError` (`AR_IDEMPOTENCY_CONFLICT`).
+  - Only identical retries return `DUPLICATE_ACCEPTED`.
 
 ---
 
-## 7. Operating Expenses & Cash Reconciliation
+## 7. Cash Reconciliation & Corte Z Contract Neutralization
 - **Operating Expenses:** `branch_operating_expenses` records branch cash outflows with receipt attachment URL / reference string.
 - **POS Cash Ownership Boundary:** POS owns `turnos_caja`, `movimientos_efectivo`, `corte_x`, and `corte_z`. Finance performs **0** POS table mutations.
-- **Corte Z Event Source:** Consumes canonical `CorteZGenerado` event.
+- **Corte Z Physical Contract Inspection (R2 Blocker 2 Resolution):**
+  - Inspection of `@trident/pos`, `@trident/pos-edge-runtime`, and core packages confirmed that NO physical canonical `CorteZGenerado` event contract exists in the repository.
+  - **CorteZ Contract Sufficient:** `NO`.
+  - **POS -> Finance Corte Z Integration:** `BLOCKED BY CONTRACT`.
+  - **Cash Reconciliation Core:** `IMPLEMENTED` as a pure financial domain calculator accepting neutral `CashClosingFacts`.
+  - Local fabricated `CorteZGeneradoEvent` renamed/neutralized to `CashClosingFacts` (`CashReconciliationSource`).
+- **Correction of Operating Expense Derivation Claim:**
+  - Removed false claim that Finance derives expected cash by reading POS drawer facts and subtracting expenses.
+  - Accurately states that Finance reconciliation receives already-resolved `expectedCash` and `actualCash` facts via `CashClosingFacts`.
 - **Reconciliation Engine:**
-  - `expectedCash = cut.totalSalesCash - branchCashExpenses`
   - `variance = actualCash - expectedCash`
   - `hasVariance = variance !== 0n`
-- Exact comparison: Zero variance produces `has_variance = false`; any non-zero variance (positive or negative) produces `has_variance = true`.
+  - Zero variance produces `hasVariance = false`; non-zero variance produces `hasVariance = true`.
+- **Cash Reconciliation Semantic Idempotency Revalidation (R2):**
+  - Stable identity: `organization_id + source_cut_id`.
+  - When an existing reconciliation row is found (or after `ON CONFLICT DO NOTHING`), Finance revalidates semantic equivalence:
+    - `branchId` match
+    - `operationalDate` match
+    - `expectedCash` exact scale-4 match
+    - `actualCash` exact scale-4 match
+  - If any business fact conflicts, fails closed with `CashReconciliationIdempotencyConflictError` (`CASH_RECONCILIATION_IDEMPOTENCY_CONFLICT`).
+  - Only identical retries return `DUPLICATE_ACCEPTED`.
 
 ---
 
@@ -97,66 +134,33 @@
 |------------|------|-------|------|------|--------|
 | Finance Domain | `packages/finance/src/index.test.ts` | 14 | 14 | 0 | PASS |
 | Database Integration | `packages/database/src/finance.test.ts` + all DB suites | 308 | 308 | 0 | PASS |
-| Cloud Server Integration | `packages/cloud-server/src/index.test.ts` | 71 | 71 | 0 | PASS |
-| Cross-Package E2E | `tests/integration/wp013-wp012-ingestion.test.mjs` | 1 | 1 | 0 | PASS |
+| Cloud Server Integration | `packages/cloud-server/src/index.test.ts` | 89 | 89 | 0 | PASS |
+| Cross-Package E2E | `tests/integration/wp013-sync-e2e.test.mjs` | 1 | 1 | 0 | PASS |
 | Dependency Graph | `scripts/check-graph.test.mjs` | 44 | 44 | 0 | PASS |
 | Electron Runtime | `packages/edge/src/electron.test.ts` | 10 | 10 | 0 | PASS |
 
-### Database Tests (WP020-DB-01 to WP020-DB-18)
-- `WP020-DB-01`: Exact five WP-020 physical tables exist.
-- `WP020-DB-02` & `WP020-DB-03`: RLS and FORCE RLS enabled on all 5 tables.
-- `WP020-DB-04`: AP tenant isolation & default deny without tenant context.
-- `WP020-DB-05`: AR tenant isolation & candidate key uniqueness.
-- `WP020-DB-06`: Branch operating expense tenant isolation.
-- `WP020-DB-07`: Scheduled payments composite tenant-safe foreign key to AP.
-- `WP020-DB-08`: Financial amount check constraints reject negative balances and zero totals.
-- `WP020-DB-09` & `WP020-DB-10`: AP and AR check constraints enforce governed lifecycle states.
-- `WP020-DB-11`: AP receipt idempotency identity rejects duplicate `purchase_receipt_id`.
-- `WP020-DB-12`: AR external-reference idempotency rejects duplicate `reference_account_id`.
-- `WP020-DB-13`: Cash reconciliation source cut uniqueness rejects duplicate `source_cut_id`.
-- `WP020-DB-14`: Cross-tenant foreign key relationships strictly rejected.
-- `WP020-DB-15`, `WP020-DB-16`, `WP020-DB-17`, `WP020-DB-18`: Non-production rollback of WP-020 drops WP-020 objects while preserving WP-019 Procurement tables, WP-018 `stock_ledger`, WP-017 Inventory tables, Platform Core, and Outbox.
-
-### Domain Tests (WP020-DOM-01 to WP020-DOM-14)
-- `WP020-DOM-01`: Exact SCALE_4 parse/format.
-- `WP020-DOM-02`: AP initial balance.
-- `WP020-DOM-03`: AP partial payment.
-- `WP020-DOM-04`: AP full settlement.
-- `WP020-DOM-05`: AP overpayment rejected.
-- `WP020-DOM-06`: AR initial balance.
-- `WP020-DOM-07`: AR settlement exact.
-- `WP020-DOM-08`: AR overpayment rejected.
-- `WP020-DOM-09`: `CreditLimitValidator` is neutral contract.
-- `WP020-DOM-10`: Missing required credit policy fails closed.
-- `WP020-DOM-11`: TEST credit policy remains explicit test-only.
-- `WP020-DOM-12`: Cash variance exactly zero.
-- `WP020-DOM-13`: Cash variance positive/non-zero flagged.
-- `WP020-DOM-14`: Cash variance negative/non-zero flagged.
-
-### Cloud Server Tests (WP020-CLOUD-01 to WP020-CLOUD-23)
-- `WP020-CLOUD-01`: `RecepcionCompraRegistrada` creates AP.
-- `WP020-CLOUD-02`: Same receipt retry produces one AP (`DUPLICATE_ACCEPTED`).
-- `WP020-CLOUD-03`: Concurrent same receipt event produces one AP.
-- `WP020-CLOUD-04`: AP amount equals Procurement event total exactly.
-- `WP020-CLOUD-05`: AP due date uses actual governed payment terms.
-- `WP020-CLOUD-06`: AP partial settlement.
-- `WP020-CLOUD-07`: AP final settlement.
-- `WP020-CLOUD-08`: AP overpayment fail-closed.
-- `WP020-CLOUD-09`: Transaction failure leaves no partial AP state.
-- `WP020-CLOUD-10`: AR external-reference idempotency.
-- `WP020-CLOUD-11`: Concurrent AR duplicate produces one charge.
-- `WP020-CLOUD-12`: Credit-required operation without policy fail-closed (`CREDIT_POLICY_REQUIRED`).
-- `WP020-CLOUD-13`: TEST credit policy injection works.
-- `WP020-CLOUD-14`: Operating expense stored with receipt reference.
-- `WP020-CLOUD-15`: Operating expense makes zero POS table mutations.
-- `WP020-CLOUD-16`: `CorteZ` creates one reconciliation.
-- `WP020-CLOUD-17`: `CorteZ` retry idempotent.
-- `WP020-CLOUD-18`: Concurrent same `CorteZ` event produces one reconciliation.
-- `WP020-CLOUD-19`: Zero variance not flagged.
-- `WP020-CLOUD-20`: Non-zero variance flagged.
-- `WP020-CLOUD-21`: Finance performs zero Procurement writes.
-- `WP020-CLOUD-22`: Finance performs zero POS cash ownership writes.
-- `WP020-CLOUD-23`: Finance performs zero CRM customer-master writes.
+### R2 Mandatory Surgical Test Suite
+- **AP Idempotency & Conflict Tests:**
+  - `R2-AP-01`: Exact retry -> `DUPLICATE_ACCEPTED`.
+  - `R2-AP-02`: Same receipt ID + different branch -> fail closed (`APIdempotencyConflictError`).
+  - `R2-AP-03`: Same receipt ID + different supplier -> fail closed (`APIdempotencyConflictError`).
+  - `R2-AP-04`: Same receipt ID + different total -> fail closed (`APIdempotencyConflictError`).
+  - `R2-AP-05`: Same receipt ID + different resolved due date -> fail closed (`APIdempotencyConflictError`).
+  - `R2-AP-06`: Concurrent exact retry produces exactly one AP row.
+- **AR Idempotency & Conflict Tests:**
+  - `R2-AR-01`: Exact retry -> `DUPLICATE_ACCEPTED`.
+  - `R2-AR-02`: Same reference + different customer -> fail closed (`ARIdempotencyConflictError`).
+  - `R2-AR-03`: Same reference + different branch -> fail closed (`ARIdempotencyConflictError`).
+  - `R2-AR-04`: Same reference + different amount -> fail closed (`ARIdempotencyConflictError`).
+  - `R2-AR-05`: Same reference + different due date -> fail closed (`ARIdempotencyConflictError`).
+  - `R2-AR-06`: Concurrent exact retry produces exactly one AR row.
+- **Cash Reconciliation Idempotency & Conflict Tests:**
+  - `R2-CASH-01`: Exact retry -> `DUPLICATE_ACCEPTED`.
+  - `R2-CASH-02`: Same cut + different branch -> fail closed (`CashReconciliationIdempotencyConflictError`).
+  - `R2-CASH-03`: Same cut + different operational date -> fail closed (`CashReconciliationIdempotencyConflictError`).
+  - `R2-CASH-04`: Same cut + different expected cash -> fail closed (`CashReconciliationIdempotencyConflictError`).
+  - `R2-CASH-05`: Same cut + different actual cash -> fail closed (`CashReconciliationIdempotencyConflictError`).
+  - `R2-CASH-06`: Concurrent exact retry produces exactly one reconciliation row.
 
 ---
 

@@ -19,6 +19,13 @@ import {
   type PurchasePriceVarianceAuthorizationPolicy,
   type CreditLimitValidator,
   type CreditLimitEvaluationContext,
+  type PaymentTermsDueDateResolver,
+  type PaymentTermsDueDateResolverContext,
+  PaymentTermsResolverRequiredError,
+  APIdempotencyConflictError,
+  ARIdempotencyConflictError,
+  CashReconciliationIdempotencyConflictError,
+  InvalidPaymentTermsError,
 } from './index.js';
 import type pg from 'pg';
 
@@ -3021,6 +3028,31 @@ describe('TRIDENTPOS WP-020 Cloud Server Finance, AP, AR & Cash Reconciliation S
     return { sup, po, receipt: recResult.receipt, eventPayload: recResult.eventPayload };
   }
 
+  // TEST ONLY — NOT PRODUCT OWNER / CANONICAL PAYMENT TERMS POLICY
+  const testOnlyPaymentTermsResolver: PaymentTermsDueDateResolver = {
+    async resolveDueDate(ctx: PaymentTermsDueDateResolverContext): Promise<string> {
+      if (
+        !ctx.paymentTerms ||
+        ctx.paymentTerms === 'CONTADO' ||
+        ctx.paymentTerms === 'CONTADO_CASH' ||
+        ctx.paymentTerms === 'CASH'
+      ) {
+        return ctx.receivedAt.slice(0, 10);
+      }
+      if (ctx.paymentTerms === 'NET_15') {
+        const d = new Date(ctx.receivedAt);
+        d.setUTCDate(d.getUTCDate() + 15);
+        return d.toISOString().slice(0, 10);
+      }
+      if (ctx.paymentTerms === 'NET_30') {
+        const d = new Date(ctx.receivedAt);
+        d.setUTCDate(d.getUTCDate() + 30);
+        return d.toISOString().slice(0, 10);
+      }
+      throw new InvalidPaymentTermsError(ctx.paymentTerms);
+    },
+  };
+
   it('WP020-CLOUD-01: RecepcionCompraRegistrada creates AP', async () => {
     const { receipt, eventPayload, sup } = await createTestReceipt({
       receiptNumber: 'REC-FIN-001',
@@ -3028,7 +3060,10 @@ describe('TRIDENTPOS WP-020 Cloud Server Finance, AP, AR & Cash Reconciliation S
       paymentTerms: 'NET_30',
     });
 
-    const result = await financeService.onPurchaseReceiptConfirmed(eventPayload);
+    const result = await financeService.onPurchaseReceiptConfirmed(
+      eventPayload,
+      testOnlyPaymentTermsResolver,
+    );
     assert.equal(result.status, 'APPLIED');
     assert.equal(result.accountsPayable.organizationId, tenantAId);
     assert.equal(result.accountsPayable.branchId, branchAId);
@@ -3046,10 +3081,16 @@ describe('TRIDENTPOS WP-020 Cloud Server Finance, AP, AR & Cash Reconciliation S
       paymentTerms: 'NET_30',
     });
 
-    const res1 = await financeService.onPurchaseReceiptConfirmed(eventPayload);
+    const res1 = await financeService.onPurchaseReceiptConfirmed(
+      eventPayload,
+      testOnlyPaymentTermsResolver,
+    );
     assert.equal(res1.status, 'APPLIED');
 
-    const res2 = await financeService.onPurchaseReceiptConfirmed(eventPayload);
+    const res2 = await financeService.onPurchaseReceiptConfirmed(
+      eventPayload,
+      testOnlyPaymentTermsResolver,
+    );
     assert.equal(res2.status, 'DUPLICATE_ACCEPTED');
     assert.equal(res2.accountsPayable.id, res1.accountsPayable.id);
     assert.equal(res2.accountsPayable.purchaseReceiptId, receipt.id);
@@ -3069,8 +3110,8 @@ describe('TRIDENTPOS WP-020 Cloud Server Finance, AP, AR & Cash Reconciliation S
     });
 
     const [r1, r2] = await Promise.all([
-      financeService.onPurchaseReceiptConfirmed(eventPayload),
-      financeService.onPurchaseReceiptConfirmed(eventPayload),
+      financeService.onPurchaseReceiptConfirmed(eventPayload, testOnlyPaymentTermsResolver),
+      financeService.onPurchaseReceiptConfirmed(eventPayload, testOnlyPaymentTermsResolver),
     ]);
 
     const statuses = [r1.status, r2.status].sort();
@@ -3090,41 +3131,58 @@ describe('TRIDENTPOS WP-020 Cloud Server Finance, AP, AR & Cash Reconciliation S
       paymentTerms: 'NET_30',
     });
 
-    const result = await financeService.onPurchaseReceiptConfirmed(eventPayload);
+    const result = await financeService.onPurchaseReceiptConfirmed(
+      eventPayload,
+      testOnlyPaymentTermsResolver,
+    );
     assert.equal(result.status, 'APPLIED');
     assert.equal(result.accountsPayable.totalAmount, '1234.5678');
     assert.equal(result.accountsPayable.balanceDue, '1234.5678');
   });
 
-  it('WP020-CLOUD-05: AP due date uses actual governed payment terms', async () => {
-    // 1. NET_15
+  it('WP020-CLOUD-05: AP fails closed without resolver and resolves with injected test resolver', async () => {
     const { eventPayload: ep15 } = await createTestReceipt({
       receiptNumber: 'REC-FIN-TERMS-15',
       totalAmount: '100.0000',
       paymentTerms: 'NET_15',
     });
-    const res15 = await financeService.onPurchaseReceiptConfirmed(ep15);
+
+    // Missing resolver fails closed
+    await assert.rejects(
+      async () => financeService.onPurchaseReceiptConfirmed(ep15),
+      PaymentTermsResolverRequiredError,
+    );
+
+    // Injected test resolver works for NET_15
+    const res15 = await financeService.onPurchaseReceiptConfirmed(
+      ep15,
+      testOnlyPaymentTermsResolver,
+    );
     assert.equal(res15.status, 'APPLIED');
 
-    // 2. CONTADO_CASH
+    // Injected test resolver works for CONTADO_CASH
     const { eventPayload: epCash } = await createTestReceipt({
       receiptNumber: 'REC-FIN-TERMS-CASH',
       totalAmount: '100.0000',
       paymentTerms: 'CONTADO_CASH',
     });
-    const resCash = await financeService.onPurchaseReceiptConfirmed(epCash);
+    const resCash = await financeService.onPurchaseReceiptConfirmed(
+      epCash,
+      testOnlyPaymentTermsResolver,
+    );
     assert.equal(resCash.status, 'APPLIED');
     assert.equal(resCash.accountsPayable.dueDate, resCash.accountsPayable.createdAt.slice(0, 10));
 
-    // 3. Unsupported terms fails closed
+    // Unsupported terms in resolver fails closed
     const fakePayload = {
       ...epCash,
       purchaseReceiptId: crypto.randomUUID(),
       paymentTerms: 'UNKNOWN_TERMS',
     };
     await assert.rejects(
-      async () => financeService.onPurchaseReceiptConfirmed(fakePayload),
-      /INVALID_PAYMENT_TERMS|InvalidPaymentTermsError/i,
+      async () =>
+        financeService.onPurchaseReceiptConfirmed(fakePayload, testOnlyPaymentTermsResolver),
+      InvalidPaymentTermsError,
     );
   });
 
@@ -3135,7 +3193,10 @@ describe('TRIDENTPOS WP-020 Cloud Server Finance, AP, AR & Cash Reconciliation S
       paymentTerms: 'NET_30',
     });
 
-    const createRes = await financeService.onPurchaseReceiptConfirmed(eventPayload);
+    const createRes = await financeService.onPurchaseReceiptConfirmed(
+      eventPayload,
+      testOnlyPaymentTermsResolver,
+    );
     const apId = createRes.accountsPayable.id;
 
     const settled = await financeService.settlePayable({
@@ -3157,7 +3218,10 @@ describe('TRIDENTPOS WP-020 Cloud Server Finance, AP, AR & Cash Reconciliation S
       paymentTerms: 'NET_30',
     });
 
-    const createRes = await financeService.onPurchaseReceiptConfirmed(eventPayload);
+    const createRes = await financeService.onPurchaseReceiptConfirmed(
+      eventPayload,
+      testOnlyPaymentTermsResolver,
+    );
     const apId = createRes.accountsPayable.id;
 
     // Settle partially
@@ -3187,7 +3251,10 @@ describe('TRIDENTPOS WP-020 Cloud Server Finance, AP, AR & Cash Reconciliation S
       paymentTerms: 'NET_30',
     });
 
-    const createRes = await financeService.onPurchaseReceiptConfirmed(eventPayload);
+    const createRes = await financeService.onPurchaseReceiptConfirmed(
+      eventPayload,
+      testOnlyPaymentTermsResolver,
+    );
     const apId = createRes.accountsPayable.id;
 
     await assert.rejects(
@@ -3382,10 +3449,10 @@ describe('TRIDENTPOS WP-020 Cloud Server Finance, AP, AR & Cash Reconciliation S
     assert.ok(preExpense.id);
   });
 
-  it('WP020-CLOUD-16: CorteZ creates one reconciliation', async () => {
+  it('WP020-CLOUD-16: CashReconciliation creates one reconciliation', async () => {
     const cutId = `CUT-Z-${crypto.randomUUID()}`;
 
-    const recResult = await financeService.reconcileCashFromCorteZ({
+    const recResult = await financeService.reconcileCash({
       organizationId: tenantAId,
       branchId: branchAId,
       sourceCutId: cutId,
@@ -3402,10 +3469,10 @@ describe('TRIDENTPOS WP-020 Cloud Server Finance, AP, AR & Cash Reconciliation S
     assert.equal(recResult.reconciliation.hasVariance, false);
   });
 
-  it('WP020-CLOUD-17: CorteZ retry idempotent', async () => {
+  it('WP020-CLOUD-17: CashReconciliation retry idempotent', async () => {
     const cutId = `CUT-Z-RETRY-${crypto.randomUUID()}`;
 
-    const event = {
+    const facts = {
       organizationId: tenantAId,
       branchId: branchAId,
       sourceCutId: cutId,
@@ -3414,10 +3481,10 @@ describe('TRIDENTPOS WP-020 Cloud Server Finance, AP, AR & Cash Reconciliation S
       actualCash: '2000.0000',
     };
 
-    const res1 = await financeService.reconcileCashFromCorteZ(event);
+    const res1 = await financeService.reconcileCash(facts);
     assert.equal(res1.status, 'APPLIED');
 
-    const res2 = await financeService.reconcileCashFromCorteZ(event);
+    const res2 = await financeService.reconcileCash(facts);
     assert.equal(res2.status, 'DUPLICATE_ACCEPTED');
     assert.equal(res2.reconciliation.id, res1.reconciliation.id);
 
@@ -3428,9 +3495,9 @@ describe('TRIDENTPOS WP-020 Cloud Server Finance, AP, AR & Cash Reconciliation S
     assert.equal(countRes.rows[0]!.count, '1');
   });
 
-  it('WP020-CLOUD-18: concurrent same CorteZ event produces one reconciliation', async () => {
+  it('WP020-CLOUD-18: concurrent same cash reconciliation facts produces one reconciliation', async () => {
     const cutId = `CUT-Z-CONC-${crypto.randomUUID()}`;
-    const event = {
+    const facts = {
       organizationId: tenantAId,
       branchId: branchAId,
       sourceCutId: cutId,
@@ -3440,8 +3507,8 @@ describe('TRIDENTPOS WP-020 Cloud Server Finance, AP, AR & Cash Reconciliation S
     };
 
     const [r1, r2] = await Promise.all([
-      financeService.reconcileCashFromCorteZ(event),
-      financeService.reconcileCashFromCorteZ(event),
+      financeService.reconcileCash(facts),
+      financeService.reconcileCash(facts),
     ]);
 
     const statuses = [r1.status, r2.status].sort();
@@ -3456,7 +3523,7 @@ describe('TRIDENTPOS WP-020 Cloud Server Finance, AP, AR & Cash Reconciliation S
 
   it('WP020-CLOUD-19: zero variance not flagged', async () => {
     const cutId = `CUT-Z-ZERO-${crypto.randomUUID()}`;
-    const res = await financeService.reconcileCashFromCorteZ({
+    const res = await financeService.reconcileCash({
       organizationId: tenantAId,
       branchId: branchAId,
       sourceCutId: cutId,
@@ -3472,7 +3539,7 @@ describe('TRIDENTPOS WP-020 Cloud Server Finance, AP, AR & Cash Reconciliation S
 
   it('WP020-CLOUD-20: non-zero variance flagged', async () => {
     const cutId = `CUT-Z-VAR-${crypto.randomUUID()}`;
-    const res = await financeService.reconcileCashFromCorteZ({
+    const res = await financeService.reconcileCash({
       organizationId: tenantAId,
       branchId: branchAId,
       sourceCutId: cutId,
@@ -3529,7 +3596,7 @@ describe('TRIDENTPOS WP-020 Cloud Server Finance, AP, AR & Cash Reconciliation S
   it('WP020-CLOUD-22: Finance performs zero POS cash ownership writes', async () => {
     // Reconciling cash does not mutate POS tables
     const cutId = `CUT-ZERO-POS-${crypto.randomUUID()}`;
-    await financeService.reconcileCashFromCorteZ({
+    await financeService.reconcileCash({
       organizationId: tenantAId,
       branchId: branchAId,
       sourceCutId: cutId,
@@ -3562,5 +3629,424 @@ describe('TRIDENTPOS WP-020 Cloud Server Finance, AP, AR & Cash Reconciliation S
       );
       assert.equal(postCount.rows[0]!.count, preCount.rows[0]!.count);
     }
+  });
+
+  // ============================================================
+  // R2 MANDATORY SURGICAL TEST SUITE (Section 12, 22, 26)
+  // ============================================================
+
+  // AP R2 Tests
+  it('R2-AP-01: exact retry → DUPLICATE_ACCEPTED', async () => {
+    const { eventPayload } = await createTestReceipt({
+      receiptNumber: `REC-R2-AP-01-${crypto.randomUUID().slice(0, 6)}`,
+      totalAmount: '400.0000',
+      paymentTerms: 'NET_30',
+    });
+
+    const res1 = await financeService.onPurchaseReceiptConfirmed(
+      eventPayload,
+      testOnlyPaymentTermsResolver,
+    );
+    assert.equal(res1.status, 'APPLIED');
+
+    const res2 = await financeService.onPurchaseReceiptConfirmed(
+      eventPayload,
+      testOnlyPaymentTermsResolver,
+    );
+    assert.equal(res2.status, 'DUPLICATE_ACCEPTED');
+    assert.equal(res2.accountsPayable.id, res1.accountsPayable.id);
+  });
+
+  it('R2-AP-02: same receipt ID + different branch → fail closed', async () => {
+    const { eventPayload } = await createTestReceipt({
+      receiptNumber: `REC-R2-AP-02-${crypto.randomUUID().slice(0, 6)}`,
+      totalAmount: '400.0000',
+      paymentTerms: 'NET_30',
+    });
+
+    await financeService.onPurchaseReceiptConfirmed(eventPayload, testOnlyPaymentTermsResolver);
+
+    const conflictingPayload = {
+      ...eventPayload,
+      branchId: branchBId, // different branch!
+    };
+
+    await assert.rejects(
+      async () =>
+        financeService.onPurchaseReceiptConfirmed(conflictingPayload, testOnlyPaymentTermsResolver),
+      APIdempotencyConflictError,
+    );
+  });
+
+  it('R2-AP-03: same receipt ID + different supplier → fail closed', async () => {
+    const { eventPayload } = await createTestReceipt({
+      receiptNumber: `REC-R2-AP-03-${crypto.randomUUID().slice(0, 6)}`,
+      totalAmount: '400.0000',
+      paymentTerms: 'NET_30',
+    });
+
+    await financeService.onPurchaseReceiptConfirmed(eventPayload, testOnlyPaymentTermsResolver);
+
+    const conflictingPayload = {
+      ...eventPayload,
+      supplierId: crypto.randomUUID(), // different supplier!
+    };
+
+    await assert.rejects(
+      async () =>
+        financeService.onPurchaseReceiptConfirmed(conflictingPayload, testOnlyPaymentTermsResolver),
+      APIdempotencyConflictError,
+    );
+  });
+
+  it('R2-AP-04: same receipt ID + different total → fail closed', async () => {
+    const { eventPayload } = await createTestReceipt({
+      receiptNumber: `REC-R2-AP-04-${crypto.randomUUID().slice(0, 6)}`,
+      totalAmount: '400.0000',
+      paymentTerms: 'NET_30',
+    });
+
+    await financeService.onPurchaseReceiptConfirmed(eventPayload, testOnlyPaymentTermsResolver);
+
+    const conflictingPayload = {
+      ...eventPayload,
+      totalAmount: '400.0001', // different amount!
+    };
+
+    await assert.rejects(
+      async () =>
+        financeService.onPurchaseReceiptConfirmed(conflictingPayload, testOnlyPaymentTermsResolver),
+      APIdempotencyConflictError,
+    );
+  });
+
+  it('R2-AP-05: same receipt ID + different resolved due date → fail closed', async () => {
+    const { eventPayload } = await createTestReceipt({
+      receiptNumber: `REC-R2-AP-05-${crypto.randomUUID().slice(0, 6)}`,
+      totalAmount: '400.0000',
+      paymentTerms: 'NET_30',
+    });
+
+    // Applied with NET_30
+    await financeService.onPurchaseReceiptConfirmed(eventPayload, testOnlyPaymentTermsResolver);
+
+    // Retry with different resolver yielding NET_15 due date
+    const diffResolver: PaymentTermsDueDateResolver = {
+      async resolveDueDate(_ctx: PaymentTermsDueDateResolverContext): Promise<string> {
+        return '2026-12-31'; // Conflicting due date
+      },
+    };
+
+    await assert.rejects(
+      async () => financeService.onPurchaseReceiptConfirmed(eventPayload, diffResolver),
+      APIdempotencyConflictError,
+    );
+  });
+
+  it('R2-AP-06: concurrent exact retry still produces one AP', async () => {
+    const { receipt, eventPayload } = await createTestReceipt({
+      receiptNumber: `REC-R2-AP-06-${crypto.randomUUID().slice(0, 6)}`,
+      totalAmount: '550.0000',
+      paymentTerms: 'NET_30',
+    });
+
+    const [r1, r2, r3] = await Promise.all([
+      financeService.onPurchaseReceiptConfirmed(eventPayload, testOnlyPaymentTermsResolver),
+      financeService.onPurchaseReceiptConfirmed(eventPayload, testOnlyPaymentTermsResolver),
+      financeService.onPurchaseReceiptConfirmed(eventPayload, testOnlyPaymentTermsResolver),
+    ]);
+
+    const appliedCount = [r1, r2, r3].filter((r) => r.status === 'APPLIED').length;
+    const dupCount = [r1, r2, r3].filter((r) => r.status === 'DUPLICATE_ACCEPTED').length;
+    assert.equal(appliedCount, 1);
+    assert.equal(dupCount, 2);
+
+    const countRes = await pool.query<{ count: string }>(
+      `SELECT COUNT(*)::text as count FROM accounts_payable WHERE organization_id = $1 AND purchase_receipt_id = $2;`,
+      [tenantAId, receipt.id],
+    );
+    assert.equal(countRes.rows[0]!.count, '1');
+  });
+
+  // AR R2 Tests
+  it('R2-AR-01: exact retry → duplicate accepted', async () => {
+    const refId = `REF-R2-AR-01-${crypto.randomUUID()}`;
+    const cmd = {
+      organizationId: tenantAId,
+      branchId: branchAId,
+      customerId: customerAId,
+      referenceAccountId: refId,
+      totalAmount: '300.0000',
+      dueDate: '2026-10-30',
+    };
+
+    const res1 = await financeService.createReceivableCharge(cmd);
+    assert.equal(res1.status, 'APPLIED');
+
+    const res2 = await financeService.createReceivableCharge(cmd);
+    assert.equal(res2.status, 'DUPLICATE_ACCEPTED');
+    assert.equal(res2.accountsReceivable.id, res1.accountsReceivable.id);
+  });
+
+  it('R2-AR-02: same reference + different customer → fail closed', async () => {
+    const refId = `REF-R2-AR-02-${crypto.randomUUID()}`;
+    const cmd = {
+      organizationId: tenantAId,
+      branchId: branchAId,
+      customerId: customerAId,
+      referenceAccountId: refId,
+      totalAmount: '300.0000',
+      dueDate: '2026-10-30',
+    };
+
+    await financeService.createReceivableCharge(cmd);
+
+    await assert.rejects(
+      async () =>
+        financeService.createReceivableCharge({
+          ...cmd,
+          customerId: crypto.randomUUID(), // different customer!
+        }),
+      ARIdempotencyConflictError,
+    );
+  });
+
+  it('R2-AR-03: same reference + different branch → fail closed', async () => {
+    const refId = `REF-R2-AR-03-${crypto.randomUUID()}`;
+    const cmd = {
+      organizationId: tenantAId,
+      branchId: branchAId,
+      customerId: customerAId,
+      referenceAccountId: refId,
+      totalAmount: '300.0000',
+      dueDate: '2026-10-30',
+    };
+
+    await financeService.createReceivableCharge(cmd);
+
+    await assert.rejects(
+      async () =>
+        financeService.createReceivableCharge({
+          ...cmd,
+          branchId: branchBId, // different branch!
+        }),
+      ARIdempotencyConflictError,
+    );
+  });
+
+  it('R2-AR-04: same reference + different amount → fail closed', async () => {
+    const refId = `REF-R2-AR-04-${crypto.randomUUID()}`;
+    const cmd = {
+      organizationId: tenantAId,
+      branchId: branchAId,
+      customerId: customerAId,
+      referenceAccountId: refId,
+      totalAmount: '300.0000',
+      dueDate: '2026-10-30',
+    };
+
+    await financeService.createReceivableCharge(cmd);
+
+    await assert.rejects(
+      async () =>
+        financeService.createReceivableCharge({
+          ...cmd,
+          totalAmount: '300.0001', // different amount!
+        }),
+      ARIdempotencyConflictError,
+    );
+  });
+
+  it('R2-AR-05: same reference + different due date → fail closed', async () => {
+    const refId = `REF-R2-AR-05-${crypto.randomUUID()}`;
+    const cmd = {
+      organizationId: tenantAId,
+      branchId: branchAId,
+      customerId: customerAId,
+      referenceAccountId: refId,
+      totalAmount: '300.0000',
+      dueDate: '2026-10-30',
+    };
+
+    await financeService.createReceivableCharge(cmd);
+
+    await assert.rejects(
+      async () =>
+        financeService.createReceivableCharge({
+          ...cmd,
+          dueDate: '2026-11-15', // different due date!
+        }),
+      ARIdempotencyConflictError,
+    );
+  });
+
+  it('R2-AR-06: concurrent exact retry → one AR', async () => {
+    const refId = `REF-R2-AR-06-${crypto.randomUUID()}`;
+    const cmd = {
+      organizationId: tenantAId,
+      branchId: branchAId,
+      customerId: customerAId,
+      referenceAccountId: refId,
+      totalAmount: '620.0000',
+      dueDate: '2026-11-20',
+    };
+
+    const [r1, r2, r3] = await Promise.all([
+      financeService.createReceivableCharge(cmd),
+      financeService.createReceivableCharge(cmd),
+      financeService.createReceivableCharge(cmd),
+    ]);
+
+    const appliedCount = [r1, r2, r3].filter((r) => r.status === 'APPLIED').length;
+    const dupCount = [r1, r2, r3].filter((r) => r.status === 'DUPLICATE_ACCEPTED').length;
+    assert.equal(appliedCount, 1);
+    assert.equal(dupCount, 2);
+
+    const countAr = await pool.query<{ count: string }>(
+      `SELECT COUNT(*)::text as count FROM accounts_receivable WHERE organization_id = $1 AND reference_account_id = $2;`,
+      [tenantAId, refId],
+    );
+    assert.equal(countAr.rows[0]!.count, '1');
+  });
+
+  // Cash Reconciliation R2 Tests
+  it('R2-CASH-01: exact retry → duplicate accepted', async () => {
+    const cutId = `CUT-R2-01-${crypto.randomUUID()}`;
+    const facts = {
+      organizationId: tenantAId,
+      branchId: branchAId,
+      sourceCutId: cutId,
+      operationalDate: '2026-09-19',
+      expectedCash: '1200.0000',
+      actualCash: '1200.0000',
+    };
+
+    const res1 = await financeService.reconcileCash(facts);
+    assert.equal(res1.status, 'APPLIED');
+
+    const res2 = await financeService.reconcileCash(facts);
+    assert.equal(res2.status, 'DUPLICATE_ACCEPTED');
+    assert.equal(res2.reconciliation.id, res1.reconciliation.id);
+  });
+
+  it('R2-CASH-02: same cut + different branch → fail closed', async () => {
+    const cutId = `CUT-R2-02-${crypto.randomUUID()}`;
+    const facts = {
+      organizationId: tenantAId,
+      branchId: branchAId,
+      sourceCutId: cutId,
+      operationalDate: '2026-09-19',
+      expectedCash: '1200.0000',
+      actualCash: '1200.0000',
+    };
+
+    await financeService.reconcileCash(facts);
+
+    await assert.rejects(
+      async () =>
+        financeService.reconcileCash({
+          ...facts,
+          branchId: branchBId, // different branch!
+        }),
+      CashReconciliationIdempotencyConflictError,
+    );
+  });
+
+  it('R2-CASH-03: same cut + different operational date → fail closed', async () => {
+    const cutId = `CUT-R2-03-${crypto.randomUUID()}`;
+    const facts = {
+      organizationId: tenantAId,
+      branchId: branchAId,
+      sourceCutId: cutId,
+      operationalDate: '2026-09-19',
+      expectedCash: '1200.0000',
+      actualCash: '1200.0000',
+    };
+
+    await financeService.reconcileCash(facts);
+
+    await assert.rejects(
+      async () =>
+        financeService.reconcileCash({
+          ...facts,
+          operationalDate: '2026-09-20', // different date!
+        }),
+      CashReconciliationIdempotencyConflictError,
+    );
+  });
+
+  it('R2-CASH-04: same cut + different expected cash → fail closed', async () => {
+    const cutId = `CUT-R2-04-${crypto.randomUUID()}`;
+    const facts = {
+      organizationId: tenantAId,
+      branchId: branchAId,
+      sourceCutId: cutId,
+      operationalDate: '2026-09-19',
+      expectedCash: '1200.0000',
+      actualCash: '1200.0000',
+    };
+
+    await financeService.reconcileCash(facts);
+
+    await assert.rejects(
+      async () =>
+        financeService.reconcileCash({
+          ...facts,
+          expectedCash: '1200.0001', // different expected cash!
+        }),
+      CashReconciliationIdempotencyConflictError,
+    );
+  });
+
+  it('R2-CASH-05: same cut + different actual cash → fail closed', async () => {
+    const cutId = `CUT-R2-05-${crypto.randomUUID()}`;
+    const facts = {
+      organizationId: tenantAId,
+      branchId: branchAId,
+      sourceCutId: cutId,
+      operationalDate: '2026-09-19',
+      expectedCash: '1200.0000',
+      actualCash: '1200.0000',
+    };
+
+    await financeService.reconcileCash(facts);
+
+    await assert.rejects(
+      async () =>
+        financeService.reconcileCash({
+          ...facts,
+          actualCash: '1250.0000', // different actual cash!
+        }),
+      CashReconciliationIdempotencyConflictError,
+    );
+  });
+
+  it('R2-CASH-06: concurrent exact retry → one reconciliation', async () => {
+    const cutId = `CUT-R2-06-${crypto.randomUUID()}`;
+    const facts = {
+      organizationId: tenantAId,
+      branchId: branchAId,
+      sourceCutId: cutId,
+      operationalDate: '2026-09-19',
+      expectedCash: '1800.0000',
+      actualCash: '1800.0000',
+    };
+
+    const [r1, r2, r3] = await Promise.all([
+      financeService.reconcileCash(facts),
+      financeService.reconcileCash(facts),
+      financeService.reconcileCash(facts),
+    ]);
+
+    const appliedCount = [r1, r2, r3].filter((r) => r.status === 'APPLIED').length;
+    const dupCount = [r1, r2, r3].filter((r) => r.status === 'DUPLICATE_ACCEPTED').length;
+    assert.equal(appliedCount, 1);
+    assert.equal(dupCount, 2);
+
+    const countRes = await pool.query<{ count: string }>(
+      `SELECT COUNT(*)::text as count FROM cash_reconciliations WHERE organization_id = $1 AND source_cut_id = $2;`,
+      [tenantAId, cutId],
+    );
+    assert.equal(countRes.rows[0]!.count, '1');
   });
 });

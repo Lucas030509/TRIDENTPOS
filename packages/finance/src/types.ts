@@ -102,23 +102,34 @@ export interface RecepcionCompraRegistradaEvent {
 }
 
 /**
- * Consumed POS Closing Event (CorteZGenerado)
+ * Neutral Payment Terms Due Date Resolver Contract
+ * Note: Contract only - contains NO concrete default product policy.
  */
-export interface CorteZGeneradoEvent {
-  corteZId?: string;
-  sourceCutId?: string;
-  folio?: string;
+export interface PaymentTermsDueDateResolverContext {
   organizationId: string;
   branchId: string;
+  supplierId: string;
+  purchaseReceiptId: string;
+  receivedAt: string;
+  paymentTerms?: string | null;
+}
+
+export interface PaymentTermsDueDateResolver {
+  resolveDueDate(context: PaymentTermsDueDateResolverContext): Promise<string> | string;
+}
+
+/**
+ * Finance Neutral Cash Closing Facts Input for Reconciliation
+ * Note: Finance pure domain input representing resolved cash facts.
+ */
+export interface CashClosingFacts {
+  organizationId: string;
+  branchId: string;
+  sourceCutId: string;
   operationalDate: string; // YYYY-MM-DD
-  expectedCash: string; // Scale-4 string (expected physical cash in drawer)
-  actualCash: string; // Scale-4 string (actual declared physical cash)
-  totalGrossSales?: string;
-  totalNetSales?: string;
-  paymentBreakdown?: Array<{
-    method: string;
-    amount: string;
-  }>;
+  expectedCash: string; // Scale-4 string
+  actualCash: string; // Scale-4 string
+  notes?: string | null;
 }
 
 /**

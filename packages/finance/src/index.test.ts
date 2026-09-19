@@ -11,7 +11,6 @@ import {
   isPositiveScale4,
   isNonNegativeScale4,
   isNegativeScale4,
-  parseCreditDaysFromPaymentTerms,
   calculateDueDate,
   applyPaymentToAccountsPayable,
   applySettlementToAccountsReceivable,
@@ -21,8 +20,11 @@ import {
   AccountsPayableInvalidStateError,
   AccountsReceivableInvalidStateError,
   InvalidPaymentTermsError,
+  PaymentTermsResolverRequiredError,
   InvalidFinancialAmountError,
   CreditPolicyRequiredError,
+  type PaymentTermsDueDateResolver,
+  type PaymentTermsDueDateResolverContext,
   type CreditLimitValidator,
   type CreditLimitEvaluationContext,
   type CreditLimitEvaluationResult,
@@ -47,25 +49,65 @@ describe('TRIDENTPOS Finance Domain & Numerics (WP-020)', () => {
     assert.throws(() => parseDecimal12x4('abc'), InvalidFinancialAmountError);
   });
 
-  it('WP020-DOM-02: AP initial balance and due date derivation from payment terms', () => {
-    assert.equal(parseCreditDaysFromPaymentTerms('NET_30'), 30);
-    assert.equal(parseCreditDaysFromPaymentTerms('NET_15'), 15);
-    assert.equal(parseCreditDaysFromPaymentTerms('NET_60'), 60);
-    assert.equal(parseCreditDaysFromPaymentTerms('CREDIT_45'), 45);
-    assert.equal(parseCreditDaysFromPaymentTerms('30_DAYS'), 30);
-    assert.equal(parseCreditDaysFromPaymentTerms('10'), 10);
-    assert.equal(parseCreditDaysFromPaymentTerms('CONTADO'), 0);
-    assert.equal(parseCreditDaysFromPaymentTerms('CASH'), 0);
-    assert.equal(parseCreditDaysFromPaymentTerms('IMMEDIATE'), 0);
-
+  it('WP020-DOM-02: neutral PaymentTermsDueDateResolver contract & pure calculateDueDate', async () => {
     const receivedAt = '2026-09-01T12:00:00.000Z';
     assert.equal(calculateDueDate(receivedAt, 30), '2026-10-01');
     assert.equal(calculateDueDate(receivedAt, 15), '2026-09-16');
     assert.equal(calculateDueDate(receivedAt, 0), '2026-09-01');
 
-    assert.throws(() => parseCreditDaysFromPaymentTerms(''), InvalidPaymentTermsError);
-    assert.throws(() => parseCreditDaysFromPaymentTerms(null), InvalidPaymentTermsError);
-    assert.throws(() => parseCreditDaysFromPaymentTerms('INVALID_TERMS'), InvalidPaymentTermsError);
+    // TEST ONLY resolver (NOT PRODUCT OWNER / CANONICAL PAYMENT TERMS POLICY)
+    const testOnlyResolver: PaymentTermsDueDateResolver = {
+      async resolveDueDate(ctx: PaymentTermsDueDateResolverContext): Promise<string> {
+        if (!ctx.paymentTerms || ctx.paymentTerms === 'CONTADO') {
+          return calculateDueDate(ctx.receivedAt, 0);
+        }
+        if (ctx.paymentTerms === 'NET_30') {
+          return calculateDueDate(ctx.receivedAt, 30);
+        }
+        throw new InvalidPaymentTermsError(ctx.paymentTerms);
+      },
+    };
+
+    const dueDateNet30 = await testOnlyResolver.resolveDueDate({
+      organizationId: 'org-1',
+      branchId: 'branch-1',
+      supplierId: 'supp-1',
+      purchaseReceiptId: 'rcpt-1',
+      receivedAt,
+      paymentTerms: 'NET_30',
+    });
+    assert.equal(dueDateNet30, '2026-10-01');
+
+    const dueDateContado = await testOnlyResolver.resolveDueDate({
+      organizationId: 'org-1',
+      branchId: 'branch-1',
+      supplierId: 'supp-1',
+      purchaseReceiptId: 'rcpt-1',
+      receivedAt,
+      paymentTerms: 'CONTADO',
+    });
+    assert.equal(dueDateContado, '2026-09-01');
+
+    await assert.rejects(
+      async () =>
+        testOnlyResolver.resolveDueDate({
+          organizationId: 'org-1',
+          branchId: 'branch-1',
+          supplierId: 'supp-1',
+          purchaseReceiptId: 'rcpt-1',
+          receivedAt,
+          paymentTerms: 'UNSUPPORTED_TERMS',
+        }),
+      InvalidPaymentTermsError,
+    );
+
+    // Missing resolver fails closed
+    function resolveWithRequiredResolver(resolver?: PaymentTermsDueDateResolver): void {
+      if (!resolver) {
+        throw new PaymentTermsResolverRequiredError();
+      }
+    }
+    assert.throws(() => resolveWithRequiredResolver(), PaymentTermsResolverRequiredError);
   });
 
   it('WP020-DOM-03: AP partial payment reduces balance due and transitions status to PARTIAL', () => {

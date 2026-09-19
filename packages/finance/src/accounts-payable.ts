@@ -12,64 +12,6 @@ import {
 import type { AccountsPayable, AccountsPayableStatus } from './types.js';
 
 /**
- * Parses payment terms to a deterministic number of credit days.
- * Governed formats:
- * - NET_XX (e.g. NET_30 -> 30, NET_15 -> 15, NET_60 -> 60, NET_0 -> 0)
- * - CREDIT_XX (e.g. CREDIT_30 -> 30)
- * - XX_DAYS (e.g. 30_DAYS -> 30)
- * - XX (integer string, e.g. "30" -> 30)
- * - CONTADO / CASH / IMMEDIATE -> 0
- */
-export function parseCreditDaysFromPaymentTerms(paymentTerms: string | null | undefined): number {
-  if (!paymentTerms || typeof paymentTerms !== 'string') {
-    throw new InvalidPaymentTermsError(
-      'Payment terms are missing or invalid; cannot derive deterministic AP due date',
-    );
-  }
-
-  const normalized = paymentTerms.trim().toUpperCase();
-
-  if (
-    [
-      'CONTADO',
-      'CASH',
-      'CONTADO_CASH',
-      'CASH_CONTADO',
-      'IMMEDIATE',
-      'NET_0',
-      '0_DAYS',
-      '0',
-    ].includes(normalized)
-  ) {
-    return 0;
-  }
-
-  const netMatch = normalized.match(/^NET_(\d+)$/);
-  if (netMatch?.[1]) {
-    return parseInt(netMatch[1], 10);
-  }
-
-  const creditMatch = normalized.match(/^CREDIT_(\d+)$/);
-  if (creditMatch?.[1]) {
-    return parseInt(creditMatch[1], 10);
-  }
-
-  const daysMatch = normalized.match(/^(\d+)_DAYS$/);
-  if (daysMatch?.[1]) {
-    return parseInt(daysMatch[1], 10);
-  }
-
-  const intMatch = normalized.match(/^\d+$/);
-  if (intMatch) {
-    return parseInt(normalized, 10);
-  }
-
-  throw new InvalidPaymentTermsError(
-    `Unrecognized payment terms format '${paymentTerms}'. Governed formats: NET_XX, CREDIT_XX, XX_DAYS, CONTADO, CASH`,
-  );
-}
-
-/**
  * Derives due date string (YYYY-MM-DD) from receivedAt timestamp and credit days.
  */
 export function calculateDueDate(receivedAt: string, creditDays: number): string {

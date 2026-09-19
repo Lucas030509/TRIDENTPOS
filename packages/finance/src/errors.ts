@@ -46,6 +46,38 @@ export class CreditPolicyRequiredError extends FinanceDomainError {
   }
 }
 
+export class PaymentTermsResolverRequiredError extends FinanceDomainError {
+  constructor(
+    message = 'Operation requires an authorized PaymentTermsDueDateResolver policy to derive AP due date',
+  ) {
+    super(message, 'PAYMENT_TERMS_RESOLVER_REQUIRED');
+  }
+}
+
+export class APIdempotencyConflictError extends FinanceDomainError {
+  constructor(
+    message = 'Accounts payable idempotency conflict: existing record differs from incoming event facts',
+  ) {
+    super(message, 'AP_IDEMPOTENCY_CONFLICT');
+  }
+}
+
+export class ARIdempotencyConflictError extends FinanceDomainError {
+  constructor(
+    message = 'Accounts receivable idempotency conflict: existing record differs from incoming charge facts',
+  ) {
+    super(message, 'AR_IDEMPOTENCY_CONFLICT');
+  }
+}
+
+export class CashReconciliationIdempotencyConflictError extends FinanceDomainError {
+  constructor(
+    message = 'Cash reconciliation idempotency conflict: existing record differs from incoming closing facts',
+  ) {
+    super(message, 'CASH_RECONCILIATION_IDEMPOTENCY_CONFLICT');
+  }
+}
+
 export class CreditLimitExceededError extends FinanceDomainError {
   constructor(
     message = 'Requested charge exceeds customer credit limit or policy disposition is rejected',
