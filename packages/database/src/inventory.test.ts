@@ -77,6 +77,11 @@ describe('TRIDENTPOS WP-017 Inventory & Recipes Database Suite', () => {
       if (!orgCheck.rows[0]?.reg) {
         await prepClient.query(`
           DROP TABLE IF EXISTS
+            cash_reconciliations,
+            branch_operating_expenses,
+            accounts_receivable,
+            scheduled_payments,
+            accounts_payable,
             purchase_receipt_items,
             purchase_receipts,
             receiving_voucher_items,

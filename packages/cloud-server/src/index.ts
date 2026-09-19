@@ -2392,4 +2392,1003 @@ export class PostgresProcurementService implements CloudProcurementCompositionSe
   }
 }
 
+import {
+  type AccountsPayable,
+  type AccountsPayableStatus,
+  type ScheduledPayment,
+  type ScheduledPaymentStatus,
+  type AccountsReceivable,
+  type AccountsReceivableStatus,
+  type BranchOperatingExpense,
+  type CashReconciliation,
+  type RecepcionCompraRegistradaEvent,
+  type CorteZGeneradoEvent,
+  type ApplyAccountsPayablePaymentCommand,
+  type CreateScheduledPaymentCommand,
+  type CreateReceivableChargeCommand,
+  type SettleReceivableCommand,
+  type RegisterOperatingExpenseCommand,
+  type ReconcileCashCommand,
+  type ProcessPurchaseReceiptResult,
+  type CreateReceivableChargeResult,
+  type ReconcileCashResult,
+  type CreditLimitValidator,
+  type CreditLimitEvaluationContext,
+  parseCreditDaysFromPaymentTerms,
+  calculateDueDate,
+  applyPaymentToAccountsPayable,
+  applySettlementToAccountsReceivable,
+  calculateCashReconciliation,
+  parseDecimal12x4 as parseFinanceDecimal12x4,
+  AccountsPayableOverpaymentError,
+  AccountsReceivableOverpaymentError,
+  AccountsPayableInvalidStateError,
+  AccountsReceivableInvalidStateError,
+  CreditPolicyRequiredError,
+  CreditLimitExceededError,
+  InvalidPaymentTermsError,
+  InvalidFinancialAmountError,
+  OperatingExpenseError,
+  CashReconciliationError,
+} from '@trident/finance';
+
+export type {
+  AccountsPayable,
+  AccountsPayableStatus,
+  ScheduledPayment,
+  ScheduledPaymentStatus,
+  AccountsReceivable,
+  AccountsReceivableStatus,
+  BranchOperatingExpense,
+  CashReconciliation,
+  RecepcionCompraRegistradaEvent,
+  CorteZGeneradoEvent,
+  ApplyAccountsPayablePaymentCommand,
+  CreateScheduledPaymentCommand,
+  CreateReceivableChargeCommand,
+  SettleReceivableCommand,
+  RegisterOperatingExpenseCommand,
+  ReconcileCashCommand,
+  ProcessPurchaseReceiptResult,
+  CreateReceivableChargeResult,
+  ReconcileCashResult,
+  CreditLimitValidator,
+  CreditLimitEvaluationContext,
+};
+
+export {
+  parseCreditDaysFromPaymentTerms,
+  calculateDueDate,
+  applyPaymentToAccountsPayable,
+  applySettlementToAccountsReceivable,
+  calculateCashReconciliation,
+  AccountsPayableOverpaymentError,
+  AccountsReceivableOverpaymentError,
+  AccountsPayableInvalidStateError,
+  AccountsReceivableInvalidStateError,
+  CreditPolicyRequiredError,
+  CreditLimitExceededError,
+  InvalidPaymentTermsError,
+  InvalidFinancialAmountError,
+  OperatingExpenseError,
+  CashReconciliationError,
+};
+
+export interface CloudFinanceCompositionService {
+  processPurchaseReceiptEvent(
+    event: RecepcionCompraRegistradaPayload | RecepcionCompraRegistradaEvent,
+  ): Promise<ProcessPurchaseReceiptResult>;
+  onPurchaseReceiptConfirmed(
+    event: RecepcionCompraRegistradaPayload | RecepcionCompraRegistradaEvent,
+  ): Promise<ProcessPurchaseReceiptResult>;
+  getAccountsPayable(organizationId: string, id: string): Promise<AccountsPayable | null>;
+  getAccountsPayableByReceipt(
+    organizationId: string,
+    purchaseReceiptId: string,
+  ): Promise<AccountsPayable | null>;
+  applyAccountsPayablePayment(
+    command: ApplyAccountsPayablePaymentCommand,
+  ): Promise<AccountsPayable>;
+  settlePayable(command: ApplyAccountsPayablePaymentCommand): Promise<AccountsPayable>;
+  createScheduledPayment(command: CreateScheduledPaymentCommand): Promise<ScheduledPayment>;
+  schedulePayment(command: CreateScheduledPaymentCommand): Promise<ScheduledPayment>;
+  createReceivableCharge(
+    command: CreateReceivableChargeCommand,
+    validator?: CreditLimitValidator,
+  ): Promise<CreateReceivableChargeResult>;
+  getAccountsReceivable(organizationId: string, id: string): Promise<AccountsReceivable | null>;
+  getAccountsReceivableByReference(
+    organizationId: string,
+    referenceAccountId: string,
+  ): Promise<AccountsReceivable | null>;
+  settleReceivable(command: SettleReceivableCommand): Promise<AccountsReceivable>;
+  registerOperatingExpense(
+    command: RegisterOperatingExpenseCommand,
+  ): Promise<BranchOperatingExpense>;
+  reconcileCashFromCorteZ(event: CorteZGeneradoEvent): Promise<ReconcileCashResult>;
+  getCashReconciliation(organizationId: string, id: string): Promise<CashReconciliation | null>;
+  getCashReconciliationBySourceCut(
+    organizationId: string,
+    sourceCutId: string,
+  ): Promise<CashReconciliation | null>;
+}
+
+export class PostgresFinanceService implements CloudFinanceCompositionService {
+  constructor(private readonly pool: pg.Pool = getPool()) {}
+
+  async onPurchaseReceiptConfirmed(
+    event: RecepcionCompraRegistradaPayload | RecepcionCompraRegistradaEvent,
+  ): Promise<ProcessPurchaseReceiptResult> {
+    return this.processPurchaseReceiptEvent(event);
+  }
+
+  async settlePayable(command: ApplyAccountsPayablePaymentCommand): Promise<AccountsPayable> {
+    return this.applyAccountsPayablePayment(command);
+  }
+
+  async schedulePayment(command: CreateScheduledPaymentCommand): Promise<ScheduledPayment> {
+    return this.createScheduledPayment(command);
+  }
+
+  async processPurchaseReceiptEvent(
+    event: RecepcionCompraRegistradaPayload | RecepcionCompraRegistradaEvent,
+  ): Promise<ProcessPurchaseReceiptResult> {
+    const creditDays = parseCreditDaysFromPaymentTerms(event.paymentTerms);
+    const dueDate = calculateDueDate(event.receivedAt, creditDays);
+    parseFinanceDecimal12x4(event.totalAmount);
+
+    return withTenantTransaction(this.pool, event.organizationId, async (client) => {
+      // 1. Check if AP already exists
+      const existingRes = await client.query<{
+        id: string;
+        organization_id: string;
+        branch_id: string;
+        supplier_id: string;
+        purchase_receipt_id: string;
+        total_amount: string;
+        balance_due: string;
+        due_date: string | Date;
+        status: AccountsPayableStatus;
+        created_at: string | Date;
+        updated_at: string | Date;
+      }>(
+        `SELECT id, organization_id, branch_id, supplier_id, purchase_receipt_id,
+                total_amount::text, balance_due::text, due_date::text, status,
+                created_at, updated_at
+         FROM accounts_payable
+         WHERE organization_id = $1 AND purchase_receipt_id = $2;`,
+        [event.organizationId, event.recepcionId],
+      );
+
+      if (existingRes.rows.length > 0) {
+        const row = existingRes.rows[0]!;
+        return {
+          status: 'DUPLICATE_ACCEPTED',
+          accountsPayable: this.mapApRow(row),
+        };
+      }
+
+      // 2. Insert AP record atomically with ON CONFLICT safety
+      const insertRes = await client.query<{
+        id: string;
+        organization_id: string;
+        branch_id: string;
+        supplier_id: string;
+        purchase_receipt_id: string;
+        total_amount: string;
+        balance_due: string;
+        due_date: string | Date;
+        status: AccountsPayableStatus;
+        created_at: string | Date;
+        updated_at: string | Date;
+      }>(
+        `INSERT INTO accounts_payable (
+          organization_id, branch_id, supplier_id, purchase_receipt_id,
+          total_amount, balance_due, due_date, status
+        ) VALUES ($1, $2, $3, $4, $5, $5, $6, 'PENDING')
+        ON CONFLICT (organization_id, purchase_receipt_id) DO NOTHING
+        RETURNING id, organization_id, branch_id, supplier_id, purchase_receipt_id,
+                  total_amount::text, balance_due::text, due_date::text, status,
+                  created_at, updated_at;`,
+        [
+          event.organizationId,
+          event.branchId,
+          event.supplierId,
+          event.recepcionId,
+          event.totalAmount,
+          dueDate,
+        ],
+      );
+
+      if (insertRes.rows.length > 0) {
+        return {
+          status: 'APPLIED',
+          accountsPayable: this.mapApRow(insertRes.rows[0]!),
+        };
+      }
+
+      // 3. Fallback for concurrent insertion conflict
+      const concurrentRes = await client.query<{
+        id: string;
+        organization_id: string;
+        branch_id: string;
+        supplier_id: string;
+        purchase_receipt_id: string;
+        total_amount: string;
+        balance_due: string;
+        due_date: string | Date;
+        status: AccountsPayableStatus;
+        created_at: string | Date;
+        updated_at: string | Date;
+      }>(
+        `SELECT id, organization_id, branch_id, supplier_id, purchase_receipt_id,
+                total_amount::text, balance_due::text, due_date::text, status,
+                created_at, updated_at
+         FROM accounts_payable
+         WHERE organization_id = $1 AND purchase_receipt_id = $2;`,
+        [event.organizationId, event.recepcionId],
+      );
+
+      return {
+        status: 'DUPLICATE_ACCEPTED',
+        accountsPayable: this.mapApRow(concurrentRes.rows[0]!),
+      };
+    });
+  }
+
+  async getAccountsPayable(organizationId: string, id: string): Promise<AccountsPayable | null> {
+    return withTenantTransaction(this.pool, organizationId, async (client) => {
+      const res = await client.query<{
+        id: string;
+        organization_id: string;
+        branch_id: string;
+        supplier_id: string;
+        purchase_receipt_id: string;
+        total_amount: string;
+        balance_due: string;
+        due_date: string | Date;
+        status: AccountsPayableStatus;
+        created_at: string | Date;
+        updated_at: string | Date;
+      }>(
+        `SELECT id, organization_id, branch_id, supplier_id, purchase_receipt_id,
+                total_amount::text, balance_due::text, due_date::text, status,
+                created_at, updated_at
+         FROM accounts_payable
+         WHERE organization_id = $1 AND id = $2;`,
+        [organizationId, id],
+      );
+
+      if (res.rows.length === 0) return null;
+      return this.mapApRow(res.rows[0]!);
+    });
+  }
+
+  async getAccountsPayableByReceipt(
+    organizationId: string,
+    purchaseReceiptId: string,
+  ): Promise<AccountsPayable | null> {
+    return withTenantTransaction(this.pool, organizationId, async (client) => {
+      const res = await client.query<{
+        id: string;
+        organization_id: string;
+        branch_id: string;
+        supplier_id: string;
+        purchase_receipt_id: string;
+        total_amount: string;
+        balance_due: string;
+        due_date: string | Date;
+        status: AccountsPayableStatus;
+        created_at: string | Date;
+        updated_at: string | Date;
+      }>(
+        `SELECT id, organization_id, branch_id, supplier_id, purchase_receipt_id,
+                total_amount::text, balance_due::text, due_date::text, status,
+                created_at, updated_at
+         FROM accounts_payable
+         WHERE organization_id = $1 AND purchase_receipt_id = $2;`,
+        [organizationId, purchaseReceiptId],
+      );
+
+      if (res.rows.length === 0) return null;
+      return this.mapApRow(res.rows[0]!);
+    });
+  }
+
+  async applyAccountsPayablePayment(
+    command: ApplyAccountsPayablePaymentCommand,
+  ): Promise<AccountsPayable> {
+    parseFinanceDecimal12x4(command.paymentAmount);
+
+    return withTenantTransaction(this.pool, command.organizationId, async (client) => {
+      const res = await client.query<{
+        id: string;
+        organization_id: string;
+        branch_id: string;
+        supplier_id: string;
+        purchase_receipt_id: string;
+        total_amount: string;
+        balance_due: string;
+        due_date: string | Date;
+        status: AccountsPayableStatus;
+        created_at: string | Date;
+        updated_at: string | Date;
+      }>(
+        `SELECT id, organization_id, branch_id, supplier_id, purchase_receipt_id,
+                total_amount::text, balance_due::text, due_date::text, status,
+                created_at, updated_at
+         FROM accounts_payable
+         WHERE organization_id = $1 AND id = $2
+         FOR UPDATE;`,
+        [command.organizationId, command.accountsPayableId],
+      );
+
+      if (res.rows.length === 0) {
+        throw new AccountsPayableInvalidStateError(
+          `Accounts payable record '${command.accountsPayableId}' not found`,
+        );
+      }
+
+      const currentAp = this.mapApRow(res.rows[0]!);
+      const { newBalanceDue, newStatus } = applyPaymentToAccountsPayable(
+        currentAp,
+        command.paymentAmount,
+      );
+
+      const updateRes = await client.query<{
+        id: string;
+        organization_id: string;
+        branch_id: string;
+        supplier_id: string;
+        purchase_receipt_id: string;
+        total_amount: string;
+        balance_due: string;
+        due_date: string | Date;
+        status: AccountsPayableStatus;
+        created_at: string | Date;
+        updated_at: string | Date;
+      }>(
+        `UPDATE accounts_payable
+         SET balance_due = $1, status = $2, updated_at = NOW()
+         WHERE organization_id = $3 AND id = $4
+         RETURNING id, organization_id, branch_id, supplier_id, purchase_receipt_id,
+                   total_amount::text, balance_due::text, due_date::text, status,
+                   created_at, updated_at;`,
+        [newBalanceDue, newStatus, command.organizationId, command.accountsPayableId],
+      );
+
+      return this.mapApRow(updateRes.rows[0]!);
+    });
+  }
+
+  async createScheduledPayment(command: CreateScheduledPaymentCommand): Promise<ScheduledPayment> {
+    parseFinanceDecimal12x4(command.scheduledAmount);
+
+    return withTenantTransaction(this.pool, command.organizationId, async (client) => {
+      const apRes = await client.query<{ id: string }>(
+        `SELECT id FROM accounts_payable WHERE organization_id = $1 AND id = $2;`,
+        [command.organizationId, command.accountsPayableId],
+      );
+
+      if (apRes.rows.length === 0) {
+        throw new AccountsPayableInvalidStateError(
+          `Accounts payable record '${command.accountsPayableId}' not found`,
+        );
+      }
+
+      const res = await client.query<{
+        id: string;
+        organization_id: string;
+        branch_id: string;
+        accounts_payable_id: string;
+        scheduled_amount: string;
+        scheduled_date: string | Date;
+        status: ScheduledPaymentStatus;
+        created_at: string | Date;
+        updated_at: string | Date;
+      }>(
+        `INSERT INTO scheduled_payments (
+          organization_id, branch_id, accounts_payable_id, scheduled_amount, scheduled_date, status
+        ) VALUES ($1, $2, $3, $4, $5, 'PENDING')
+        RETURNING id, organization_id, branch_id, accounts_payable_id,
+                  scheduled_amount::text, scheduled_date::text, status, created_at, updated_at;`,
+        [
+          command.organizationId,
+          command.branchId,
+          command.accountsPayableId,
+          command.scheduledAmount,
+          command.scheduledDate,
+        ],
+      );
+
+      const row = res.rows[0]!;
+      return {
+        id: row.id,
+        organizationId: row.organization_id,
+        branchId: row.branch_id,
+        accountsPayableId: row.accounts_payable_id,
+        scheduledAmount: row.scheduled_amount,
+        scheduledDate:
+          typeof row.scheduled_date === 'string'
+            ? row.scheduled_date
+            : row.scheduled_date.toISOString().slice(0, 10),
+        status: row.status,
+        createdAt:
+          typeof row.created_at === 'string' ? row.created_at : row.created_at.toISOString(),
+        updatedAt:
+          typeof row.updated_at === 'string' ? row.updated_at : row.updated_at.toISOString(),
+      };
+    });
+  }
+
+  async createReceivableCharge(
+    command: CreateReceivableChargeCommand,
+    validator?: CreditLimitValidator,
+  ): Promise<CreateReceivableChargeResult> {
+    parseFinanceDecimal12x4(command.totalAmount);
+
+    return withTenantTransaction(this.pool, command.organizationId, async (client) => {
+      // 1. Check if AR already exists by stable reference_account_id
+      const existingRes = await client.query<{
+        id: string;
+        organization_id: string;
+        branch_id: string;
+        customer_id: string;
+        reference_account_id: string;
+        total_amount: string;
+        balance_due: string;
+        due_date: string | Date;
+        status: AccountsReceivableStatus;
+        created_at: string | Date;
+        updated_at: string | Date;
+      }>(
+        `SELECT id, organization_id, branch_id, customer_id, reference_account_id,
+                total_amount::text, balance_due::text, due_date::text, status,
+                created_at, updated_at
+         FROM accounts_receivable
+         WHERE organization_id = $1 AND reference_account_id = $2;`,
+        [command.organizationId, command.referenceAccountId],
+      );
+
+      if (existingRes.rows.length > 0) {
+        return {
+          status: 'DUPLICATE_ACCEPTED',
+          accountsReceivable: this.mapArRow(existingRes.rows[0]!),
+        };
+      }
+
+      // 2. Validate credit policy if required (OQ-SSOT-03 fail-closed)
+      if (command.requireCreditPolicy || command.requiresCreditCheck) {
+        if (!validator) {
+          throw new CreditPolicyRequiredError();
+        }
+
+        const balRes = await client.query<{ current_balance: string }>(
+          `SELECT COALESCE(SUM(balance_due), 0.0000)::text as current_balance
+           FROM accounts_receivable
+           WHERE organization_id = $1 AND customer_id = $2 AND status IN ('PENDING', 'OVERDUE');`,
+          [command.organizationId, command.customerId],
+        );
+        const currentBalance = balRes.rows[0]?.current_balance ?? '0.0000';
+
+        const evalResult = await validator.evaluateCredit({
+          organizationId: command.organizationId,
+          branchId: command.branchId,
+          customerId: command.customerId,
+          currentReceivableBalance: currentBalance,
+          requestedCreditAmount: command.totalAmount,
+          referenceAccountId: command.referenceAccountId,
+        });
+
+        if (!evalResult.authorized) {
+          throw new CreditLimitExceededError(
+            evalResult.reason ?? 'Credit limit validation failed for requested charge',
+          );
+        }
+      }
+
+      // 3. Insert AR record with ON CONFLICT safety
+      const insertRes = await client.query<{
+        id: string;
+        organization_id: string;
+        branch_id: string;
+        customer_id: string;
+        reference_account_id: string;
+        total_amount: string;
+        balance_due: string;
+        due_date: string | Date;
+        status: AccountsReceivableStatus;
+        created_at: string | Date;
+        updated_at: string | Date;
+      }>(
+        `INSERT INTO accounts_receivable (
+          organization_id, branch_id, customer_id, reference_account_id,
+          total_amount, balance_due, due_date, status
+        ) VALUES ($1, $2, $3, $4, $5, $5, $6, 'PENDING')
+        ON CONFLICT (organization_id, reference_account_id) DO NOTHING
+        RETURNING id, organization_id, branch_id, customer_id, reference_account_id,
+                  total_amount::text, balance_due::text, due_date::text, status,
+                  created_at, updated_at;`,
+        [
+          command.organizationId,
+          command.branchId,
+          command.customerId,
+          command.referenceAccountId,
+          command.totalAmount,
+          command.dueDate,
+        ],
+      );
+
+      if (insertRes.rows.length > 0) {
+        return {
+          status: 'APPLIED',
+          accountsReceivable: this.mapArRow(insertRes.rows[0]!),
+        };
+      }
+
+      // 4. Concurrent conflict fallback
+      const concurrentRes = await client.query<{
+        id: string;
+        organization_id: string;
+        branch_id: string;
+        customer_id: string;
+        reference_account_id: string;
+        total_amount: string;
+        balance_due: string;
+        due_date: string | Date;
+        status: AccountsReceivableStatus;
+        created_at: string | Date;
+        updated_at: string | Date;
+      }>(
+        `SELECT id, organization_id, branch_id, customer_id, reference_account_id,
+                total_amount::text, balance_due::text, due_date::text, status,
+                created_at, updated_at
+         FROM accounts_receivable
+         WHERE organization_id = $1 AND reference_account_id = $2;`,
+        [command.organizationId, command.referenceAccountId],
+      );
+
+      return {
+        status: 'DUPLICATE_ACCEPTED',
+        accountsReceivable: this.mapArRow(concurrentRes.rows[0]!),
+      };
+    });
+  }
+
+  async getAccountsReceivable(
+    organizationId: string,
+    id: string,
+  ): Promise<AccountsReceivable | null> {
+    return withTenantTransaction(this.pool, organizationId, async (client) => {
+      const res = await client.query<{
+        id: string;
+        organization_id: string;
+        branch_id: string;
+        customer_id: string;
+        reference_account_id: string;
+        total_amount: string;
+        balance_due: string;
+        due_date: string | Date;
+        status: AccountsReceivableStatus;
+        created_at: string | Date;
+        updated_at: string | Date;
+      }>(
+        `SELECT id, organization_id, branch_id, customer_id, reference_account_id,
+                total_amount::text, balance_due::text, due_date::text, status,
+                created_at, updated_at
+         FROM accounts_receivable
+         WHERE organization_id = $1 AND id = $2;`,
+        [organizationId, id],
+      );
+
+      if (res.rows.length === 0) return null;
+      return this.mapArRow(res.rows[0]!);
+    });
+  }
+
+  async getAccountsReceivableByReference(
+    organizationId: string,
+    referenceAccountId: string,
+  ): Promise<AccountsReceivable | null> {
+    return withTenantTransaction(this.pool, organizationId, async (client) => {
+      const res = await client.query<{
+        id: string;
+        organization_id: string;
+        branch_id: string;
+        customer_id: string;
+        reference_account_id: string;
+        total_amount: string;
+        balance_due: string;
+        due_date: string | Date;
+        status: AccountsReceivableStatus;
+        created_at: string | Date;
+        updated_at: string | Date;
+      }>(
+        `SELECT id, organization_id, branch_id, customer_id, reference_account_id,
+                total_amount::text, balance_due::text, due_date::text, status,
+                created_at, updated_at
+         FROM accounts_receivable
+         WHERE organization_id = $1 AND reference_account_id = $2;`,
+        [organizationId, referenceAccountId],
+      );
+
+      if (res.rows.length === 0) return null;
+      return this.mapArRow(res.rows[0]!);
+    });
+  }
+
+  async settleReceivable(command: SettleReceivableCommand): Promise<AccountsReceivable> {
+    parseFinanceDecimal12x4(command.settlementAmount);
+
+    return withTenantTransaction(this.pool, command.organizationId, async (client) => {
+      const res = await client.query<{
+        id: string;
+        organization_id: string;
+        branch_id: string;
+        customer_id: string;
+        reference_account_id: string;
+        total_amount: string;
+        balance_due: string;
+        due_date: string | Date;
+        status: AccountsReceivableStatus;
+        created_at: string | Date;
+        updated_at: string | Date;
+      }>(
+        `SELECT id, organization_id, branch_id, customer_id, reference_account_id,
+                total_amount::text, balance_due::text, due_date::text, status,
+                created_at, updated_at
+         FROM accounts_receivable
+         WHERE organization_id = $1 AND id = $2
+         FOR UPDATE;`,
+        [command.organizationId, command.accountsReceivableId],
+      );
+
+      if (res.rows.length === 0) {
+        throw new AccountsReceivableInvalidStateError(
+          `Accounts receivable record '${command.accountsReceivableId}' not found`,
+        );
+      }
+
+      const currentAr = this.mapArRow(res.rows[0]!);
+      const { newBalanceDue, newStatus } = applySettlementToAccountsReceivable(
+        currentAr,
+        command.settlementAmount,
+      );
+
+      const updateRes = await client.query<{
+        id: string;
+        organization_id: string;
+        branch_id: string;
+        customer_id: string;
+        reference_account_id: string;
+        total_amount: string;
+        balance_due: string;
+        due_date: string | Date;
+        status: AccountsReceivableStatus;
+        created_at: string | Date;
+        updated_at: string | Date;
+      }>(
+        `UPDATE accounts_receivable
+         SET balance_due = $1, status = $2, updated_at = NOW()
+         WHERE organization_id = $3 AND id = $4
+         RETURNING id, organization_id, branch_id, customer_id, reference_account_id,
+                   total_amount::text, balance_due::text, due_date::text, status,
+                   created_at, updated_at;`,
+        [newBalanceDue, newStatus, command.organizationId, command.accountsReceivableId],
+      );
+
+      return this.mapArRow(updateRes.rows[0]!);
+    });
+  }
+
+  async registerOperatingExpense(
+    command: RegisterOperatingExpenseCommand,
+  ): Promise<BranchOperatingExpense> {
+    parseFinanceDecimal12x4(command.amount);
+    if (!command.category || command.category.trim().length === 0) {
+      throw new OperatingExpenseError('Operating expense category must be specified');
+    }
+
+    return withTenantTransaction(this.pool, command.organizationId, async (client) => {
+      const res = await client.query<{
+        id: string;
+        organization_id: string;
+        branch_id: string;
+        amount: string;
+        category: string;
+        receipt_attachment_url: string | null;
+        notes: string | null;
+        expense_date: string | Date;
+        created_at: string | Date;
+      }>(
+        `INSERT INTO branch_operating_expenses (
+          organization_id, branch_id, amount, category, receipt_attachment_url, notes, expense_date
+        ) VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7, NOW()))
+        RETURNING id, organization_id, branch_id, amount::text, category,
+                  receipt_attachment_url, notes, expense_date, created_at;`,
+        [
+          command.organizationId,
+          command.branchId,
+          command.amount,
+          command.category.trim(),
+          command.receiptAttachmentUrl ?? null,
+          command.notes ?? null,
+          command.expenseDate ?? null,
+        ],
+      );
+
+      const row = res.rows[0]!;
+      return {
+        id: row.id,
+        organizationId: row.organization_id,
+        branchId: row.branch_id,
+        amount: row.amount,
+        category: row.category,
+        receiptAttachmentUrl: row.receipt_attachment_url,
+        notes: row.notes,
+        expenseDate:
+          typeof row.expense_date === 'string' ? row.expense_date : row.expense_date.toISOString(),
+        createdAt:
+          typeof row.created_at === 'string' ? row.created_at : row.created_at.toISOString(),
+      };
+    });
+  }
+
+  async reconcileCashFromCorteZ(event: CorteZGeneradoEvent): Promise<ReconcileCashResult> {
+    const sourceCutId = event.corteZId ?? event.sourceCutId ?? event.folio;
+    if (!sourceCutId || sourceCutId.trim().length === 0) {
+      throw new CashReconciliationError(
+        'Corte Z closing event must provide a deterministic source cut identifier',
+      );
+    }
+
+    parseFinanceDecimal12x4(event.expectedCash);
+    parseFinanceDecimal12x4(event.actualCash);
+
+    return withTenantTransaction(this.pool, event.organizationId, async (client) => {
+      // 1. Check if reconciliation already exists
+      const existingRes = await client.query<{
+        id: string;
+        organization_id: string;
+        branch_id: string;
+        source_cut_id: string;
+        operational_date: string | Date;
+        expected_cash: string;
+        actual_cash: string;
+        variance: string;
+        has_variance: boolean;
+        created_at: string | Date;
+      }>(
+        `SELECT id, organization_id, branch_id, source_cut_id, operational_date::text,
+                expected_cash::text, actual_cash::text, variance::text, has_variance, created_at
+         FROM cash_reconciliations
+         WHERE organization_id = $1 AND source_cut_id = $2;`,
+        [event.organizationId, sourceCutId.trim()],
+      );
+
+      if (existingRes.rows.length > 0) {
+        return {
+          status: 'DUPLICATE_ACCEPTED',
+          reconciliation: this.mapRecRow(existingRes.rows[0]!),
+        };
+      }
+
+      // 2. Pure domain calculation
+      const calculated = calculateCashReconciliation({
+        expectedCash: event.expectedCash,
+        actualCash: event.actualCash,
+      });
+
+      // 3. Insert reconciliation record
+      const insertRes = await client.query<{
+        id: string;
+        organization_id: string;
+        branch_id: string;
+        source_cut_id: string;
+        operational_date: string | Date;
+        expected_cash: string;
+        actual_cash: string;
+        variance: string;
+        has_variance: boolean;
+        created_at: string | Date;
+      }>(
+        `INSERT INTO cash_reconciliations (
+          organization_id, branch_id, source_cut_id, operational_date,
+          expected_cash, actual_cash, variance, has_variance
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        ON CONFLICT (organization_id, source_cut_id) DO NOTHING
+        RETURNING id, organization_id, branch_id, source_cut_id, operational_date::text,
+                  expected_cash::text, actual_cash::text, variance::text, has_variance, created_at;`,
+        [
+          event.organizationId,
+          event.branchId,
+          sourceCutId.trim(),
+          event.operationalDate,
+          calculated.expectedCash,
+          calculated.actualCash,
+          calculated.variance,
+          calculated.hasVariance,
+        ],
+      );
+
+      if (insertRes.rows.length > 0) {
+        return {
+          status: 'APPLIED',
+          reconciliation: this.mapRecRow(insertRes.rows[0]!),
+        };
+      }
+
+      // 4. Concurrent conflict fallback
+      const concurrentRes = await client.query<{
+        id: string;
+        organization_id: string;
+        branch_id: string;
+        source_cut_id: string;
+        operational_date: string | Date;
+        expected_cash: string;
+        actual_cash: string;
+        variance: string;
+        has_variance: boolean;
+        created_at: string | Date;
+      }>(
+        `SELECT id, organization_id, branch_id, source_cut_id, operational_date::text,
+                expected_cash::text, actual_cash::text, variance::text, has_variance, created_at
+         FROM cash_reconciliations
+         WHERE organization_id = $1 AND source_cut_id = $2;`,
+        [event.organizationId, sourceCutId.trim()],
+      );
+
+      return {
+        status: 'DUPLICATE_ACCEPTED',
+        reconciliation: this.mapRecRow(concurrentRes.rows[0]!),
+      };
+    });
+  }
+
+  async getCashReconciliation(
+    organizationId: string,
+    id: string,
+  ): Promise<CashReconciliation | null> {
+    return withTenantTransaction(this.pool, organizationId, async (client) => {
+      const res = await client.query<{
+        id: string;
+        organization_id: string;
+        branch_id: string;
+        source_cut_id: string;
+        operational_date: string | Date;
+        expected_cash: string;
+        actual_cash: string;
+        variance: string;
+        has_variance: boolean;
+        created_at: string | Date;
+      }>(
+        `SELECT id, organization_id, branch_id, source_cut_id, operational_date::text,
+                expected_cash::text, actual_cash::text, variance::text, has_variance, created_at
+         FROM cash_reconciliations
+         WHERE organization_id = $1 AND id = $2;`,
+        [organizationId, id],
+      );
+
+      if (res.rows.length === 0) return null;
+      return this.mapRecRow(res.rows[0]!);
+    });
+  }
+
+  async getCashReconciliationBySourceCut(
+    organizationId: string,
+    sourceCutId: string,
+  ): Promise<CashReconciliation | null> {
+    return withTenantTransaction(this.pool, organizationId, async (client) => {
+      const res = await client.query<{
+        id: string;
+        organization_id: string;
+        branch_id: string;
+        source_cut_id: string;
+        operational_date: string | Date;
+        expected_cash: string;
+        actual_cash: string;
+        variance: string;
+        has_variance: boolean;
+        created_at: string | Date;
+      }>(
+        `SELECT id, organization_id, branch_id, source_cut_id, operational_date::text,
+                expected_cash::text, actual_cash::text, variance::text, has_variance, created_at
+         FROM cash_reconciliations
+         WHERE organization_id = $1 AND source_cut_id = $2;`,
+        [organizationId, sourceCutId],
+      );
+
+      if (res.rows.length === 0) return null;
+      return this.mapRecRow(res.rows[0]!);
+    });
+  }
+
+  private mapApRow(row: {
+    id: string;
+    organization_id: string;
+    branch_id: string;
+    supplier_id: string;
+    purchase_receipt_id: string;
+    total_amount: string;
+    balance_due: string;
+    due_date: string | Date;
+    status: AccountsPayableStatus;
+    created_at: string | Date;
+    updated_at: string | Date;
+  }): AccountsPayable {
+    return {
+      id: row.id,
+      organizationId: row.organization_id,
+      branchId: row.branch_id,
+      supplierId: row.supplier_id,
+      purchaseReceiptId: row.purchase_receipt_id,
+      totalAmount: row.total_amount,
+      balanceDue: row.balance_due,
+      dueDate:
+        typeof row.due_date === 'string' ? row.due_date : row.due_date.toISOString().slice(0, 10),
+      status: row.status,
+      createdAt: typeof row.created_at === 'string' ? row.created_at : row.created_at.toISOString(),
+      updatedAt: typeof row.updated_at === 'string' ? row.updated_at : row.updated_at.toISOString(),
+    };
+  }
+
+  private mapArRow(row: {
+    id: string;
+    organization_id: string;
+    branch_id: string;
+    customer_id: string;
+    reference_account_id: string;
+    total_amount: string;
+    balance_due: string;
+    due_date: string | Date;
+    status: AccountsReceivableStatus;
+    created_at: string | Date;
+    updated_at: string | Date;
+  }): AccountsReceivable {
+    return {
+      id: row.id,
+      organizationId: row.organization_id,
+      branchId: row.branch_id,
+      customerId: row.customer_id,
+      referenceAccountId: row.reference_account_id,
+      totalAmount: row.total_amount,
+      balanceDue: row.balance_due,
+      dueDate:
+        typeof row.due_date === 'string' ? row.due_date : row.due_date.toISOString().slice(0, 10),
+      status: row.status,
+      createdAt: typeof row.created_at === 'string' ? row.created_at : row.created_at.toISOString(),
+      updatedAt: typeof row.updated_at === 'string' ? row.updated_at : row.updated_at.toISOString(),
+    };
+  }
+
+  private mapRecRow(row: {
+    id: string;
+    organization_id: string;
+    branch_id: string;
+    source_cut_id: string;
+    operational_date: string | Date;
+    expected_cash: string;
+    actual_cash: string;
+    variance: string;
+    has_variance: boolean;
+    created_at: string | Date;
+  }): CashReconciliation {
+    return {
+      id: row.id,
+      organizationId: row.organization_id,
+      branchId: row.branch_id,
+      sourceCutId: row.source_cut_id,
+      operationalDate:
+        typeof row.operational_date === 'string'
+          ? row.operational_date
+          : row.operational_date.toISOString().slice(0, 10),
+      expectedCash: row.expected_cash,
+      actualCash: row.actual_cash,
+      variance: row.variance,
+      hasVariance: Boolean(row.has_variance),
+      createdAt: typeof row.created_at === 'string' ? row.created_at : row.created_at.toISOString(),
+    };
+  }
+}
+
 export * from '@trident/procurement';

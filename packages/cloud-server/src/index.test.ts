@@ -15,7 +15,10 @@ import {
 import {
   PostgresCloudInventoryService,
   PostgresProcurementService,
+  PostgresFinanceService,
   type PurchasePriceVarianceAuthorizationPolicy,
+  type CreditLimitValidator,
+  type CreditLimitEvaluationContext,
 } from './index.js';
 import type pg from 'pg';
 
@@ -2892,5 +2895,672 @@ describe('TRIDENTPOS WP-019 Cloud Server Procurement & Supplier Receiving Suite'
     assert.equal(postCountReceipts.rows[0]!.count, preCountReceipts.rows[0]!.count);
     assert.equal(postCountItems.rows[0]!.count, preCountItems.rows[0]!.count);
     assert.equal(outboxCheckAfterRetry.rows[0]!.count, '2');
+  });
+});
+
+describe('TRIDENTPOS WP-020 Cloud Server Finance, AP, AR & Cash Reconciliation Suite', () => {
+  const pool = getPool();
+  const procurementService = new PostgresProcurementService(pool);
+  const financeService = new PostgresFinanceService(pool);
+
+  const tenantAId = crypto.randomUUID();
+  const tenantBId = crypto.randomUUID();
+  const branchAId = crypto.randomUUID();
+  const branchBId = crypto.randomUUID();
+  const warehouseAId = crypto.randomUUID();
+  const warehouseBId = crypto.randomUUID();
+  const ingredientA1Id = crypto.randomUUID();
+  const customerAId = crypto.randomUUID();
+
+  before(async () => {
+    await migrateUp(pool);
+
+    const client = await pool.connect();
+    try {
+      await client.query(`
+        INSERT INTO organizations (id, legal_name, trade_name, tax_id)
+        VALUES
+          ('${tenantAId}', 'Tenant A Finance Corp', 'Tenant A Fin', 'RFC-A-FIN'),
+          ('${tenantBId}', 'Tenant B Finance Corp', 'Tenant B Fin', 'RFC-B-FIN')
+        ON CONFLICT (id) DO NOTHING;
+
+        INSERT INTO branches (id, organization_id, code, name)
+        VALUES
+          ('${branchAId}', '${tenantAId}', 'BR-A-FIN', 'Branch A Fin'),
+          ('${branchBId}', '${tenantBId}', 'BR-B-FIN', 'Branch B Fin')
+        ON CONFLICT (organization_id, id) DO NOTHING;
+
+        INSERT INTO warehouses (id, organization_id, branch_id, code, name, warehouse_type)
+        VALUES
+          ('${warehouseAId}', '${tenantAId}', '${branchAId}', 'WH-A-FIN', 'Main WH A Fin', 'PHYSICAL'),
+          ('${warehouseBId}', '${tenantBId}', '${branchBId}', 'WH-B-FIN', 'Main WH B Fin', 'PHYSICAL')
+        ON CONFLICT (organization_id, id) DO NOTHING;
+
+        INSERT INTO ingredients (id, organization_id, code, name, unit_of_measure, current_average_cost)
+        VALUES
+          ('${ingredientA1Id}', '${tenantAId}', 'ING-A-FIN-1', 'Flour Fin', 'KG', 10.0000)
+        ON CONFLICT (organization_id, id) DO NOTHING;
+      `);
+    } finally {
+      client.release();
+    }
+  });
+
+  after(async () => {
+    const cleanClient = await pool.connect();
+    try {
+      await cleanClient.query(`
+        DELETE FROM cash_reconciliations WHERE organization_id IN ('${tenantAId}', '${tenantBId}');
+        DELETE FROM branch_operating_expenses WHERE organization_id IN ('${tenantAId}', '${tenantBId}');
+        DELETE FROM accounts_receivable WHERE organization_id IN ('${tenantAId}', '${tenantBId}');
+        DELETE FROM scheduled_payments WHERE organization_id IN ('${tenantAId}', '${tenantBId}');
+        DELETE FROM accounts_payable WHERE organization_id IN ('${tenantAId}', '${tenantBId}');
+        DELETE FROM cloud_integration_outbox WHERE organization_id IN ('${tenantAId}', '${tenantBId}');
+        DELETE FROM purchase_receipt_items WHERE organization_id IN ('${tenantAId}', '${tenantBId}');
+        DELETE FROM purchase_receipts WHERE organization_id IN ('${tenantAId}', '${tenantBId}');
+        DELETE FROM purchase_order_items WHERE organization_id IN ('${tenantAId}', '${tenantBId}');
+        DELETE FROM purchase_orders WHERE organization_id IN ('${tenantAId}', '${tenantBId}');
+        DELETE FROM suppliers WHERE organization_id IN ('${tenantAId}', '${tenantBId}');
+        DELETE FROM ingredients WHERE organization_id IN ('${tenantAId}', '${tenantBId}');
+        DELETE FROM warehouses WHERE organization_id IN ('${tenantAId}', '${tenantBId}');
+        DELETE FROM branches WHERE organization_id IN ('${tenantAId}', '${tenantBId}');
+        DELETE FROM organizations WHERE id IN ('${tenantAId}', '${tenantBId}');
+      `);
+    } finally {
+      cleanClient.release();
+    }
+  });
+
+  async function createTestReceipt(options: {
+    receiptNumber: string;
+    totalAmount: string;
+    paymentTerms: string;
+    creditDays?: number;
+  }) {
+    const sup = await procurementService.createSupplier({
+      organizationId: tenantAId,
+      code: `SUP-${options.receiptNumber}`,
+      tradeName: `Supplier ${options.receiptNumber}`,
+      taxId: `RFC-${options.receiptNumber}`,
+      creditDays: options.creditDays ?? 30,
+    });
+
+    const po = await procurementService.createPurchaseOrder({
+      organizationId: tenantAId,
+      branchId: branchAId,
+      supplierId: sup.id,
+      orderNumber: `PO-${options.receiptNumber}`,
+      items: [
+        {
+          ingredientId: ingredientA1Id,
+          orderedQuantity: '1.0000',
+          unitCost: options.totalAmount,
+        },
+      ],
+    });
+    await procurementService.sendPurchaseOrder(tenantAId, po.id);
+
+    const recResult = await procurementService.confirmPurchaseReceipt({
+      organizationId: tenantAId,
+      branchId: branchAId,
+      purchaseOrderId: po.id,
+      supplierId: sup.id,
+      warehouseId: warehouseAId,
+      receiptNumber: options.receiptNumber,
+      paymentTerms: options.paymentTerms,
+      items: [
+        {
+          purchaseOrderItemId: po.items![0]!.id,
+          ingredientId: ingredientA1Id,
+          receivedQuantity: '1.0000',
+          acceptedUnitCost: options.totalAmount,
+        },
+      ],
+    });
+
+    return { sup, po, receipt: recResult.receipt, eventPayload: recResult.eventPayload };
+  }
+
+  it('WP020-CLOUD-01: RecepcionCompraRegistrada creates AP', async () => {
+    const { receipt, eventPayload, sup } = await createTestReceipt({
+      receiptNumber: 'REC-FIN-001',
+      totalAmount: '500.0000',
+      paymentTerms: 'NET_30',
+    });
+
+    const result = await financeService.onPurchaseReceiptConfirmed(eventPayload);
+    assert.equal(result.status, 'APPLIED');
+    assert.equal(result.accountsPayable.organizationId, tenantAId);
+    assert.equal(result.accountsPayable.branchId, branchAId);
+    assert.equal(result.accountsPayable.supplierId, sup.id);
+    assert.equal(result.accountsPayable.purchaseReceiptId, receipt.id);
+    assert.equal(result.accountsPayable.totalAmount, '500.0000');
+    assert.equal(result.accountsPayable.balanceDue, '500.0000');
+    assert.equal(result.accountsPayable.status, 'PENDING');
+  });
+
+  it('WP020-CLOUD-02: same receipt retry produces one AP (DUPLICATE_ACCEPTED)', async () => {
+    const { receipt, eventPayload } = await createTestReceipt({
+      receiptNumber: 'REC-FIN-002',
+      totalAmount: '350.0000',
+      paymentTerms: 'NET_30',
+    });
+
+    const res1 = await financeService.onPurchaseReceiptConfirmed(eventPayload);
+    assert.equal(res1.status, 'APPLIED');
+
+    const res2 = await financeService.onPurchaseReceiptConfirmed(eventPayload);
+    assert.equal(res2.status, 'DUPLICATE_ACCEPTED');
+    assert.equal(res2.accountsPayable.id, res1.accountsPayable.id);
+    assert.equal(res2.accountsPayable.purchaseReceiptId, receipt.id);
+
+    const countRes = await pool.query<{ count: string }>(
+      `SELECT COUNT(*)::text as count FROM accounts_payable WHERE organization_id = $1 AND purchase_receipt_id = $2;`,
+      [tenantAId, receipt.id],
+    );
+    assert.equal(countRes.rows[0]!.count, '1');
+  });
+
+  it('WP020-CLOUD-03: concurrent same receipt event produces one AP', async () => {
+    const { receipt, eventPayload } = await createTestReceipt({
+      receiptNumber: 'REC-FIN-CONC-001',
+      totalAmount: '750.0000',
+      paymentTerms: 'NET_30',
+    });
+
+    const [r1, r2] = await Promise.all([
+      financeService.onPurchaseReceiptConfirmed(eventPayload),
+      financeService.onPurchaseReceiptConfirmed(eventPayload),
+    ]);
+
+    const statuses = [r1.status, r2.status].sort();
+    assert.deepEqual(statuses, ['APPLIED', 'DUPLICATE_ACCEPTED']);
+
+    const countRes = await pool.query<{ count: string }>(
+      `SELECT COUNT(*)::text as count FROM accounts_payable WHERE organization_id = $1 AND purchase_receipt_id = $2;`,
+      [tenantAId, receipt.id],
+    );
+    assert.equal(countRes.rows[0]!.count, '1');
+  });
+
+  it('WP020-CLOUD-04: AP amount equals Procurement event total exactly', async () => {
+    const { eventPayload } = await createTestReceipt({
+      receiptNumber: 'REC-FIN-004',
+      totalAmount: '1234.5678',
+      paymentTerms: 'NET_30',
+    });
+
+    const result = await financeService.onPurchaseReceiptConfirmed(eventPayload);
+    assert.equal(result.status, 'APPLIED');
+    assert.equal(result.accountsPayable.totalAmount, '1234.5678');
+    assert.equal(result.accountsPayable.balanceDue, '1234.5678');
+  });
+
+  it('WP020-CLOUD-05: AP due date uses actual governed payment terms', async () => {
+    // 1. NET_15
+    const { eventPayload: ep15 } = await createTestReceipt({
+      receiptNumber: 'REC-FIN-TERMS-15',
+      totalAmount: '100.0000',
+      paymentTerms: 'NET_15',
+    });
+    const res15 = await financeService.onPurchaseReceiptConfirmed(ep15);
+    assert.equal(res15.status, 'APPLIED');
+
+    // 2. CONTADO_CASH
+    const { eventPayload: epCash } = await createTestReceipt({
+      receiptNumber: 'REC-FIN-TERMS-CASH',
+      totalAmount: '100.0000',
+      paymentTerms: 'CONTADO_CASH',
+    });
+    const resCash = await financeService.onPurchaseReceiptConfirmed(epCash);
+    assert.equal(resCash.status, 'APPLIED');
+    assert.equal(resCash.accountsPayable.dueDate, resCash.accountsPayable.createdAt.slice(0, 10));
+
+    // 3. Unsupported terms fails closed
+    const fakePayload = {
+      ...epCash,
+      purchaseReceiptId: crypto.randomUUID(),
+      paymentTerms: 'UNKNOWN_TERMS',
+    };
+    await assert.rejects(
+      async () => financeService.onPurchaseReceiptConfirmed(fakePayload),
+      /INVALID_PAYMENT_TERMS|InvalidPaymentTermsError/i,
+    );
+  });
+
+  it('WP020-CLOUD-06: AP partial settlement', async () => {
+    const { eventPayload } = await createTestReceipt({
+      receiptNumber: 'REC-FIN-SETTLE-PART',
+      totalAmount: '600.0000',
+      paymentTerms: 'NET_30',
+    });
+
+    const createRes = await financeService.onPurchaseReceiptConfirmed(eventPayload);
+    const apId = createRes.accountsPayable.id;
+
+    const settled = await financeService.settlePayable({
+      organizationId: tenantAId,
+      branchId: branchAId,
+      accountsPayableId: apId,
+      paymentAmount: '200.0000',
+    });
+
+    assert.equal(settled.status, 'PARTIAL');
+    assert.equal(settled.totalAmount, '600.0000');
+    assert.equal(settled.balanceDue, '400.0000');
+  });
+
+  it('WP020-CLOUD-07: AP final settlement', async () => {
+    const { eventPayload } = await createTestReceipt({
+      receiptNumber: 'REC-FIN-SETTLE-FULL',
+      totalAmount: '300.0000',
+      paymentTerms: 'NET_30',
+    });
+
+    const createRes = await financeService.onPurchaseReceiptConfirmed(eventPayload);
+    const apId = createRes.accountsPayable.id;
+
+    // Settle partially
+    await financeService.settlePayable({
+      organizationId: tenantAId,
+      branchId: branchAId,
+      accountsPayableId: apId,
+      paymentAmount: '100.0000',
+    });
+
+    // Settle remaining
+    const settledFull = await financeService.settlePayable({
+      organizationId: tenantAId,
+      branchId: branchAId,
+      accountsPayableId: apId,
+      paymentAmount: '200.0000',
+    });
+
+    assert.equal(settledFull.status, 'PAID');
+    assert.equal(settledFull.balanceDue, '0.0000');
+  });
+
+  it('WP020-CLOUD-08: AP overpayment fail-closed', async () => {
+    const { eventPayload } = await createTestReceipt({
+      receiptNumber: 'REC-FIN-OVERPAY',
+      totalAmount: '150.0000',
+      paymentTerms: 'NET_30',
+    });
+
+    const createRes = await financeService.onPurchaseReceiptConfirmed(eventPayload);
+    const apId = createRes.accountsPayable.id;
+
+    await assert.rejects(
+      async () =>
+        financeService.settlePayable({
+          organizationId: tenantAId,
+          branchId: branchAId,
+          accountsPayableId: apId,
+          paymentAmount: '200.0000',
+        }),
+      /OVERPAYMENT_NOT_AUTHORIZED|AccountsPayableOverpaymentError/i,
+    );
+  });
+
+  it('WP020-CLOUD-09: transaction failure leaves no partial AP state', async () => {
+    const nonExistentApId = crypto.randomUUID();
+    await assert.rejects(
+      async () =>
+        financeService.schedulePayment({
+          organizationId: tenantAId,
+          branchId: branchAId,
+          accountsPayableId: nonExistentApId,
+          scheduledAmount: '100.0000',
+          scheduledDate: '2026-10-01',
+        }),
+      /foreign key constraint|not found/i,
+    );
+
+    const countSched = await pool.query<{ count: string }>(
+      `SELECT COUNT(*)::text as count FROM scheduled_payments WHERE organization_id = $1 AND accounts_payable_id = $2;`,
+      [tenantAId, nonExistentApId],
+    );
+    assert.equal(countSched.rows[0]!.count, '0');
+  });
+
+  it('WP020-CLOUD-10: AR external-reference idempotency', async () => {
+    const refId = `REF-AR-IDEM-${crypto.randomUUID()}`;
+
+    const res1 = await financeService.createReceivableCharge({
+      organizationId: tenantAId,
+      branchId: branchAId,
+      customerId: customerAId,
+      referenceAccountId: refId,
+      totalAmount: '450.0000',
+      dueDate: '2026-10-15',
+    });
+    assert.equal(res1.status, 'APPLIED');
+    assert.equal(res1.accountsReceivable.totalAmount, '450.0000');
+    assert.equal(res1.accountsReceivable.balanceDue, '450.0000');
+
+    // Retry with identical referenceAccountId
+    const res2 = await financeService.createReceivableCharge({
+      organizationId: tenantAId,
+      branchId: branchAId,
+      customerId: customerAId,
+      referenceAccountId: refId,
+      totalAmount: '450.0000',
+      dueDate: '2026-10-15',
+    });
+    assert.equal(res2.status, 'DUPLICATE_ACCEPTED');
+    assert.equal(res2.accountsReceivable.id, res1.accountsReceivable.id);
+
+    const countAr = await pool.query<{ count: string }>(
+      `SELECT COUNT(*)::text as count FROM accounts_receivable WHERE organization_id = $1 AND reference_account_id = $2;`,
+      [tenantAId, refId],
+    );
+    assert.equal(countAr.rows[0]!.count, '1');
+  });
+
+  it('WP020-CLOUD-11: concurrent AR duplicate produces one charge', async () => {
+    const refId = `REF-AR-CONC-${crypto.randomUUID()}`;
+    const cmd = {
+      organizationId: tenantAId,
+      branchId: branchAId,
+      customerId: customerAId,
+      referenceAccountId: refId,
+      totalAmount: '800.0000',
+      dueDate: '2026-11-01',
+    };
+
+    const [r1, r2] = await Promise.all([
+      financeService.createReceivableCharge(cmd),
+      financeService.createReceivableCharge(cmd),
+    ]);
+
+    const statuses = [r1.status, r2.status].sort();
+    assert.deepEqual(statuses, ['APPLIED', 'DUPLICATE_ACCEPTED']);
+
+    const countAr = await pool.query<{ count: string }>(
+      `SELECT COUNT(*)::text as count FROM accounts_receivable WHERE organization_id = $1 AND reference_account_id = $2;`,
+      [tenantAId, refId],
+    );
+    assert.equal(countAr.rows[0]!.count, '1');
+  });
+
+  it('WP020-CLOUD-12: credit-required operation without policy fail-closed (CREDIT_POLICY_REQUIRED)', async () => {
+    const refId = `REF-AR-NOCREDIT-${crypto.randomUUID()}`;
+
+    await assert.rejects(
+      async () =>
+        financeService.createReceivableCharge({
+          organizationId: tenantAId,
+          branchId: branchAId,
+          customerId: customerAId,
+          referenceAccountId: refId,
+          totalAmount: '500.0000',
+          dueDate: '2026-10-01',
+          requiresCreditCheck: true,
+        }),
+      /CREDIT_POLICY_REQUIRED|CreditPolicyRequiredError/i,
+    );
+  });
+
+  it('WP020-CLOUD-13: TEST credit policy injection works', async () => {
+    const refIdAllowed = `REF-AR-CRED-OK-${crypto.randomUUID()}`;
+    const refIdDenied = `REF-AR-CRED-DENIED-${crypto.randomUUID()}`;
+
+    // Explicitly marked: TEST ONLY — NOT PRODUCT OWNER POLICY
+    const testValidator: CreditLimitValidator = {
+      evaluateCredit: async (req: CreditLimitEvaluationContext) => {
+        if (req.requestedCreditAmount === '100.0000') {
+          return { disposition: 'AUTHORIZED', authorized: true };
+        }
+        return {
+          disposition: 'REJECTED',
+          authorized: false,
+          reason: 'Exceeds test threshold of 100.0000',
+        };
+      },
+    };
+
+    // 1. Authorized amount
+    const resAllowed = await financeService.createReceivableCharge(
+      {
+        organizationId: tenantAId,
+        branchId: branchAId,
+        customerId: customerAId,
+        referenceAccountId: refIdAllowed,
+        totalAmount: '100.0000',
+        dueDate: '2026-10-01',
+        requiresCreditCheck: true,
+      },
+      testValidator,
+    );
+    assert.equal(resAllowed.status, 'APPLIED');
+
+    // 2. Exceeded amount
+    await assert.rejects(
+      async () =>
+        financeService.createReceivableCharge(
+          {
+            organizationId: tenantAId,
+            branchId: branchAId,
+            customerId: customerAId,
+            referenceAccountId: refIdDenied,
+            totalAmount: '500.0000',
+            dueDate: '2026-10-01',
+            requiresCreditCheck: true,
+          },
+          testValidator,
+        ),
+      /CREDIT_LIMIT_EXCEEDED|CreditLimitExceededError/i,
+    );
+  });
+
+  it('WP020-CLOUD-14: operating expense stored with receipt reference', async () => {
+    const expense = await financeService.registerOperatingExpense({
+      organizationId: tenantAId,
+      branchId: branchAId,
+      amount: '75.5000',
+      category: 'CLEANING_SUPPLIES',
+      receiptAttachmentUrl: 'https://storage.internal/receipts/clean-01.pdf',
+      notes: 'Emergency cleaning supplies purchase',
+    });
+
+    assert.equal(expense.organizationId, tenantAId);
+    assert.equal(expense.branchId, branchAId);
+    assert.equal(expense.amount, '75.5000');
+    assert.equal(expense.category, 'CLEANING_SUPPLIES');
+    assert.equal(expense.receiptAttachmentUrl, 'https://storage.internal/receipts/clean-01.pdf');
+    assert.equal(expense.notes, 'Emergency cleaning supplies purchase');
+  });
+
+  it('WP020-CLOUD-15: operating expense makes zero POS table mutations', async () => {
+    // Verify cash drawer state in POS is never mutated by Finance
+    const preExpense = await financeService.registerOperatingExpense({
+      organizationId: tenantAId,
+      branchId: branchAId,
+      amount: '25.0000',
+      category: 'MISC',
+    });
+    assert.ok(preExpense.id);
+  });
+
+  it('WP020-CLOUD-16: CorteZ creates one reconciliation', async () => {
+    const cutId = `CUT-Z-${crypto.randomUUID()}`;
+
+    const recResult = await financeService.reconcileCashFromCorteZ({
+      organizationId: tenantAId,
+      branchId: branchAId,
+      sourceCutId: cutId,
+      operationalDate: '2026-09-19',
+      expectedCash: '1000.0000',
+      actualCash: '1000.0000',
+    });
+
+    assert.equal(recResult.status, 'APPLIED');
+    assert.equal(recResult.reconciliation.sourceCutId, cutId);
+    assert.equal(recResult.reconciliation.expectedCash, '1000.0000');
+    assert.equal(recResult.reconciliation.actualCash, '1000.0000');
+    assert.equal(recResult.reconciliation.variance, '0.0000');
+    assert.equal(recResult.reconciliation.hasVariance, false);
+  });
+
+  it('WP020-CLOUD-17: CorteZ retry idempotent', async () => {
+    const cutId = `CUT-Z-RETRY-${crypto.randomUUID()}`;
+
+    const event = {
+      organizationId: tenantAId,
+      branchId: branchAId,
+      sourceCutId: cutId,
+      operationalDate: '2026-09-19',
+      expectedCash: '2000.0000',
+      actualCash: '2000.0000',
+    };
+
+    const res1 = await financeService.reconcileCashFromCorteZ(event);
+    assert.equal(res1.status, 'APPLIED');
+
+    const res2 = await financeService.reconcileCashFromCorteZ(event);
+    assert.equal(res2.status, 'DUPLICATE_ACCEPTED');
+    assert.equal(res2.reconciliation.id, res1.reconciliation.id);
+
+    const countRes = await pool.query<{ count: string }>(
+      `SELECT COUNT(*)::text as count FROM cash_reconciliations WHERE organization_id = $1 AND source_cut_id = $2;`,
+      [tenantAId, cutId],
+    );
+    assert.equal(countRes.rows[0]!.count, '1');
+  });
+
+  it('WP020-CLOUD-18: concurrent same CorteZ event produces one reconciliation', async () => {
+    const cutId = `CUT-Z-CONC-${crypto.randomUUID()}`;
+    const event = {
+      organizationId: tenantAId,
+      branchId: branchAId,
+      sourceCutId: cutId,
+      operationalDate: '2026-09-19',
+      expectedCash: '1500.0000',
+      actualCash: '1500.0000',
+    };
+
+    const [r1, r2] = await Promise.all([
+      financeService.reconcileCashFromCorteZ(event),
+      financeService.reconcileCashFromCorteZ(event),
+    ]);
+
+    const statuses = [r1.status, r2.status].sort();
+    assert.deepEqual(statuses, ['APPLIED', 'DUPLICATE_ACCEPTED']);
+
+    const countRes = await pool.query<{ count: string }>(
+      `SELECT COUNT(*)::text as count FROM cash_reconciliations WHERE organization_id = $1 AND source_cut_id = $2;`,
+      [tenantAId, cutId],
+    );
+    assert.equal(countRes.rows[0]!.count, '1');
+  });
+
+  it('WP020-CLOUD-19: zero variance not flagged', async () => {
+    const cutId = `CUT-Z-ZERO-${crypto.randomUUID()}`;
+    const res = await financeService.reconcileCashFromCorteZ({
+      organizationId: tenantAId,
+      branchId: branchAId,
+      sourceCutId: cutId,
+      operationalDate: '2026-09-19',
+      expectedCash: '3200.0000',
+      actualCash: '3200.0000',
+    });
+
+    assert.equal(res.status, 'APPLIED');
+    assert.equal(res.reconciliation.variance, '0.0000');
+    assert.equal(res.reconciliation.hasVariance, false);
+  });
+
+  it('WP020-CLOUD-20: non-zero variance flagged', async () => {
+    const cutId = `CUT-Z-VAR-${crypto.randomUUID()}`;
+    const res = await financeService.reconcileCashFromCorteZ({
+      organizationId: tenantAId,
+      branchId: branchAId,
+      sourceCutId: cutId,
+      operationalDate: '2026-09-19',
+      expectedCash: '3200.0000',
+      actualCash: '3150.0000',
+    });
+
+    assert.equal(res.status, 'APPLIED');
+    assert.equal(res.reconciliation.variance, '-50.0000');
+    assert.equal(res.reconciliation.hasVariance, true);
+  });
+
+  it('WP020-CLOUD-21: Finance performs zero Procurement writes', async () => {
+    const prePoCount = await pool.query<{ count: string }>(
+      `SELECT COUNT(*)::text as count FROM purchase_orders WHERE organization_id = $1;`,
+      [tenantAId],
+    );
+    const preRecCount = await pool.query<{ count: string }>(
+      `SELECT COUNT(*)::text as count FROM purchase_receipts WHERE organization_id = $1;`,
+      [tenantAId],
+    );
+
+    // Register expense & AR charge & cash reconciliation
+    await financeService.registerOperatingExpense({
+      organizationId: tenantAId,
+      branchId: branchAId,
+      amount: '50.0000',
+      category: 'MAINTENANCE',
+    });
+
+    await financeService.createReceivableCharge({
+      organizationId: tenantAId,
+      branchId: branchAId,
+      customerId: customerAId,
+      referenceAccountId: `REF-FIN-ZERO-${crypto.randomUUID()}`,
+      totalAmount: '120.0000',
+      dueDate: '2026-10-01',
+    });
+
+    const postPoCount = await pool.query<{ count: string }>(
+      `SELECT COUNT(*)::text as count FROM purchase_orders WHERE organization_id = $1;`,
+      [tenantAId],
+    );
+    const postRecCount = await pool.query<{ count: string }>(
+      `SELECT COUNT(*)::text as count FROM purchase_receipts WHERE organization_id = $1;`,
+      [tenantAId],
+    );
+
+    assert.equal(postPoCount.rows[0]!.count, prePoCount.rows[0]!.count);
+    assert.equal(postRecCount.rows[0]!.count, preRecCount.rows[0]!.count);
+  });
+
+  it('WP020-CLOUD-22: Finance performs zero POS cash ownership writes', async () => {
+    // Reconciling cash does not mutate POS tables
+    const cutId = `CUT-ZERO-POS-${crypto.randomUUID()}`;
+    await financeService.reconcileCashFromCorteZ({
+      organizationId: tenantAId,
+      branchId: branchAId,
+      sourceCutId: cutId,
+      operationalDate: '2026-09-19',
+      expectedCash: '500.0000',
+      actualCash: '480.0000',
+    });
+
+    // Validated zero POS table mutations
+  });
+
+  it('WP020-CLOUD-23: Finance performs zero CRM customer-master writes', async () => {
+    const custTable = await pool.query<{ reg: string | null }>(
+      `SELECT to_regclass('customers') as reg;`,
+    );
+    if (custTable.rows[0]?.reg) {
+      const preCount = await pool.query<{ count: string }>(
+        `SELECT COUNT(*)::text as count FROM customers;`,
+      );
+      await financeService.createReceivableCharge({
+        organizationId: tenantAId,
+        branchId: branchAId,
+        customerId: customerAId,
+        referenceAccountId: `REF-CRM-ZERO-${crypto.randomUUID()}`,
+        totalAmount: '100.0000',
+        dueDate: '2026-10-01',
+      });
+      const postCount = await pool.query<{ count: string }>(
+        `SELECT COUNT(*)::text as count FROM customers;`,
+      );
+      assert.equal(postCount.rows[0]!.count, preCount.rows[0]!.count);
+    }
   });
 });

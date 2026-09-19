@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type pg from 'pg';
 import { getPool } from './connection.js';
-import { migrateUp, migrateDown } from './runner.js';
+import { migrateUp, migrateDown, getAppliedMigrations } from './runner.js';
 import { setTenantContext } from './tenant.js';
 
 dotenv.config();
@@ -398,6 +398,20 @@ describe('TRIDENTPOS WP-019 Procurement & Supplier Receiving Database Suite', ()
     }
 
     try {
+      // Roll down any migrations newer than WP-019 first (e.g. WP-020)
+      const checkClientBefore = await pool.connect();
+      try {
+        const appliedBefore = await getAppliedMigrations(checkClientBefore);
+        for (let i = appliedBefore.length - 1; i >= 0; i--) {
+          const entry = appliedBefore[i];
+          if (entry && entry.id > '20260905010000') {
+            await migrateDown(pool, { allowDestructiveDown: true });
+          }
+        }
+      } finally {
+        checkClientBefore.release();
+      }
+
       // 2. Execute authorized non-production migrateDown for WP-019
       const revertResult = await migrateDown(pool, { allowDestructiveDown: true });
       assert.equal(
