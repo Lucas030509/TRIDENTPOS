@@ -2796,4 +2796,101 @@ describe('TRIDENTPOS WP-019 Cloud Server Procurement & Supplier Receiving Suite'
       /RECEIPT_OUTBOX_INTEGRITY_ERROR/i,
     );
   });
+
+  it('R3-CLOUD-01: multiple matching outbox rows fails closed with RECEIPT_OUTBOX_INTEGRITY_ERROR', async () => {
+    const sup = await procurementService.createSupplier({
+      organizationId: tenantAId,
+      code: 'SUP-R3-01',
+      tradeName: 'Supplier R3-01',
+      taxId: 'RFC-R3-01',
+    });
+
+    const po = await procurementService.createPurchaseOrder({
+      organizationId: tenantAId,
+      branchId: branchAId,
+      supplierId: sup.id,
+      orderNumber: 'PO-R3-01',
+      items: [{ ingredientId: ingredientA1Id, orderedQuantity: '5.0000', unitCost: '10.0000' }],
+    });
+    await procurementService.sendPurchaseOrder(tenantAId, po.id);
+    const poItemId = po.items![0]!.id;
+
+    const cmd = {
+      organizationId: tenantAId,
+      branchId: branchAId,
+      purchaseOrderId: po.id,
+      supplierId: sup.id,
+      warehouseId: warehouseAId,
+      receiptNumber: 'REC-R3-01',
+      items: [
+        {
+          purchaseOrderItemId: poItemId,
+          ingredientId: ingredientA1Id,
+          receivedQuantity: '5.0000',
+          acceptedUnitCost: '10.0000',
+        },
+      ],
+    };
+
+    const res1 = await procurementService.confirmPurchaseReceipt(cmd);
+    assert.equal(res1.status, 'APPLIED');
+
+    // Verify exactly 1 outbox event initially
+    const outboxCheckInitial = await pool.query<{ count: string }>(
+      `SELECT COUNT(*)::text as count FROM cloud_integration_outbox
+       WHERE organization_id = $1 AND branch_id = $2 AND event_type = 'RecepcionCompraRegistrada' AND aggregate_type = 'PURCHASE_RECEIPT' AND aggregate_id = $3;`,
+      [tenantAId, branchAId, res1.receipt.id],
+    );
+    assert.equal(outboxCheckInitial.rows[0]!.count, '1');
+
+    // Manually insert a SECOND matching outbox row simulating corrupted/ambiguous outbox state
+    await pool.query(
+      `INSERT INTO cloud_integration_outbox (
+        organization_id, branch_id, event_type, aggregate_type, aggregate_id, payload
+      ) VALUES ($1, $2, 'RecepcionCompraRegistrada', 'PURCHASE_RECEIPT', $3, $4);`,
+      [tenantAId, branchAId, res1.receipt.id, JSON.stringify(res1.eventPayload)],
+    );
+
+    // Verify 2 matching outbox rows before retry
+    const outboxCheckBeforeRetry = await pool.query<{ count: string }>(
+      `SELECT COUNT(*)::text as count FROM cloud_integration_outbox
+       WHERE organization_id = $1 AND branch_id = $2 AND event_type = 'RecepcionCompraRegistrada' AND aggregate_type = 'PURCHASE_RECEIPT' AND aggregate_id = $3;`,
+      [tenantAId, branchAId, res1.receipt.id],
+    );
+    assert.equal(outboxCheckBeforeRetry.rows[0]!.count, '2');
+
+    const preCountReceipts = await pool.query<{ count: string }>(
+      `SELECT COUNT(*)::text as count FROM purchase_receipts WHERE organization_id = $1;`,
+      [tenantAId],
+    );
+    const preCountItems = await pool.query<{ count: string }>(
+      `SELECT COUNT(*)::text as count FROM purchase_receipt_items WHERE organization_id = $1;`,
+      [tenantAId],
+    );
+
+    // Retry should fail closed with RECEIPT_OUTBOX_INTEGRITY_ERROR (found 2)
+    await assert.rejects(
+      async () => procurementService.confirmPurchaseReceipt(cmd),
+      /RECEIPT_OUTBOX_INTEGRITY_ERROR.*Expected exactly one.*found 2/i,
+    );
+
+    // Verify no new business mutation
+    const postCountReceipts = await pool.query<{ count: string }>(
+      `SELECT COUNT(*)::text as count FROM purchase_receipts WHERE organization_id = $1;`,
+      [tenantAId],
+    );
+    const postCountItems = await pool.query<{ count: string }>(
+      `SELECT COUNT(*)::text as count FROM purchase_receipt_items WHERE organization_id = $1;`,
+      [tenantAId],
+    );
+    const outboxCheckAfterRetry = await pool.query<{ count: string }>(
+      `SELECT COUNT(*)::text as count FROM cloud_integration_outbox
+       WHERE organization_id = $1 AND branch_id = $2 AND event_type = 'RecepcionCompraRegistrada' AND aggregate_type = 'PURCHASE_RECEIPT' AND aggregate_id = $3;`,
+      [tenantAId, branchAId, res1.receipt.id],
+    );
+
+    assert.equal(postCountReceipts.rows[0]!.count, preCountReceipts.rows[0]!.count);
+    assert.equal(postCountItems.rows[0]!.count, preCountItems.rows[0]!.count);
+    assert.equal(outboxCheckAfterRetry.rows[0]!.count, '2');
+  });
 });

@@ -1873,9 +1873,9 @@ export class PostgresProcurementService implements CloudProcurementCompositionSe
           [command.organizationId, command.branchId, er.id],
         );
 
-        if (outboxRes.rows.length === 0) {
+        if (outboxRes.rows.length !== 1) {
           throw new ReceiptOutboxIntegrityError(
-            `Canonical prior outbox event 'RecepcionCompraRegistrada' missing for receipt '${er.id}'`,
+            `Expected exactly one canonical RecepcionCompraRegistrada event for receipt '${er.id}', found ${outboxRes.rows.length}`,
           );
         }
 

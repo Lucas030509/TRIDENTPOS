@@ -1,12 +1,13 @@
-# TRIDENTPOS — WP-019 CANONICAL BUILDER EVIDENCE (R2)
+# TRIDENTPOS — WP-019 CANONICAL BUILDER EVIDENCE (R3)
 
 ## 1. Canonical Identification & Lineage
 * **Work Package**: WP-019 — Procurement, Supplier Management & Physical Receiving
 * **Governing Specification**: `ARCHITECTURE_CHANGE_REQUEST_WP019_PROCUREMENT_RECONCILIATION.md` (ACR-2026-018)
 * **Canonical Base SHA**: `10e5f284508738336f89e1d3361fc9a7bb2311dc` (`origin/main`)
 * **Base Verification**: PASS (exact match with canonical baseline)
-* **R1 Frozen Subject**: `78124431054bab2efe33329951f46afc38663f75` (immutable baseline for R2)
-* **Implementation Branch**: `feat/wp-019-procurement-supplier-receiving-r2`
+* **R1 Frozen Subject**: `78124431054bab2efe33329951f46afc38663f75`
+* **R2 Frozen Subject**: `f139cc5e374aaec270e1038f26ffeffec460e2a3`
+* **Implementation Branch**: `feat/wp-019-procurement-supplier-receiving-r3`
 * **Role**: `13_Backend_Developer` (BUILDER ONLY)
 * **Governance Enforcement**: Builder Only mode active. Antigravity does not open PRs, merge, self-approve, or alter governing documentation.
 
@@ -89,9 +90,9 @@
 
 ---
 
-## 4. R2 Remediation: Idempotency, Line Revalidation & Authoritative Reconstruction
+## 4. R2/R3 Remediation: Idempotency, Line Revalidation & Outbox Cardinality Invariant
 
-### A. Stable Identity Revalidation (Blocker 2 Resolution)
+### A. Stable Identity Revalidation
 When an existing receipt matches `(organization_id, branch_id, receipt_number)`:
 * Revalidates `existingReceipt.purchase_order_id === command.purchaseOrderId`
 * Revalidates `existingReceipt.supplier_id === command.supplierId`
@@ -108,13 +109,24 @@ When an existing receipt matches `(organization_id, branch_id, receipt_number)`:
   * `acceptedUnitCost` (exact Scale-4 string comparison via `parseDecimal12x4`)
 * If any line detail differs: **FAILS CLOSED** with `ReceiptIdempotencyConflictError`.
 
-### C. Authoritative Prior-Event Reconstruction from Durable Outbox (Blocker 3 Resolution)
-* On `DUPLICATE_ACCEPTED`, the returned `eventPayload` is reconstructed strictly from the durable `cloud_integration_outbox` row corresponding to the receipt (`event_type = 'RecepcionCompraRegistrada'`).
-* **Zero placeholder quantities**: Returns the actual committed `orderedQuantity`, `previouslyReceivedQuantity`, and `remainingQuantity`.
+### C. Authoritative Prior-Event Reconstruction & Outbox Cardinality Invariant (R3 Resolution)
+* On `DUPLICATE_ACCEPTED`, the returned `eventPayload` is reconstructed strictly from the durable `cloud_integration_outbox` table (`event_type = 'RecepcionCompraRegistrada'`, `aggregate_type = 'PURCHASE_RECEIPT'`, `aggregate_id = receiptId`).
+* **Shared Outbox Schema Constraint Note**: The shared `cloud_integration_outbox` table does NOT have a database UNIQUE constraint on `(organization_id, branch_id, event_type, aggregate_type, aggregate_id)`. WP-019 strictly defends its own domain reconstruction invariant without altering shared WP-012 outbox schema.
+* **Strict Cardinality Invariant (`EXACTLY 1`)**:
+  * Exactly 1 matching outbox row is required (`outboxRes.rows.length === 1`).
+  * **Zero Rows**: `outboxRes.rows.length === 0` **FAILS CLOSED** with `ReceiptOutboxIntegrityError` (`RECEIPT_OUTBOX_INTEGRITY_ERROR: Expected exactly one canonical RecepcionCompraRegistrada event for receipt '<id>', found 0`).
+  * **Multiple Rows**: `outboxRes.rows.length > 1` **FAILS CLOSED** with `ReceiptOutboxIntegrityError` (`RECEIPT_OUTBOX_INTEGRITY_ERROR: Expected exactly one canonical RecepcionCompraRegistrada event for receipt '<id>', found <n>`).
+  * **No Arbitrary Row Selection**: No `rows[0]` blind access when `rows.length > 1`.
+  * **No Ambiguity Hiding**: No `ORDER BY ... LIMIT 1` used to mask corrupt or duplicate events.
+* **Zero placeholder quantities**: Reconstructed payload contains the exact committed `orderedQuantity`, `previouslyReceivedQuantity`, and `remainingQuantity`.
 * **Retry payment terms ignored as authority**: The original committed `paymentTerms` from the historical outbox payload is preserved and returned.
-* **Missing Outbox Row**: If the outbox row is missing, **FAILS CLOSED** with `ReceiptOutboxIntegrityError` (`RECEIPT_OUTBOX_INTEGRITY_ERROR`).
 
-### D. Distinct-Receipt Concurrency & Over-Receipt Prevention (Blocker 4 Resolution)
+### D. R3-CLOUD-01 Test Verification
+* **Scenario**: Create supplier -> Create PO -> Send PO -> Confirm receipt -> Manually insert duplicate matching outbox row (`rows.length = 2`) -> Retry exact duplicate receipt command.
+* **Result**: Rejected fail-closed with `ReceiptOutboxIntegrityError` (`RECEIPT_OUTBOX_INTEGRITY_ERROR`).
+* **Assertions**: 0 mutations performed, receipt and item counts unchanged, outbox row count remains exactly 2.
+
+### E. Distinct-Receipt Concurrency & Over-Receipt Prevention
 * Concurrency test `R2-CLOUD-05`:
   * PO Item ordered quantity: `10.0000`.
   * Receipt A: `receiptNumber = 'REC-R2-CONC-DIST-A'`, `receivedQuantity = '6.0000'`.
@@ -140,7 +152,7 @@ When an existing receipt matches `(organization_id, branch_id, receipt_number)`:
 | :--- | :--- | :--- | :--- |
 | **@trident/procurement Unit Tests** | 11 | 11 | **PASS** |
 | **@trident/database Integration Suite** | 295 (9 WP-019) | 295 | **PASS** |
-| **@trident/cloud-server Integration Suite** | 47 (16 WP-019 / R2) | 47 | **PASS** |
+| **@trident/cloud-server Integration Suite** | 48 (17 WP-019 / R2 / R3) | 48 | **PASS** |
 | **Monorepo Dependency Graph (`graph:check`)** | 44 | 44 | **PASS** |
 | **Cross-Package Integration E2E (`test:integration`)** | 2 | 2 | **PASS** |
 | **Electron Hardened Runtime (`test:electron`)** | 10 | 10 | **PASS** |
@@ -150,4 +162,4 @@ When an existing receipt matches `(organization_id, branch_id, receipt_number)`:
 ---
 
 ## 7. Conclusion & Readiness
-All blockers identified in R1 Quick Integrity are surgically resolved. WP-019 R2 is fully verified and ready for independent review.
+The outbox cardinality invariant is strictly enforced fail-closed (`EXACTLY 1`). All blockers identified across R1 and R2 reviews are surgically resolved. WP-019 R3 is fully verified and ready for independent review.
