@@ -525,6 +525,35 @@ describe('TRIDENTPOS WP-020 Finance & Cash Reconciliation Database Suite', () =>
     }
   });
 
+  it('R3-DB-01: accounts_payable PostgreSQL catalog constraints reference branches and have no cross-context FKs to Procurement', async () => {
+    const res = await pool.query<{
+      constraint_name: string;
+      foreign_table: string;
+    }>(`
+      SELECT
+        con.conname AS constraint_name,
+        cl2.relname AS foreign_table
+      FROM pg_constraint con
+      JOIN pg_class cl1 ON con.conrelid = cl1.oid
+      JOIN pg_class cl2 ON con.confrelid = cl2.oid
+      WHERE cl1.relname = 'accounts_payable'
+        AND con.contype = 'f';
+    `);
+
+    const foreignTables = res.rows.map((r) => r.foreign_table);
+    assert.ok(foreignTables.includes('branches'), 'FK to branches must be PRESENT');
+    assert.ok(!foreignTables.includes('suppliers'), 'FK to suppliers must be ABSENT');
+    assert.ok(
+      !foreignTables.includes('purchase_receipts'),
+      'FK to purchase_receipts must be ABSENT',
+    );
+    assert.ok(!foreignTables.includes('purchase_orders'), 'FK to purchase_orders must be ABSENT');
+    assert.ok(
+      !foreignTables.includes('purchase_order_items'),
+      'FK to purchase_order_items must be ABSENT',
+    );
+  });
+
   it('WP020-DB-15, WP020-DB-16, WP020-DB-17, WP020-DB-18: Authorized rollback of WP-020 removes WP-020 objects while preserving predecessor tables', async () => {
     // 1. Rollback WP-020 migration only
     const revertResult = await migrateDown(pool, { allowDestructiveDown: true });

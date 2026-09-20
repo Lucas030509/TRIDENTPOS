@@ -29,9 +29,7 @@ CREATE TABLE accounts_payable (
     CONSTRAINT chk_ap_status CHECK (status IN ('PENDING', 'PARTIAL', 'PAID', 'CANCELLED')),
     CONSTRAINT uq_accounts_payable_org_id UNIQUE (organization_id, id),
     CONSTRAINT uq_ap_org_receipt UNIQUE (organization_id, purchase_receipt_id),
-    CONSTRAINT fk_ap_branch FOREIGN KEY (organization_id, branch_id) REFERENCES branches(organization_id, id),
-    CONSTRAINT fk_ap_supplier FOREIGN KEY (organization_id, supplier_id) REFERENCES suppliers(organization_id, id),
-    CONSTRAINT fk_ap_purchase_receipt FOREIGN KEY (organization_id, purchase_receipt_id) REFERENCES purchase_receipts(organization_id, id)
+    CONSTRAINT fk_ap_branch FOREIGN KEY (organization_id, branch_id) REFERENCES branches(organization_id, id)
 );
 
 CREATE INDEX idx_ap_org_branch ON accounts_payable (organization_id, branch_id);

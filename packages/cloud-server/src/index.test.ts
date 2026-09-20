@@ -12,6 +12,7 @@ import {
   type ModifierRecipeResolver,
   type RegisterWasteCommand,
 } from '@trident/inventory';
+import type { RecepcionCompraRegistradaPayload } from '@trident/procurement';
 import {
   PostgresCloudInventoryService,
   PostgresProcurementService,
@@ -3053,7 +3054,7 @@ describe('TRIDENTPOS WP-020 Cloud Server Finance, AP, AR & Cash Reconciliation S
     },
   };
 
-  it('WP020-CLOUD-01: RecepcionCompraRegistrada creates AP', async () => {
+  it('WP020-CLOUD-01 / R3-CLOUD-01: RecepcionCompraRegistrada creates AP storing supplier_id and purchase_receipt_id as external aggregate identities', async () => {
     const { receipt, eventPayload, sup } = await createTestReceipt({
       receiptNumber: 'REC-FIN-001',
       totalAmount: '500.0000',
@@ -3072,6 +3073,33 @@ describe('TRIDENTPOS WP-020 Cloud Server Finance, AP, AR & Cash Reconciliation S
     assert.equal(result.accountsPayable.totalAmount, '500.0000');
     assert.equal(result.accountsPayable.balanceDue, '500.0000');
     assert.equal(result.accountsPayable.status, 'PENDING');
+
+    // Standalone verification: synthetic external IDs not present in Procurement tables
+    const syntheticSupplierId = crypto.randomUUID();
+    const syntheticReceiptId = crypto.randomUUID();
+    const syntheticEvent: RecepcionCompraRegistradaPayload = {
+      organizationId: tenantAId,
+      branchId: branchAId,
+      recepcionId: syntheticReceiptId,
+      purchaseOrderId: crypto.randomUUID(),
+      supplierId: syntheticSupplierId,
+      warehouseId: warehouseAId,
+      receiptNumber: 'REC-SYNTHETIC-001',
+      invoiceReference: null,
+      receivedAt: new Date().toISOString(),
+      totalAmount: '250.0000',
+      paymentTerms: 'NET_30',
+      items: [],
+    };
+
+    const syntheticResult = await financeService.onPurchaseReceiptConfirmed(
+      syntheticEvent,
+      testOnlyPaymentTermsResolver,
+    );
+    assert.equal(syntheticResult.status, 'APPLIED');
+    assert.equal(syntheticResult.accountsPayable.supplierId, syntheticSupplierId);
+    assert.equal(syntheticResult.accountsPayable.purchaseReceiptId, syntheticReceiptId);
+    assert.equal(syntheticResult.accountsPayable.totalAmount, '250.0000');
   });
 
   it('WP020-CLOUD-02: same receipt retry produces one AP (DUPLICATE_ACCEPTED)', async () => {
