@@ -3,7 +3,7 @@
  * Bounded Context: Finance
  */
 
-import { isPositiveScale4, cmpScale4, subScale4, isZeroScale4 } from './numerics.js';
+import { isPositiveScale4, cmpScale4, subScale4, addScale4, isZeroScale4 } from './numerics.js';
 import {
   AccountsReceivableOverpaymentError,
   AccountsReceivableInvalidStateError,
@@ -43,6 +43,37 @@ export function applySettlementToAccountsReceivable(
 
   const newBalanceDue = subScale4(ar.balanceDue, settlementAmount);
   const newStatus: AccountsReceivableStatus = isZeroScale4(newBalanceDue) ? 'PAID' : ar.status;
+
+  return { newBalanceDue, newStatus };
+}
+
+/**
+ * Calculates new balance due and restored status after compensating reversal of an AR settlement.
+ */
+export function reverseSettlementOnAccountsReceivable(
+  ar: Pick<AccountsReceivable, 'totalAmount' | 'balanceDue' | 'status'>,
+  reversalAmount: string,
+): { newBalanceDue: string; newStatus: AccountsReceivableStatus } {
+  if (!isPositiveScale4(reversalAmount)) {
+    throw new AccountsReceivableOverpaymentError(
+      `Reversal amount must be positive, received '${reversalAmount}'`,
+    );
+  }
+
+  if (ar.status === 'DEFAULTED') {
+    throw new AccountsReceivableInvalidStateError(
+      'Cannot reverse settlement on a DEFAULTED accounts receivable record',
+    );
+  }
+
+  const newBalanceDue = addScale4(ar.balanceDue, reversalAmount);
+  if (cmpScale4(newBalanceDue, ar.totalAmount) > 0) {
+    throw new AccountsReceivableOverpaymentError(
+      `Reversal amount '${reversalAmount}' would cause balance due '${newBalanceDue}' to exceed original total '${ar.totalAmount}'`,
+    );
+  }
+
+  const newStatus: AccountsReceivableStatus = 'PENDING';
 
   return { newBalanceDue, newStatus };
 }

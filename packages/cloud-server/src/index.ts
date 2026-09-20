@@ -2395,70 +2395,98 @@ export class PostgresProcurementService implements CloudProcurementCompositionSe
 import {
   type AccountsPayable,
   type AccountsPayableStatus,
+  type AccountsPayablePayment,
   type ScheduledPayment,
   type ScheduledPaymentStatus,
   type AccountsReceivable,
   type AccountsReceivableStatus,
+  type AccountsReceivableSettlement,
   type BranchOperatingExpense,
   type CashReconciliation,
   type RecepcionCompraRegistradaEvent,
   type CashClosingFacts,
   type PaymentTermsDueDateResolverContext,
   type PaymentTermsDueDateResolver,
+  type FinanceTransactionKind,
   type ApplyAccountsPayablePaymentCommand,
+  type ReverseAccountsPayablePaymentCommand,
   type CreateScheduledPaymentCommand,
   type CreateReceivableChargeCommand,
   type SettleReceivableCommand,
+  type ReverseAccountsReceivableSettlementCommand,
   type RegisterOperatingExpenseCommand,
   type ReconcileCashCommand,
   type ProcessPurchaseReceiptResult,
+  type ApplyAccountsPayablePaymentResult,
+  type ReverseAccountsPayablePaymentResult,
   type CreateReceivableChargeResult,
+  type SettleAccountsReceivableResult,
+  type ReverseAccountsReceivableSettlementResult,
   type ReconcileCashResult,
   type CreditLimitValidator,
   type CreditLimitEvaluationContext,
   calculateDueDate,
   applyPaymentToAccountsPayable,
+  reversePaymentOnAccountsPayable,
   applySettlementToAccountsReceivable,
+  reverseSettlementOnAccountsReceivable,
   calculateCashReconciliation,
   parseDecimal12x4 as parseFinanceDecimal12x4,
   cmpScale4 as cmpFinanceScale4,
   AccountsPayableOverpaymentError,
-  AccountsReceivableOverpaymentError,
   AccountsPayableInvalidStateError,
+  PaymentReferenceRequiredError,
+  SettlementReferenceRequiredError,
+  PaymentTransactionNotFoundError,
+  SettlementTransactionNotFoundError,
+  PaymentAlreadyReversedError,
+  SettlementAlreadyReversedError,
+  PaymentIdempotencyConflictError,
+  SettlementIdempotencyConflictError,
+  AccountsReceivableOverpaymentError,
   AccountsReceivableInvalidStateError,
-  CreditPolicyRequiredError,
-  PaymentTermsResolverRequiredError,
-  APIdempotencyConflictError,
-  ARIdempotencyConflictError,
-  CashReconciliationIdempotencyConflictError,
   CreditLimitExceededError,
-  InvalidPaymentTermsError,
-  InvalidFinancialAmountError,
+  CreditPolicyRequiredError,
+  ARIdempotencyConflictError,
   OperatingExpenseError,
   CashReconciliationError,
+  CashReconciliationIdempotencyConflictError,
+  PaymentTermsResolverRequiredError,
+  APIdempotencyConflictError,
+  InvalidPaymentTermsError,
+  InvalidFinancialAmountError,
 } from '@trident/finance';
 
 export type {
   AccountsPayable,
   AccountsPayableStatus,
+  AccountsPayablePayment,
   ScheduledPayment,
   ScheduledPaymentStatus,
   AccountsReceivable,
   AccountsReceivableStatus,
+  AccountsReceivableSettlement,
   BranchOperatingExpense,
   CashReconciliation,
   RecepcionCompraRegistradaEvent,
   CashClosingFacts,
   PaymentTermsDueDateResolverContext,
   PaymentTermsDueDateResolver,
+  FinanceTransactionKind,
   ApplyAccountsPayablePaymentCommand,
+  ReverseAccountsPayablePaymentCommand,
   CreateScheduledPaymentCommand,
   CreateReceivableChargeCommand,
   SettleReceivableCommand,
+  ReverseAccountsReceivableSettlementCommand,
   RegisterOperatingExpenseCommand,
   ReconcileCashCommand,
   ProcessPurchaseReceiptResult,
+  ApplyAccountsPayablePaymentResult,
+  ReverseAccountsPayablePaymentResult,
   CreateReceivableChargeResult,
+  SettleAccountsReceivableResult,
+  ReverseAccountsReceivableSettlementResult,
   ReconcileCashResult,
   CreditLimitValidator,
   CreditLimitEvaluationContext,
@@ -2467,7 +2495,9 @@ export type {
 export {
   calculateDueDate,
   applyPaymentToAccountsPayable,
+  reversePaymentOnAccountsPayable,
   applySettlementToAccountsReceivable,
+  reverseSettlementOnAccountsReceivable,
   calculateCashReconciliation,
   AccountsPayableOverpaymentError,
   AccountsReceivableOverpaymentError,
@@ -2483,6 +2513,14 @@ export {
   InvalidFinancialAmountError,
   OperatingExpenseError,
   CashReconciliationError,
+  PaymentReferenceRequiredError,
+  SettlementReferenceRequiredError,
+  PaymentTransactionNotFoundError,
+  SettlementTransactionNotFoundError,
+  PaymentAlreadyReversedError,
+  SettlementAlreadyReversedError,
+  PaymentIdempotencyConflictError,
+  SettlementIdempotencyConflictError,
 };
 
 export interface ProcessPurchaseReceiptOptions {
@@ -2506,8 +2544,15 @@ export interface CloudFinanceCompositionService {
   ): Promise<AccountsPayable | null>;
   applyAccountsPayablePayment(
     command: ApplyAccountsPayablePaymentCommand,
-  ): Promise<AccountsPayable>;
+  ): Promise<ApplyAccountsPayablePaymentResult>;
+  reverseAccountsPayablePayment(
+    command: ReverseAccountsPayablePaymentCommand,
+  ): Promise<ReverseAccountsPayablePaymentResult>;
   settlePayable(command: ApplyAccountsPayablePaymentCommand): Promise<AccountsPayable>;
+  getAccountsPayablePayments(
+    organizationId: string,
+    accountsPayableId: string,
+  ): Promise<AccountsPayablePayment[]>;
   createScheduledPayment(command: CreateScheduledPaymentCommand): Promise<ScheduledPayment>;
   schedulePayment(command: CreateScheduledPaymentCommand): Promise<ScheduledPayment>;
   createReceivableCharge(
@@ -2519,7 +2564,14 @@ export interface CloudFinanceCompositionService {
     organizationId: string,
     referenceAccountId: string,
   ): Promise<AccountsReceivable | null>;
-  settleReceivable(command: SettleReceivableCommand): Promise<AccountsReceivable>;
+  settleReceivable(command: SettleReceivableCommand): Promise<SettleAccountsReceivableResult>;
+  reverseAccountsReceivableSettlement(
+    command: ReverseAccountsReceivableSettlementCommand,
+  ): Promise<ReverseAccountsReceivableSettlementResult>;
+  getAccountsReceivableSettlements(
+    organizationId: string,
+    accountsReceivableId: string,
+  ): Promise<AccountsReceivableSettlement[]>;
   registerOperatingExpense(
     command: RegisterOperatingExpenseCommand,
   ): Promise<BranchOperatingExpense>;
@@ -2550,7 +2602,8 @@ export class PostgresFinanceService implements CloudFinanceCompositionService {
   }
 
   async settlePayable(command: ApplyAccountsPayablePaymentCommand): Promise<AccountsPayable> {
-    return this.applyAccountsPayablePayment(command);
+    const res = await this.applyAccountsPayablePayment(command);
+    return res.accountsPayable;
   }
 
   async schedulePayment(command: CreateScheduledPaymentCommand): Promise<ScheduledPayment> {
@@ -2776,10 +2829,76 @@ export class PostgresFinanceService implements CloudFinanceCompositionService {
 
   async applyAccountsPayablePayment(
     command: ApplyAccountsPayablePaymentCommand,
-  ): Promise<AccountsPayable> {
+  ): Promise<ApplyAccountsPayablePaymentResult> {
+    const referenceId = (command.referenceId ?? command.reference)?.trim();
+    if (!referenceId) {
+      throw new PaymentReferenceRequiredError('Payment reference ID is required');
+    }
     parseFinanceDecimal12x4(command.paymentAmount);
 
     return withTenantTransaction(this.pool, command.organizationId, async (client) => {
+      // 1. Check if a payment with this reference_id already exists for this tenant
+      const existingPayRes = await client.query<{
+        id: string;
+        organization_id: string;
+        branch_id: string;
+        accounts_payable_id: string;
+        transaction_kind: FinanceTransactionKind;
+        amount: string;
+        payment_date: string | Date;
+        reference_id: string;
+        reversal_of_transaction_id: string | null;
+        created_at: string | Date;
+      }>(
+        `SELECT id, organization_id, branch_id, accounts_payable_id, transaction_kind,
+                amount::text, payment_date, reference_id, reversal_of_transaction_id, created_at
+         FROM accounts_payable_payments
+         WHERE organization_id = $1 AND reference_id = $2;`,
+        [command.organizationId, referenceId],
+      );
+
+      if (existingPayRes.rows.length > 0) {
+        const payRow = existingPayRes.rows[0]!;
+        if (
+          payRow.accounts_payable_id !== command.accountsPayableId ||
+          payRow.branch_id !== command.branchId ||
+          payRow.transaction_kind !== 'APPLY' ||
+          cmpFinanceScale4(payRow.amount, command.paymentAmount) !== 0
+        ) {
+          throw new PaymentIdempotencyConflictError(
+            `Payment reference '${referenceId}' already exists with different transaction facts`,
+          );
+        }
+
+        const apRes = await client.query<{
+          id: string;
+          organization_id: string;
+          branch_id: string;
+          supplier_id: string;
+          purchase_receipt_id: string;
+          total_amount: string;
+          balance_due: string;
+          due_date: string | Date;
+          status: AccountsPayableStatus;
+          created_at: string | Date;
+          updated_at: string | Date;
+        }>(
+          `SELECT id, organization_id, branch_id, supplier_id, purchase_receipt_id,
+                  total_amount::text, balance_due::text, due_date::text, status,
+                  created_at, updated_at
+           FROM accounts_payable
+           WHERE organization_id = $1 AND id = $2;`,
+          [command.organizationId, command.accountsPayableId],
+        );
+
+        return {
+          status: 'DUPLICATE_ACCEPTED',
+          accountsPayable: this.mapApRow(apRes.rows[0]!),
+          payment: this.mapApPaymentRow(payRow),
+        };
+      }
+
+      // 2. Lock AP record FOR UPDATE
       const res = await client.query<{
         id: string;
         organization_id: string;
@@ -2809,11 +2928,87 @@ export class PostgresFinanceService implements CloudFinanceCompositionService {
       }
 
       const currentAp = this.mapApRow(res.rows[0]!);
+      if (currentAp.branchId !== command.branchId) {
+        throw new AccountsPayableInvalidStateError(
+          `Branch mismatch for accounts payable: record is branch '${currentAp.branchId}', command specifies '${command.branchId}'`,
+        );
+      }
+
+      // Check again under lock for concurrent payment race
+      const concurrentPayRes = await client.query<{
+        id: string;
+        organization_id: string;
+        branch_id: string;
+        accounts_payable_id: string;
+        transaction_kind: FinanceTransactionKind;
+        amount: string;
+        payment_date: string | Date;
+        reference_id: string;
+        reversal_of_transaction_id: string | null;
+        created_at: string | Date;
+      }>(
+        `SELECT id, organization_id, branch_id, accounts_payable_id, transaction_kind,
+                amount::text, payment_date, reference_id, reversal_of_transaction_id, created_at
+         FROM accounts_payable_payments
+         WHERE organization_id = $1 AND reference_id = $2;`,
+        [command.organizationId, referenceId],
+      );
+
+      if (concurrentPayRes.rows.length > 0) {
+        const payRow = concurrentPayRes.rows[0]!;
+        if (
+          payRow.accounts_payable_id !== command.accountsPayableId ||
+          payRow.branch_id !== command.branchId ||
+          payRow.transaction_kind !== 'APPLY' ||
+          cmpFinanceScale4(payRow.amount, command.paymentAmount) !== 0
+        ) {
+          throw new PaymentIdempotencyConflictError(
+            `Payment reference '${referenceId}' already exists with different transaction facts`,
+          );
+        }
+
+        return {
+          status: 'DUPLICATE_ACCEPTED',
+          accountsPayable: this.mapApRow(res.rows[0]!),
+          payment: this.mapApPaymentRow(payRow),
+        };
+      }
+
       const { newBalanceDue, newStatus } = applyPaymentToAccountsPayable(
         currentAp,
         command.paymentAmount,
       );
 
+      // 3. Insert immutable payment transaction
+      const payInsertRes = await client.query<{
+        id: string;
+        organization_id: string;
+        branch_id: string;
+        accounts_payable_id: string;
+        transaction_kind: FinanceTransactionKind;
+        amount: string;
+        payment_date: string | Date;
+        reference_id: string;
+        reversal_of_transaction_id: string | null;
+        created_at: string | Date;
+      }>(
+        `INSERT INTO accounts_payable_payments (
+          organization_id, branch_id, accounts_payable_id, transaction_kind,
+          amount, payment_date, reference_id, reversal_of_transaction_id
+        ) VALUES ($1, $2, $3, 'APPLY', $4, COALESCE($5, NOW()), $6, NULL)
+        RETURNING id, organization_id, branch_id, accounts_payable_id, transaction_kind,
+                  amount::text, payment_date, reference_id, reversal_of_transaction_id, created_at;`,
+        [
+          command.organizationId,
+          command.branchId,
+          command.accountsPayableId,
+          command.paymentAmount,
+          command.paymentDate ?? null,
+          referenceId,
+        ],
+      );
+
+      // 4. Update AP balance and status atomically
       const updateRes = await client.query<{
         id: string;
         organization_id: string;
@@ -2836,7 +3031,301 @@ export class PostgresFinanceService implements CloudFinanceCompositionService {
         [newBalanceDue, newStatus, command.organizationId, command.accountsPayableId],
       );
 
-      return this.mapApRow(updateRes.rows[0]!);
+      return {
+        status: 'APPLIED',
+        accountsPayable: this.mapApRow(updateRes.rows[0]!),
+        payment: this.mapApPaymentRow(payInsertRes.rows[0]!),
+      };
+    });
+  }
+
+  async reverseAccountsPayablePayment(
+    command: ReverseAccountsPayablePaymentCommand,
+  ): Promise<ReverseAccountsPayablePaymentResult> {
+    const reversalRef = command.reversalReferenceId?.trim();
+    if (!reversalRef) {
+      throw new PaymentReferenceRequiredError('Reversal reference ID is required');
+    }
+
+    return withTenantTransaction(this.pool, command.organizationId, async (client) => {
+      // 1. Check if a reversal transaction with this reference_id already exists
+      const existingRevRes = await client.query<{
+        id: string;
+        organization_id: string;
+        branch_id: string;
+        accounts_payable_id: string;
+        transaction_kind: FinanceTransactionKind;
+        amount: string;
+        payment_date: string | Date;
+        reference_id: string;
+        reversal_of_transaction_id: string | null;
+        created_at: string | Date;
+      }>(
+        `SELECT id, organization_id, branch_id, accounts_payable_id, transaction_kind,
+                amount::text, payment_date, reference_id, reversal_of_transaction_id, created_at
+         FROM accounts_payable_payments
+         WHERE organization_id = $1 AND reference_id = $2;`,
+        [command.organizationId, reversalRef],
+      );
+
+      if (existingRevRes.rows.length > 0) {
+        const revRow = existingRevRes.rows[0]!;
+        if (
+          revRow.accounts_payable_id !== command.accountsPayableId ||
+          revRow.branch_id !== command.branchId ||
+          revRow.transaction_kind !== 'REVERSAL' ||
+          revRow.reversal_of_transaction_id !== command.originalPaymentTransactionId
+        ) {
+          throw new PaymentIdempotencyConflictError(
+            `Reversal reference '${reversalRef}' already exists with different transaction facts`,
+          );
+        }
+
+        const apRes = await client.query<{
+          id: string;
+          organization_id: string;
+          branch_id: string;
+          supplier_id: string;
+          purchase_receipt_id: string;
+          total_amount: string;
+          balance_due: string;
+          due_date: string | Date;
+          status: AccountsPayableStatus;
+          created_at: string | Date;
+          updated_at: string | Date;
+        }>(
+          `SELECT id, organization_id, branch_id, supplier_id, purchase_receipt_id,
+                  total_amount::text, balance_due::text, due_date::text, status,
+                  created_at, updated_at
+           FROM accounts_payable
+           WHERE organization_id = $1 AND id = $2;`,
+          [command.organizationId, command.accountsPayableId],
+        );
+
+        return {
+          status: 'DUPLICATE_ACCEPTED',
+          accountsPayable: this.mapApRow(apRes.rows[0]!),
+          reversal: this.mapApPaymentRow(revRow),
+        };
+      }
+
+      // 2. Lock AP record FOR UPDATE
+      const apRes = await client.query<{
+        id: string;
+        organization_id: string;
+        branch_id: string;
+        supplier_id: string;
+        purchase_receipt_id: string;
+        total_amount: string;
+        balance_due: string;
+        due_date: string | Date;
+        status: AccountsPayableStatus;
+        created_at: string | Date;
+        updated_at: string | Date;
+      }>(
+        `SELECT id, organization_id, branch_id, supplier_id, purchase_receipt_id,
+                total_amount::text, balance_due::text, due_date::text, status,
+                created_at, updated_at
+         FROM accounts_payable
+         WHERE organization_id = $1 AND id = $2
+         FOR UPDATE;`,
+        [command.organizationId, command.accountsPayableId],
+      );
+
+      if (apRes.rows.length === 0) {
+        throw new AccountsPayableInvalidStateError(
+          `Accounts payable record '${command.accountsPayableId}' not found`,
+        );
+      }
+
+      const currentAp = this.mapApRow(apRes.rows[0]!);
+      if (currentAp.branchId !== command.branchId) {
+        throw new AccountsPayableInvalidStateError(
+          `Branch mismatch for accounts payable: record is branch '${currentAp.branchId}', command specifies '${command.branchId}'`,
+        );
+      }
+
+      // Check again under lock for concurrent reversal race
+      const concurrentRevRes = await client.query<{
+        id: string;
+        organization_id: string;
+        branch_id: string;
+        accounts_payable_id: string;
+        transaction_kind: FinanceTransactionKind;
+        amount: string;
+        payment_date: string | Date;
+        reference_id: string;
+        reversal_of_transaction_id: string | null;
+        created_at: string | Date;
+      }>(
+        `SELECT id, organization_id, branch_id, accounts_payable_id, transaction_kind,
+                amount::text, payment_date, reference_id, reversal_of_transaction_id, created_at
+         FROM accounts_payable_payments
+         WHERE organization_id = $1 AND reference_id = $2;`,
+        [command.organizationId, reversalRef],
+      );
+
+      if (concurrentRevRes.rows.length > 0) {
+        const revRow = concurrentRevRes.rows[0]!;
+        if (
+          revRow.accounts_payable_id !== command.accountsPayableId ||
+          revRow.branch_id !== command.branchId ||
+          revRow.transaction_kind !== 'REVERSAL' ||
+          revRow.reversal_of_transaction_id !== command.originalPaymentTransactionId
+        ) {
+          throw new PaymentIdempotencyConflictError(
+            `Reversal reference '${reversalRef}' already exists with different transaction facts`,
+          );
+        }
+
+        return {
+          status: 'DUPLICATE_ACCEPTED',
+          accountsPayable: this.mapApRow(apRes.rows[0]!),
+          reversal: this.mapApPaymentRow(revRow),
+        };
+      }
+
+      // 3. Fetch original payment transaction
+      const origPayRes = await client.query<{
+        id: string;
+        organization_id: string;
+        branch_id: string;
+        accounts_payable_id: string;
+        transaction_kind: FinanceTransactionKind;
+        amount: string;
+        payment_date: string | Date;
+        reference_id: string;
+        reversal_of_transaction_id: string | null;
+        created_at: string | Date;
+      }>(
+        `SELECT id, organization_id, branch_id, accounts_payable_id, transaction_kind,
+                amount::text, payment_date, reference_id, reversal_of_transaction_id, created_at
+         FROM accounts_payable_payments
+         WHERE organization_id = $1 AND id = $2 AND accounts_payable_id = $3;`,
+        [command.organizationId, command.originalPaymentTransactionId, command.accountsPayableId],
+      );
+
+      if (origPayRes.rows.length === 0) {
+        throw new PaymentTransactionNotFoundError(
+          `Original payment transaction '${command.originalPaymentTransactionId}' not found on accounts payable '${command.accountsPayableId}'`,
+        );
+      }
+
+      const origPay = origPayRes.rows[0]!;
+      if (origPay.transaction_kind !== 'APPLY') {
+        throw new AccountsPayableInvalidStateError(
+          `Cannot reverse transaction '${command.originalPaymentTransactionId}': not an APPLY transaction`,
+        );
+      }
+
+      // 4. Verify original transaction has not already been reversed
+      const existingReversalsRes = await client.query<{ total_reversed: string }>(
+        `SELECT COALESCE(SUM(amount), 0.0000)::text as total_reversed
+         FROM accounts_payable_payments
+         WHERE organization_id = $1 AND reversal_of_transaction_id = $2;`,
+        [command.organizationId, origPay.id],
+      );
+
+      const totalReversed = existingReversalsRes.rows[0]!.total_reversed;
+      if (cmpFinanceScale4(totalReversed, origPay.amount) >= 0) {
+        throw new PaymentAlreadyReversedError(
+          `Payment transaction '${origPay.id}' is already fully reversed`,
+        );
+      }
+
+      // 5. Calculate new balance and status using domain logic
+      const { newBalanceDue, newStatus } = reversePaymentOnAccountsPayable(
+        currentAp,
+        origPay.amount,
+      );
+
+      // 6. Insert immutable REVERSAL transaction
+      const revInsertRes = await client.query<{
+        id: string;
+        organization_id: string;
+        branch_id: string;
+        accounts_payable_id: string;
+        transaction_kind: FinanceTransactionKind;
+        amount: string;
+        payment_date: string | Date;
+        reference_id: string;
+        reversal_of_transaction_id: string | null;
+        created_at: string | Date;
+      }>(
+        `INSERT INTO accounts_payable_payments (
+          organization_id, branch_id, accounts_payable_id, transaction_kind,
+          amount, payment_date, reference_id, reversal_of_transaction_id
+        ) VALUES ($1, $2, $3, 'REVERSAL', $4, COALESCE($5, NOW()), $6, $7)
+        RETURNING id, organization_id, branch_id, accounts_payable_id, transaction_kind,
+                  amount::text, payment_date, reference_id, reversal_of_transaction_id, created_at;`,
+        [
+          command.organizationId,
+          command.branchId,
+          command.accountsPayableId,
+          origPay.amount,
+          command.reversalDate ?? null,
+          reversalRef,
+          origPay.id,
+        ],
+      );
+
+      // 7. Update AP balance and status atomically
+      const updateRes = await client.query<{
+        id: string;
+        organization_id: string;
+        branch_id: string;
+        supplier_id: string;
+        purchase_receipt_id: string;
+        total_amount: string;
+        balance_due: string;
+        due_date: string | Date;
+        status: AccountsPayableStatus;
+        created_at: string | Date;
+        updated_at: string | Date;
+      }>(
+        `UPDATE accounts_payable
+         SET balance_due = $1, status = $2, updated_at = NOW()
+         WHERE organization_id = $3 AND id = $4
+         RETURNING id, organization_id, branch_id, supplier_id, purchase_receipt_id,
+                   total_amount::text, balance_due::text, due_date::text, status,
+                   created_at, updated_at;`,
+        [newBalanceDue, newStatus, command.organizationId, command.accountsPayableId],
+      );
+
+      return {
+        status: 'APPLIED',
+        accountsPayable: this.mapApRow(updateRes.rows[0]!),
+        reversal: this.mapApPaymentRow(revInsertRes.rows[0]!),
+      };
+    });
+  }
+
+  async getAccountsPayablePayments(
+    organizationId: string,
+    accountsPayableId: string,
+  ): Promise<AccountsPayablePayment[]> {
+    return withTenantTransaction(this.pool, organizationId, async (client) => {
+      const res = await client.query<{
+        id: string;
+        organization_id: string;
+        branch_id: string;
+        accounts_payable_id: string;
+        transaction_kind: FinanceTransactionKind;
+        amount: string;
+        payment_date: string | Date;
+        reference_id: string;
+        reversal_of_transaction_id: string | null;
+        created_at: string | Date;
+      }>(
+        `SELECT id, organization_id, branch_id, accounts_payable_id, transaction_kind,
+                amount::text, payment_date, reference_id, reversal_of_transaction_id, created_at
+         FROM accounts_payable_payments
+         WHERE organization_id = $1 AND accounts_payable_id = $2
+         ORDER BY created_at ASC, id ASC;`,
+        [organizationId, accountsPayableId],
+      );
+
+      return res.rows.map((r) => this.mapApPaymentRow(r));
     });
   }
 
@@ -3120,10 +3609,67 @@ export class PostgresFinanceService implements CloudFinanceCompositionService {
     });
   }
 
-  async settleReceivable(command: SettleReceivableCommand): Promise<AccountsReceivable> {
+  async settleReceivable(
+    command: SettleReceivableCommand,
+  ): Promise<SettleAccountsReceivableResult> {
+    const referenceId = (command.referenceId ?? (command as any).reference)?.trim();
+    if (!referenceId) {
+      throw new SettlementReferenceRequiredError();
+    }
+
     parseFinanceDecimal12x4(command.settlementAmount);
 
     return withTenantTransaction(this.pool, command.organizationId, async (client) => {
+      // 1. Check if settlement transaction already exists by stable reference_id
+      const existingTxRes = await client.query<{
+        id: string;
+        organization_id: string;
+        branch_id: string;
+        accounts_receivable_id: string;
+        transaction_kind: FinanceTransactionKind;
+        amount: string;
+        settlement_date: string | Date;
+        reference_id: string;
+        reversal_of_transaction_id: string | null;
+        created_at: string | Date;
+      }>(
+        `SELECT id, organization_id, branch_id, accounts_receivable_id, transaction_kind,
+                amount::text, settlement_date, reference_id, reversal_of_transaction_id, created_at
+         FROM accounts_receivable_settlements
+         WHERE organization_id = $1 AND reference_id = $2;`,
+        [command.organizationId, referenceId],
+      );
+
+      if (existingTxRes.rows.length > 0) {
+        const row = existingTxRes.rows[0]!;
+        if (
+          row.accounts_receivable_id !== command.accountsReceivableId ||
+          row.transaction_kind !== 'APPLY' ||
+          cmpFinanceScale4(row.amount, command.settlementAmount) !== 0
+        ) {
+          throw new SettlementIdempotencyConflictError(
+            `Accounts receivable settlement idempotency conflict for reference '${referenceId}': existing transaction differs from incoming settlement facts`,
+          );
+        }
+
+        const ar = await this.getAccountsReceivable(
+          command.organizationId,
+          command.accountsReceivableId,
+        );
+        if (!ar) {
+          throw new AccountsReceivableInvalidStateError(
+            `Accounts receivable record '${command.accountsReceivableId}' not found`,
+          );
+        }
+
+        return {
+          status: 'DUPLICATE_ACCEPTED',
+          accountsReceivable: ar,
+          settlement: this.mapArSettlementRow(row),
+        };
+      }
+
+      // 2. Lock AR FOR UPDATE
       const res = await client.query<{
         id: string;
         organization_id: string;
@@ -3152,12 +3698,81 @@ export class PostgresFinanceService implements CloudFinanceCompositionService {
         );
       }
 
+      // Re-check tx existence under lock to handle concurrent race
+      const concurrentTxRes = await client.query<{
+        id: string;
+        organization_id: string;
+        branch_id: string;
+        accounts_receivable_id: string;
+        transaction_kind: FinanceTransactionKind;
+        amount: string;
+        settlement_date: string | Date;
+        reference_id: string;
+        reversal_of_transaction_id: string | null;
+        created_at: string | Date;
+      }>(
+        `SELECT id, organization_id, branch_id, accounts_receivable_id, transaction_kind,
+                amount::text, settlement_date, reference_id, reversal_of_transaction_id, created_at
+         FROM accounts_receivable_settlements
+         WHERE organization_id = $1 AND reference_id = $2;`,
+        [command.organizationId, referenceId],
+      );
+
+      if (concurrentTxRes.rows.length > 0) {
+        const row = concurrentTxRes.rows[0]!;
+        if (
+          row.accounts_receivable_id !== command.accountsReceivableId ||
+          row.transaction_kind !== 'APPLY' ||
+          cmpFinanceScale4(row.amount, command.settlementAmount) !== 0
+        ) {
+          throw new SettlementIdempotencyConflictError(
+            `Accounts receivable settlement idempotency conflict for reference '${referenceId}': existing transaction differs from incoming settlement facts`,
+          );
+        }
+
+        return {
+          status: 'DUPLICATE_ACCEPTED',
+          accountsReceivable: this.mapArRow(res.rows[0]!),
+          settlement: this.mapArSettlementRow(row),
+        };
+      }
+
       const currentAr = this.mapArRow(res.rows[0]!);
       const { newBalanceDue, newStatus } = applySettlementToAccountsReceivable(
         currentAr,
         command.settlementAmount,
       );
 
+      // 3. Insert immutable APPLY settlement transaction
+      const insertTxRes = await client.query<{
+        id: string;
+        organization_id: string;
+        branch_id: string;
+        accounts_receivable_id: string;
+        transaction_kind: FinanceTransactionKind;
+        amount: string;
+        settlement_date: string | Date;
+        reference_id: string;
+        reversal_of_transaction_id: string | null;
+        created_at: string | Date;
+      }>(
+        `INSERT INTO accounts_receivable_settlements (
+          organization_id, branch_id, accounts_receivable_id, transaction_kind,
+          amount, settlement_date, reference_id, reversal_of_transaction_id
+        ) VALUES ($1, $2, $3, 'APPLY', $4, COALESCE($5, NOW()), $6, NULL)
+        RETURNING id, organization_id, branch_id, accounts_receivable_id, transaction_kind,
+                  amount::text, settlement_date, reference_id, reversal_of_transaction_id, created_at;`,
+        [
+          command.organizationId,
+          currentAr.branchId,
+          command.accountsReceivableId,
+          command.settlementAmount,
+          command.settlementDate ?? null,
+          referenceId,
+        ],
+      );
+
+      // 4. Update AR balance and status
       const updateRes = await client.query<{
         id: string;
         organization_id: string;
@@ -3180,7 +3795,287 @@ export class PostgresFinanceService implements CloudFinanceCompositionService {
         [newBalanceDue, newStatus, command.organizationId, command.accountsReceivableId],
       );
 
-      return this.mapArRow(updateRes.rows[0]!);
+      return {
+        status: 'APPLIED',
+        accountsReceivable: this.mapArRow(updateRes.rows[0]!),
+        settlement: this.mapArSettlementRow(insertTxRes.rows[0]!),
+      };
+    });
+  }
+
+  async reverseAccountsReceivableSettlement(
+    command: ReverseAccountsReceivableSettlementCommand,
+  ): Promise<ReverseAccountsReceivableSettlementResult> {
+    const referenceId = (
+      command.reversalReferenceId ??
+      (command as any).referenceId ??
+      (command as any).reference
+    )?.trim();
+    if (!referenceId) {
+      throw new SettlementReferenceRequiredError();
+    }
+
+    const originalSettlementId =
+      command.originalSettlementTransactionId ?? (command as any).originalSettlementId;
+    const reversalDate = command.reversalDate ?? (command as any).settlementDate;
+
+    return withTenantTransaction(this.pool, command.organizationId, async (client) => {
+      // 1. Check if reversal transaction already exists by reference_id
+      const existingRevRes = await client.query<{
+        id: string;
+        organization_id: string;
+        branch_id: string;
+        accounts_receivable_id: string;
+        transaction_kind: FinanceTransactionKind;
+        amount: string;
+        settlement_date: string | Date;
+        reference_id: string;
+        reversal_of_transaction_id: string | null;
+        created_at: string | Date;
+      }>(
+        `SELECT id, organization_id, branch_id, accounts_receivable_id, transaction_kind,
+                amount::text, settlement_date, reference_id, reversal_of_transaction_id, created_at
+         FROM accounts_receivable_settlements
+         WHERE organization_id = $1 AND reference_id = $2;`,
+        [command.organizationId, referenceId],
+      );
+
+      if (existingRevRes.rows.length > 0) {
+        const row = existingRevRes.rows[0]!;
+        if (
+          row.accounts_receivable_id !== command.accountsReceivableId ||
+          row.transaction_kind !== 'REVERSAL' ||
+          row.reversal_of_transaction_id !== originalSettlementId
+        ) {
+          throw new SettlementIdempotencyConflictError(
+            `Accounts receivable settlement reversal idempotency conflict for reference '${referenceId}'`,
+          );
+        }
+
+        const ar = await this.getAccountsReceivable(
+          command.organizationId,
+          command.accountsReceivableId,
+        );
+        if (!ar) {
+          throw new AccountsReceivableInvalidStateError(
+            `Accounts receivable record '${command.accountsReceivableId}' not found`,
+          );
+        }
+
+        return {
+          status: 'DUPLICATE_ACCEPTED',
+          accountsReceivable: ar,
+          reversal: this.mapArSettlementRow(row),
+        };
+      }
+
+      // 2. Lock AR FOR UPDATE
+      const res = await client.query<{
+        id: string;
+        organization_id: string;
+        branch_id: string;
+        customer_id: string;
+        reference_account_id: string;
+        total_amount: string;
+        balance_due: string;
+        due_date: string | Date;
+        status: AccountsReceivableStatus;
+        created_at: string | Date;
+        updated_at: string | Date;
+      }>(
+        `SELECT id, organization_id, branch_id, customer_id, reference_account_id,
+                total_amount::text, balance_due::text, due_date::text, status,
+                created_at, updated_at
+         FROM accounts_receivable
+         WHERE organization_id = $1 AND id = $2
+         FOR UPDATE;`,
+        [command.organizationId, command.accountsReceivableId],
+      );
+
+      if (res.rows.length === 0) {
+        throw new AccountsReceivableInvalidStateError(
+          `Accounts receivable record '${command.accountsReceivableId}' not found`,
+        );
+      }
+
+      // Check again under lock
+      const concurrentRevRes = await client.query<{
+        id: string;
+        organization_id: string;
+        branch_id: string;
+        accounts_receivable_id: string;
+        transaction_kind: FinanceTransactionKind;
+        amount: string;
+        settlement_date: string | Date;
+        reference_id: string;
+        reversal_of_transaction_id: string | null;
+        created_at: string | Date;
+      }>(
+        `SELECT id, organization_id, branch_id, accounts_receivable_id, transaction_kind,
+                amount::text, settlement_date, reference_id, reversal_of_transaction_id, created_at
+         FROM accounts_receivable_settlements
+         WHERE organization_id = $1 AND reference_id = $2;`,
+        [command.organizationId, referenceId],
+      );
+
+      if (concurrentRevRes.rows.length > 0) {
+        const row = concurrentRevRes.rows[0]!;
+        if (
+          row.accounts_receivable_id !== command.accountsReceivableId ||
+          row.transaction_kind !== 'REVERSAL' ||
+          row.reversal_of_transaction_id !== originalSettlementId
+        ) {
+          throw new SettlementIdempotencyConflictError(
+            `Accounts receivable settlement reversal idempotency conflict for reference '${referenceId}'`,
+          );
+        }
+
+        return {
+          status: 'DUPLICATE_ACCEPTED',
+          accountsReceivable: this.mapArRow(res.rows[0]!),
+          reversal: this.mapArSettlementRow(row),
+        };
+      }
+
+      // 3. Locate original APPLY transaction to reverse
+      const origTxRes = await client.query<{
+        id: string;
+        organization_id: string;
+        branch_id: string;
+        accounts_receivable_id: string;
+        transaction_kind: FinanceTransactionKind;
+        amount: string;
+        settlement_date: string | Date;
+        reference_id: string;
+        reversal_of_transaction_id: string | null;
+        created_at: string | Date;
+      }>(
+        `SELECT id, organization_id, branch_id, accounts_receivable_id, transaction_kind,
+                amount::text, settlement_date, reference_id, reversal_of_transaction_id, created_at
+         FROM accounts_receivable_settlements
+         WHERE organization_id = $1 AND id = $2 AND accounts_receivable_id = $3;`,
+        [command.organizationId, originalSettlementId, command.accountsReceivableId],
+      );
+
+      if (origTxRes.rows.length === 0) {
+        throw new SettlementTransactionNotFoundError(
+          `Original settlement transaction '${originalSettlementId}' not found on accounts receivable '${command.accountsReceivableId}'`,
+        );
+      }
+
+      const origRow = origTxRes.rows[0]!;
+      if (origRow.transaction_kind !== 'APPLY') {
+        throw new AccountsReceivableInvalidStateError(
+          `Cannot reverse transaction '${originalSettlementId}' because it is not an APPLY settlement transaction`,
+        );
+      }
+
+      // Check if already reversed
+      const checkRevRes = await client.query<{ id: string }>(
+        `SELECT id FROM accounts_receivable_settlements
+         WHERE organization_id = $1 AND reversal_of_transaction_id = $2;`,
+        [command.organizationId, originalSettlementId],
+      );
+
+      if (checkRevRes.rows.length > 0) {
+        throw new SettlementAlreadyReversedError(
+          `Settlement transaction '${originalSettlementId}' has already been reversed`,
+        );
+      }
+
+      const currentAr = this.mapArRow(res.rows[0]!);
+      const { newBalanceDue, newStatus } = reverseSettlementOnAccountsReceivable(
+        currentAr,
+        origRow.amount,
+      );
+
+      // 4. Insert immutable REVERSAL transaction
+      const revInsertRes = await client.query<{
+        id: string;
+        organization_id: string;
+        branch_id: string;
+        accounts_receivable_id: string;
+        transaction_kind: FinanceTransactionKind;
+        amount: string;
+        settlement_date: string | Date;
+        reference_id: string;
+        reversal_of_transaction_id: string | null;
+        created_at: string | Date;
+      }>(
+        `INSERT INTO accounts_receivable_settlements (
+          organization_id, branch_id, accounts_receivable_id, transaction_kind,
+          amount, settlement_date, reference_id, reversal_of_transaction_id
+        ) VALUES ($1, $2, $3, 'REVERSAL', $4, COALESCE($5, NOW()), $6, $7)
+        RETURNING id, organization_id, branch_id, accounts_receivable_id, transaction_kind,
+                  amount::text, settlement_date, reference_id, reversal_of_transaction_id, created_at;`,
+        [
+          command.organizationId,
+          currentAr.branchId,
+          command.accountsReceivableId,
+          origRow.amount,
+          reversalDate ?? null,
+          referenceId,
+          originalSettlementId,
+        ],
+      );
+
+      // 5. Update AR balance and status
+      const updateRes = await client.query<{
+        id: string;
+        organization_id: string;
+        branch_id: string;
+        customer_id: string;
+        reference_account_id: string;
+        total_amount: string;
+        balance_due: string;
+        due_date: string | Date;
+        status: AccountsReceivableStatus;
+        created_at: string | Date;
+        updated_at: string | Date;
+      }>(
+        `UPDATE accounts_receivable
+         SET balance_due = $1, status = $2, updated_at = NOW()
+         WHERE organization_id = $3 AND id = $4
+         RETURNING id, organization_id, branch_id, customer_id, reference_account_id,
+                   total_amount::text, balance_due::text, due_date::text, status,
+                   created_at, updated_at;`,
+        [newBalanceDue, newStatus, command.organizationId, command.accountsReceivableId],
+      );
+
+      return {
+        status: 'APPLIED',
+        accountsReceivable: this.mapArRow(updateRes.rows[0]!),
+        reversal: this.mapArSettlementRow(revInsertRes.rows[0]!),
+      };
+    });
+  }
+
+  async getAccountsReceivableSettlements(
+    organizationId: string,
+    accountsReceivableId: string,
+  ): Promise<AccountsReceivableSettlement[]> {
+    return withTenantTransaction(this.pool, organizationId, async (client) => {
+      const res = await client.query<{
+        id: string;
+        organization_id: string;
+        branch_id: string;
+        accounts_receivable_id: string;
+        transaction_kind: FinanceTransactionKind;
+        amount: string;
+        settlement_date: string | Date;
+        reference_id: string;
+        reversal_of_transaction_id: string | null;
+        created_at: string | Date;
+      }>(
+        `SELECT id, organization_id, branch_id, accounts_receivable_id, transaction_kind,
+                amount::text, settlement_date, reference_id, reversal_of_transaction_id, created_at
+         FROM accounts_receivable_settlements
+         WHERE organization_id = $1 AND accounts_receivable_id = $2
+         ORDER BY created_at ASC, id ASC;`,
+        [organizationId, accountsReceivableId],
+      );
+
+      return res.rows.map((r) => this.mapArSettlementRow(r));
     });
   }
 
@@ -3512,6 +4407,68 @@ export class PostgresFinanceService implements CloudFinanceCompositionService {
       actualCash: row.actual_cash,
       variance: row.variance,
       hasVariance: Boolean(row.has_variance),
+      createdAt: typeof row.created_at === 'string' ? row.created_at : row.created_at.toISOString(),
+    };
+  }
+
+  private mapApPaymentRow(row: {
+    id: string;
+    organization_id: string;
+    branch_id: string;
+    accounts_payable_id: string;
+    transaction_kind: FinanceTransactionKind;
+    amount: string;
+    payment_date: string | Date;
+    reference_id: string;
+    reversal_of_transaction_id: string | null;
+    created_at: string | Date;
+  }): AccountsPayablePayment {
+    return {
+      id: row.id,
+      organizationId: row.organization_id,
+      branchId: row.branch_id,
+      accountsPayableId: row.accounts_payable_id,
+      transactionKind: row.transaction_kind,
+      amount: row.amount,
+      paymentDate:
+        typeof row.payment_date === 'string'
+          ? row.payment_date
+          : row.payment_date instanceof Date
+            ? row.payment_date.toISOString()
+            : String(row.payment_date),
+      referenceId: row.reference_id,
+      reversalOfTransactionId: row.reversal_of_transaction_id,
+      createdAt: typeof row.created_at === 'string' ? row.created_at : row.created_at.toISOString(),
+    };
+  }
+
+  private mapArSettlementRow(row: {
+    id: string;
+    organization_id: string;
+    branch_id: string;
+    accounts_receivable_id: string;
+    transaction_kind: FinanceTransactionKind;
+    amount: string;
+    settlement_date: string | Date;
+    reference_id: string;
+    reversal_of_transaction_id: string | null;
+    created_at: string | Date;
+  }): AccountsReceivableSettlement {
+    return {
+      id: row.id,
+      organizationId: row.organization_id,
+      branchId: row.branch_id,
+      accountsReceivableId: row.accounts_receivable_id,
+      transactionKind: row.transaction_kind,
+      amount: row.amount,
+      settlementDate:
+        typeof row.settlement_date === 'string'
+          ? row.settlement_date
+          : row.settlement_date instanceof Date
+            ? row.settlement_date.toISOString()
+            : String(row.settlement_date),
+      referenceId: row.reference_id,
+      reversalOfTransactionId: row.reversal_of_transaction_id,
       createdAt: typeof row.created_at === 'string' ? row.created_at : row.created_at.toISOString(),
     };
   }

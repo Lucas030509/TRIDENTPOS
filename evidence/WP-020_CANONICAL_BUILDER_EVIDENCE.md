@@ -1,4 +1,4 @@
-# WP-020 CANONICAL BUILDER EVIDENCE (R3 PERSISTENCE-BOUNDARY REMEDIATION)
+# WP-020 CANONICAL BUILDER EVIDENCE (R4 PAYMENT TRANSACTION REMEDIATION)
 
 ## Work Package Information
 - **Work Package:** WP-020 — Finance, Accounts Payable / Receivable & Cash Reconciliation
@@ -7,8 +7,9 @@
 - **Canonical Base SHA:** `16b41e3d471eeaf5a5d439f448626de05c318b1e`
 - **R1 Frozen Subject SHA:** `c762e2522c3e4845611614e9c27e414a8e532199`
 - **R2 Frozen Subject SHA:** `fa2ea8d09ba4c3ec02e1ec0d15d1d5442d7a5ef0`
-- **R3 Branch:** `feat/wp-020-finance-ap-ar-reconciliation-r3`
-- **Direct Parent:** R2 Frozen Subject (`fa2ea8d09ba4c3ec02e1ec0d15d1d5442d7a5ef0`)
+- **R3 Frozen Subject SHA:** `28bedeedeb0206055d84bc7e71e48301cdf9b9ce`
+- **R4 Branch:** `feat/wp-020-finance-ap-ar-reconciliation-r4`
+- **Direct Parent:** R3 Frozen Subject (`28bedeedeb0206055d84bc7e71e48301cdf9b9ce`)
 - **WP-019 Status:** CANONICAL / VERIFIED (PR #55 merged at `16b41e3d471eeaf5a5d439f448626de05c318b1e`)
 
 ---
@@ -21,54 +22,86 @@
 
 ---
 
-## 2. R3 Persistence Boundary Remediation (Decoupling from Procurement)
-- **Architectural Principle:** Modular by Design — Integrated by Contract.
-- **Problem Resolved:** In R1/R2, `accounts_payable` contained physical foreign keys (`fk_ap_supplier` and `fk_ap_purchase_receipt`) pointing to Procurement tables (`suppliers`, `purchase_receipts`). This violated modular standalone deployment and context autonomy boundaries.
-- **Cross-Context FKs Removed:**
-  - `fk_ap_supplier` (FOREIGN KEY referencing `suppliers`) — **REMOVED**.
-  - `fk_ap_purchase_receipt` (FOREIGN KEY referencing `purchase_receipts`) — **REMOVED**.
-- **External Aggregate Identities Preserved:**
-  - `supplier_id UUID NOT NULL` — **PRESERVED** as Finance-side external aggregate identifier carried by integration event.
-  - `purchase_receipt_id UUID NOT NULL` — **PRESERVED** as Finance-side external aggregate identifier carried by integration event.
-- **Idempotency Identity Preserved:**
-  - `uq_ap_org_receipt`: `UNIQUE (organization_id, purchase_receipt_id)` — **PRESERVED** (AP event idempotency identity).
-- **Platform Core Foreign Keys Preserved:**
-  - `fk_ap_branch`: `FOREIGN KEY (organization_id, branch_id) REFERENCES branches(organization_id, id)` — **PRESERVED** (Branch belongs to Platform Core).
-- **Finance Internal Foreign Keys Preserved:**
-  - Composite tenant-safe FK from `scheduled_payments` to `accounts_payable(organization_id, id)` — **PRESERVED**.
-- **Standalone/Selective Deployment Boundary:**
-  - Finance persistence schema can be migrated, created, and operated standalone without requiring Procurement tables.
-- **Source Inspection & Zero Query Guarantee:**
-  - `PostgresFinanceService` performs **0** `SELECT` queries on `suppliers`.
-  - `PostgresFinanceService` performs **0** `SELECT` queries on `purchase_receipts`.
-  - `PostgresFinanceService` performs **0** writes/mutations to Procurement tables.
+## 2. R4 Payment Transaction Remediation (Settlement History & Compensating Reversals)
+- **Architectural Principle:** Immutable, Append-Only Operational Settlement History with Compensating Reversals.
+- **Problem Resolved:** In R3, AP/AR balance mutations directly changed `balance_due` without persisting durable immutable transaction history or providing compensating reversal capabilities.
+- **Tables Created:**
+  1. `accounts_payable_payments` (Finance-owned immutable AP payment transactions & reversals).
+  2. `accounts_receivable_settlements` (Finance-owned immutable AR settlement transactions & reversals).
+- **Append-Only Database Triggers:**
+  - `trg_ap_payments_immutable`: `BEFORE UPDATE OR DELETE ON accounts_payable_payments EXECUTE FUNCTION trg_finance_payments_append_only()`
+  - `trg_ar_settlements_immutable`: `BEFORE UPDATE OR DELETE ON accounts_receivable_settlements EXECUTE FUNCTION trg_finance_payments_append_only()`
+  - Enforced at PostgreSQL database engine level: any direct SQL `UPDATE` or `DELETE` is rejected with `P0001` error.
+- **Transaction Kinds Governed:**
+  - `APPLY`: Decreases `balance_due` on parent entity.
+  - `REVERSAL`: Compensating transaction referencing original `APPLY` row (`reversal_of_transaction_id`), increasing `balance_due` on parent entity.
+  - Zero arbitrary transaction kinds (no `REFUND`, `VOID`, `BANK_TRANSFER`, `CHECK`, `SPEI`).
+- **Mandatory Stable Idempotency References:**
+  - `reference_id VARCHAR(100) NOT NULL` with `UNIQUE (organization_id, reference_id)`.
+  - Mutating service commands fail closed if reference is missing (`PaymentReferenceRequiredError` / `SettlementReferenceRequiredError`).
+  - Same reference retry returns `DUPLICATE_ACCEPTED` with deterministic prior transaction and parent entity state.
+  - Conflicting retry (same reference, different facts) fails closed with `PaymentIdempotencyConflictError` / `SettlementIdempotencyConflictError`.
+- **Atomic Balance & Settlement Transaction Mutation:**
+  - Executed inside a single tenant transaction (`withTenantTransaction`).
+  - Acquires `FOR UPDATE` lock on parent AP/AR row.
+  - Validates balance, inserts immutable transaction row, recalculates new balance and deterministic lifecycle status via pure domain function, updates parent row, and commits.
+  - Failure at any step rolls back both transaction row and parent balance.
+- **Compensating Reversal Semantics:**
+  - Full reversal referencing original `APPLY` row via `reversal_of_transaction_id`.
+  - Appends new `REVERSAL` transaction row; never deletes or updates the original `APPLY` row.
+  - Restores parent `balance_due` exactly and deterministically recalculates status (`PAID -> PARTIAL/PENDING`, `PARTIAL -> PENDING`).
+  - Over-reversal (attempting to reverse an already reversed transaction) fails closed with `PaymentAlreadyReversedError` / `SettlementAlreadyReversedError`.
+- **Balance-History Invariant:**
+  - `AP balance_due == total_amount - sum(APPLY amounts) + sum(REVERSAL amounts)`
+  - `AR balance_due == total_amount - sum(APPLY amounts) + sum(REVERSAL amounts)`
+  - Verified explicitly by tests across multiple payment and reversal sequences.
+- **No Accounting Journal / General Ledger:**
+  - Zero double-entry ledger accounts, chart of accounts, journal entries, or debits/credits.
+  - Operational Finance settlement history only.
+- **Scheduled Payment EXECUTED Semantics:**
+  - `ScheduledPaymentStatus = EXECUTED` strictly means: converted/applied into a Finance settlement transaction.
+  - Does NOT mean external bank execution, ACH, SPEI, or third-party payment provider confirmation.
 
 ---
 
-## 3. Database Migration & Schema
+## 3. R3 Persistence Boundary Decoupling (Preserved)
+- Cross-context physical FKs from `accounts_payable` to `suppliers` and `purchase_receipts` remain **REMOVED**.
+- External aggregate identities `supplier_id` and `purchase_receipt_id` remain **PRESERVED** as UUID fields.
+- Platform Core FK `(organization_id, branch_id) REFERENCES branches(organization_id, id)` remains **PRESERVED**.
+- Finance-internal FK `scheduled_payments -> accounts_payable(organization_id, id)` remains **PRESERVED**.
+- Zero queries from Finance service to Procurement tables.
+
+---
+
+## 4. Database Migration & Schema
 - **Migration File:** `packages/database/migrations/20260905020000_finance_ap_ar_cash_reconciliation.sql`
-- **Tables Created:**
-  1. `accounts_payable` — Accounts payable liabilities created from procurement receiving events.
-  2. `scheduled_payments` — Payment scheduling intent linked to accounts payable.
-  3. `accounts_receivable` — Accounts receivable charges and customer credit tracking.
-  4. `branch_operating_expenses` — Branch-level operating expenses with receipt attachment references.
-  5. `cash_reconciliations` — Finance-owned daily cash variance reconciliation from Corte Z facts.
+- **Tables Created (Exact 7):**
+  1. `accounts_payable` — AP liability aggregate.
+  2. `accounts_payable_payments` — Immutable append-only AP payment transactions and reversals.
+  3. `scheduled_payments` — Payment scheduling intent.
+  4. `accounts_receivable` — AR receivable aggregate.
+  5. `accounts_receivable_settlements` — Immutable append-only AR settlement transactions and reversals.
+  6. `branch_operating_expenses` — Branch petty cash/operating expenses.
+  7. `cash_reconciliations` — Daily cash variance reconciliations.
 
 ### RLS & Security Hardening
-- `ENABLE ROW LEVEL SECURITY` executed on all 5 tables.
-- `FORCE ROW LEVEL SECURITY` executed on all 5 tables.
+- `ENABLE ROW LEVEL SECURITY` on all 7 tables.
+- `FORCE ROW LEVEL SECURITY` on all 7 tables.
 - Fail-closed tenant isolation policy: `organization_id = current_app_org_id()`.
 - Composite tenant-safe candidate keys: `UNIQUE (organization_id, id)`.
-- Composite tenant-safe foreign keys: `FOREIGN KEY (organization_id, accounts_payable_id) REFERENCES accounts_payable(organization_id, id)`.
+- Composite tenant-safe foreign keys:
+  - `(organization_id, accounts_payable_id) REFERENCES accounts_payable(organization_id, id)`
+  - `(organization_id, reversal_of_transaction_id) REFERENCES accounts_payable_payments(organization_id, id)`
+  - `(organization_id, accounts_receivable_id) REFERENCES accounts_receivable(organization_id, id)`
+  - `(organization_id, reversal_of_transaction_id) REFERENCES accounts_receivable_settlements(organization_id, id)`
 
-### Idempotency Constraints
-- `uq_ap_org_receipt`: `UNIQUE (organization_id, purchase_receipt_id)`
-- `uq_ar_org_reference`: `UNIQUE (organization_id, reference_account_id)`
-- `uq_cash_rec_org_source_cut`: `UNIQUE (organization_id, source_cut_id)`
+### Down Migration Clean Rollback
+- Down migration cleanly drops triggers, functions, and all 7 tables with `CASCADE`.
+- Tested in `WP019-DOWN-01`, `R4-DB-11`, and `R4-DB-12`: all predecessor tables (Platform Core, Outbox, Sync, Recipes, Kárdex, Procurement) survive cleanly.
 
 ---
 
-## 4. Financial Arithmetic & Exact Scale-4 Enforcement
+## 5. Financial Arithmetic & Exact Scale-4 Enforcement
 - Authoritative monetary storage: `DECIMAL(12,4)` in PostgreSQL.
 - Domain representation: Exact fixed-point integer basis ($10^4$ scale, 1 cent = 100 base units).
 - Numeric parsing/formatting: `parseExactScale4` / `formatExactScale4` rejecting scientific notation, exceeding decimal places, and NaN.
@@ -76,74 +109,30 @@
 
 ---
 
-## 5. Accounts Payable Lifecycle & Neutral Payment Terms Resolver
-- **Creation Trigger:** Consumes canonical `RecepcionCompraRegistradaPayload` event emitted by WP-019.
-- **Initial Values:** `total_amount = event.totalAmount`, `balance_due = event.totalAmount`.
-- **Payment Terms Neutralization (R2 & R3 Preserved):**
-  - Removed all hardcoded commercial payment terms string parsers (`NET_30`, `CONTADO`, `CASH`, etc.) from production domain code.
-  - Neutral contract interface `PaymentTermsDueDateResolver` with context `PaymentTermsDueDateResolverContext`.
-  - When processing purchase receipts, if no resolver or explicit due date is provided, fails closed with `PaymentTermsResolverRequiredError` (`PAYMENT_TERMS_RESOLVER_REQUIRED`).
-  - `ProcessPurchaseReceiptOptions.dueDate`, if provided, is strictly an **EXTERNALLY RESOLVED FACT** (not a Finance product default policy).
-- **AP Semantic Idempotency Revalidation (R2 & R3 Preserved):**
-  - Stable identity: `organization_id + purchase_receipt_id`.
-  - When an existing AP row is found (or after `ON CONFLICT DO NOTHING`), Finance revalidates semantic equivalence:
-    - `branchId` match
-    - `supplierId` match
-    - `totalAmount` exact scale-4 match
-    - `dueDate` match
-  - If any business fact conflicts, fails closed with `APIdempotencyConflictError` (`AP_IDEMPOTENCY_CONFLICT`).
-  - Only identical retries return `DUPLICATE_ACCEPTED`.
-
----
-
-## 6. Scheduled Payments
-- **Table:** `scheduled_payments`.
-- **Purpose:** Payment scheduling intent only; zero third-party payment gateways, bank transfers, SPEI, or ACH.
+## 6. Accounts Payable Lifecycle & Neutral Payment Terms Resolver
+- Consumes canonical `RecepcionCompraRegistradaPayload` event emitted by WP-019.
+- Neutral contract interface `PaymentTermsDueDateResolver` with context `PaymentTermsDueDateResolverContext`.
+- When processing purchase receipts, if no resolver or explicit due date is provided, fails closed with `PaymentTermsResolverRequiredError` (`PAYMENT_TERMS_RESOLVER_REQUIRED`).
+- AP Semantic Idempotency Revalidation: `organization_id + purchase_receipt_id` revalidates branch, supplier, total, and dueDate.
 
 ---
 
 ## 7. Accounts Receivable & Credit Limit Validator
-- **Table:** `accounts_receivable`.
-- **States:** `PENDING`, `PAID`, `OVERDUE`, `DEFAULTED`.
-- **Customer Master Boundary:** Finance stores `customerId` as an external reference only; zero CRM customer master tables or mutations.
 - **OQ-SSOT-03 Protection:**
   - Status: **OPEN** (Protected Product Owner Open Question).
   - `CreditLimitValidator`: **CONTRACT ONLY** interface in `@trident/finance`.
-  - Default credit policies / hardcoded thresholds / manager PIN overrides: **NONE**.
   - Fail-Closed Behavior: When credit check is required and no authorized `CreditLimitValidator` is supplied, throws `CreditPolicyRequiredError` (`CREDIT_POLICY_REQUIRED`).
-- **AR Semantic Idempotency Revalidation (R2 & R3 Preserved):**
-  - Stable identity: `organization_id + reference_account_id`.
-  - When an existing AR row is found (or after `ON CONFLICT DO NOTHING`), Finance revalidates semantic equivalence:
-    - `branchId` match
-    - `customerId` match
-    - `totalAmount` exact scale-4 match
-    - `dueDate` match
-  - If any business fact conflicts, fails closed with `ARIdempotencyConflictError` (`AR_IDEMPOTENCY_CONFLICT`).
-  - Only identical retries return `DUPLICATE_ACCEPTED`.
+- AR Semantic Idempotency Revalidation: `organization_id + reference_account_id` revalidates branch, customer, total, and dueDate.
 
 ---
 
 ## 8. Cash Reconciliation & Corte Z Contract Neutralization
-- **Operating Expenses:** `branch_operating_expenses` records branch cash outflows with receipt attachment URL / reference string.
-- **POS Cash Ownership Boundary:** POS owns `turnos_caja`, `movimientos_efectivo`, `corte_x`, and `corte_z`. Finance performs **0** POS table mutations.
-- **Corte Z Physical Contract Inspection:**
-  - **CorteZ Contract Sufficient:** `NO`.
-  - **POS -> Finance Corte Z Integration:** `BLOCKED BY CONTRACT`.
-  - **Cash Reconciliation Core:** `IMPLEMENTED` as a pure financial domain calculator accepting neutral `CashClosingFacts`.
-  - `CashClosingFacts` (`CashReconciliationSource`) provides neutral `expectedCash` and `actualCash` facts.
-- **Reconciliation Engine:**
-  - `variance = actualCash - expectedCash`
-  - `hasVariance = variance !== 0n`
-  - Zero variance produces `hasVariance = false`; non-zero variance produces `hasVariance = true`.
-- **Cash Reconciliation Semantic Idempotency Revalidation:**
-  - Stable identity: `organization_id + source_cut_id`.
-  - When an existing reconciliation row is found (or after `ON CONFLICT DO NOTHING`), Finance revalidates semantic equivalence:
-    - `branchId` match
-    - `operationalDate` match
-    - `expectedCash` exact scale-4 match
-    - `actualCash` exact scale-4 match
-  - If any business fact conflicts, fails closed with `CashReconciliationIdempotencyConflictError` (`CASH_RECONCILIATION_IDEMPOTENCY_CONFLICT`).
-  - Only identical retries return `DUPLICATE_ACCEPTED`.
+- Operating expenses: `branch_operating_expenses` records branch cash outflows with receipt attachment reference.
+- POS cash ownership boundary: POS owns `turnos_caja`, `movimientos_efectivo`, `corte_x`, and `corte_z`. Finance performs **0** POS table mutations.
+- Corte Z physical contract inspection: POS -> Finance Corte Z integration is **BLOCKED BY CONTRACT**.
+- Cash Reconciliation Core: pure financial domain calculator accepting neutral `CashClosingFacts`.
+- Reconciliation Engine: `variance = actualCash - expectedCash`, `hasVariance = variance !== 0n`.
+- Cash Reconciliation Semantic Idempotency Revalidation: `organization_id + source_cut_id` revalidates branch, date, expected cash, and actual cash.
 
 ---
 
@@ -152,25 +141,42 @@
 ### Package Test Summary
 | Test Suite | File | Tests | Pass | Fail | Status |
 |------------|------|-------|------|------|--------|
-| Finance Domain | `packages/finance/src/index.test.ts` | 14 | 14 | 0 | PASS |
-| Database Integration | `packages/database/src/finance.test.ts` + all DB suites | 309 | 309 | 0 | PASS |
-| Cloud Server Integration | `packages/cloud-server/src/index.test.ts` | 89 | 89 | 0 | PASS |
+| Finance Domain | `packages/finance/src/index.test.ts` | 15 | 15 | 0 | PASS |
+| Database Integration | `packages/database/src/finance.test.ts` + all DB suites | 320 | 320 | 0 | PASS |
+| Cloud Server Integration | `packages/cloud-server/src/index.test.ts` | 112 | 112 | 0 | PASS |
 | Cross-Package E2E | `tests/integration/wp013-sync-e2e.test.mjs` | 1 | 1 | 0 | PASS |
 | Dependency Graph | `scripts/check-graph.test.mjs` | 44 | 44 | 0 | PASS |
 | Electron Runtime | `packages/edge/src/electron.test.ts` | 10 | 10 | 0 | PASS |
 
-### R3 Specific Tests
-- **R3-DB-01:** PostgreSQL catalog constraints on `accounts_payable`:
-  - Foreign key to `branches`: **PRESENT**
-  - Foreign key to `suppliers`: **ABSENT**
-  - Foreign key to `purchase_receipts`: **ABSENT**
-  - Foreign key to `purchase_orders`: **ABSENT**
-  - Foreign key to `purchase_order_items`: **ABSENT**
-- **R3-CLOUD-01 (WP020-CLOUD-01):** Event-driven AP creation with external aggregate identities:
-  - Consumes `RecepcionCompraRegistrada` event.
-  - Stores `supplier_id` and `purchase_receipt_id` as pure external aggregate references.
-  - Ingestion succeeds with synthetic IDs not present in Procurement tables.
-  - Zero SQL queries to `suppliers` or `purchase_receipts` in Finance service.
+### R4 Specific Database Tests (`packages/database/src/finance.test.ts`)
+- **R4-DB-01:** `accounts_payable_payments` table exists with all required columns.
+- **R4-DB-02:** `accounts_receivable_settlements` table exists with all required columns.
+- **R4-DB-03:** RLS and FORCE RLS enabled on both settlement tables.
+- **R4-DB-04:** Tenant-safe composite FK `(organization_id, accounts_payable_id) -> accounts_payable(organization_id, id)`.
+- **R4-DB-05:** Tenant-safe composite FK `(organization_id, accounts_receivable_id) -> accounts_receivable(organization_id, id)`.
+- **R4-DB-06:** Stable AP payment reference uniqueness per tenant `(organization_id, reference_id)`.
+- **R4-DB-07:** Stable AR settlement reference uniqueness per tenant `(organization_id, reference_id)`.
+- **R4-DB-08:** Reversal self-referencing composite FK stays tenant-safe.
+- **R4-DB-09:** Transaction kind CHECK strictly enforces `APPLY` and `REVERSAL` only.
+- **R4-DB-10:** Positive amount CHECK strictly enforces `amount > 0.0000`.
+- **R4-DB-IMMUTABLE:** Append-only triggers reject SQL `UPDATE` and `DELETE` at DB engine level.
+- **R4-DB-11 & R4-DB-12:** WP-020 rollback removes settlement tables and predecessors survive.
+
+### R4 Specific Cloud Tests (`packages/cloud-server/src/index.test.ts`)
+- **R4-REF-01:** Missing AP payment reference fails closed (`PaymentReferenceRequiredError`).
+- **R4-REF-02:** Missing AR settlement reference fails closed (`SettlementReferenceRequiredError`).
+- **R4-AP-01:** Payment creates APPLY transaction and reduces balance atomically.
+- **R4-AP-02:** Same payment reference retry is idempotent (`DUPLICATE_ACCEPTED`).
+- **R4-AP-03:** Concurrent same payment reference produces exactly one APPLY row and one balance reduction.
+- **R4-AP-04:** Two different valid concurrent payments serialize cleanly (`400 + 600 = 1000 balance -> 0`).
+- **R4-AP-05:** Concurrent overpayment race (`700 + 700` on 1000 balance) prevents second payment from making balance negative.
+- **R4-AP-06 / R4-AP-07 / R4-AP-11:** Full reversal creates `REVERSAL` row, restores exact balance, and leaves original `APPLY` row unchanged.
+- **R4-AP-08:** Same reversal reference retry is idempotent (`DUPLICATE_ACCEPTED`).
+- **R4-AP-09:** Concurrent same reversal produces exactly one `REVERSAL` row and one balance restoration.
+- **R4-AP-10:** Over-reversal fails closed (`PaymentAlreadyReversedError`).
+- **R4-AP-12:** Balance equals transaction-history invariant across multi-step mutations.
+- **R4-AR-01..12:** Full equivalent test suite for Accounts Receivable settlements and reversals.
+- **R4-TX-01:** Forced error during transaction preparation leaves zero payment rows persisted and parent balance unchanged.
 
 ---
 

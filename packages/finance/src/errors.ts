@@ -109,3 +109,55 @@ export class CashReconciliationError extends FinanceDomainError {
     super(message, 'CASH_RECONCILIATION_ERROR');
   }
 }
+
+export class PaymentReferenceRequiredError extends FinanceDomainError {
+  constructor(message = 'Payment reference ID is required for immutable transaction tracking') {
+    super(message, 'PAYMENT_REFERENCE_REQUIRED');
+  }
+}
+
+export class SettlementReferenceRequiredError extends FinanceDomainError {
+  constructor(message = 'Settlement reference ID is required for immutable transaction tracking') {
+    super(message, 'SETTLEMENT_REFERENCE_REQUIRED');
+  }
+}
+
+export class PaymentTransactionNotFoundError extends FinanceDomainError {
+  constructor(message = 'Original payment transaction not found for accounts payable') {
+    super(message, 'PAYMENT_TRANSACTION_NOT_FOUND');
+  }
+}
+
+export class SettlementTransactionNotFoundError extends FinanceDomainError {
+  constructor(message = 'Original settlement transaction not found for accounts receivable') {
+    super(message, 'SETTLEMENT_TRANSACTION_NOT_FOUND');
+  }
+}
+
+export class PaymentAlreadyReversedError extends FinanceDomainError {
+  constructor(message = 'Payment transaction has already been fully reversed') {
+    super(message, 'PAYMENT_ALREADY_REVERSED');
+  }
+}
+
+export class SettlementAlreadyReversedError extends FinanceDomainError {
+  constructor(message = 'Settlement transaction has already been fully reversed') {
+    super(message, 'SETTLEMENT_ALREADY_REVERSED');
+  }
+}
+
+export class PaymentIdempotencyConflictError extends FinanceDomainError {
+  constructor(
+    message = 'Payment transaction idempotency conflict: reference ID already used with different parameters',
+  ) {
+    super(message, 'PAYMENT_IDEMPOTENCY_CONFLICT');
+  }
+}
+
+export class SettlementIdempotencyConflictError extends FinanceDomainError {
+  constructor(
+    message = 'Settlement transaction idempotency conflict: reference ID already used with different parameters',
+  ) {
+    super(message, 'SETTLEMENT_IDEMPOTENCY_CONFLICT');
+  }
+}

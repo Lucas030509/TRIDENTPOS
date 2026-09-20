@@ -3,7 +3,7 @@
  * Bounded Context: Finance
  */
 
-import { isPositiveScale4, cmpScale4, subScale4, isZeroScale4 } from './numerics.js';
+import { isPositiveScale4, cmpScale4, subScale4, addScale4, isZeroScale4 } from './numerics.js';
 import {
   AccountsPayableOverpaymentError,
   AccountsPayableInvalidStateError,
@@ -56,6 +56,38 @@ export function applyPaymentToAccountsPayable(
 
   const newBalanceDue = subScale4(ap.balanceDue, paymentAmount);
   const newStatus: AccountsPayableStatus = isZeroScale4(newBalanceDue) ? 'PAID' : 'PARTIAL';
+
+  return { newBalanceDue, newStatus };
+}
+
+/**
+ * Calculates new balance due and restored status after compensating reversal of an AP payment.
+ */
+export function reversePaymentOnAccountsPayable(
+  ap: Pick<AccountsPayable, 'totalAmount' | 'balanceDue' | 'status'>,
+  reversalAmount: string,
+): { newBalanceDue: string; newStatus: AccountsPayableStatus } {
+  if (!isPositiveScale4(reversalAmount)) {
+    throw new AccountsPayableOverpaymentError(
+      `Reversal amount must be positive, received '${reversalAmount}'`,
+    );
+  }
+
+  if (ap.status === 'CANCELLED') {
+    throw new AccountsPayableInvalidStateError(
+      'Cannot reverse payment on a CANCELLED accounts payable record',
+    );
+  }
+
+  const newBalanceDue = addScale4(ap.balanceDue, reversalAmount);
+  if (cmpScale4(newBalanceDue, ap.totalAmount) > 0) {
+    throw new AccountsPayableOverpaymentError(
+      `Reversal amount '${reversalAmount}' would cause balance due '${newBalanceDue}' to exceed original total '${ap.totalAmount}'`,
+    );
+  }
+
+  const newStatus: AccountsPayableStatus =
+    cmpScale4(newBalanceDue, ap.totalAmount) === 0 ? 'PENDING' : 'PARTIAL';
 
   return { newBalanceDue, newStatus };
 }

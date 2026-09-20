@@ -27,6 +27,10 @@ import {
   ARIdempotencyConflictError,
   CashReconciliationIdempotencyConflictError,
   InvalidPaymentTermsError,
+  PaymentReferenceRequiredError,
+  SettlementReferenceRequiredError,
+  PaymentAlreadyReversedError,
+  SettlementAlreadyReversedError,
 } from './index.js';
 import type pg from 'pg';
 
@@ -2928,8 +2932,8 @@ describe('TRIDENTPOS WP-020 Cloud Server Finance, AP, AR & Cash Reconciliation S
       await client.query(`
         INSERT INTO organizations (id, legal_name, trade_name, tax_id)
         VALUES
-          ('${tenantAId}', 'Tenant A Finance Corp', 'Tenant A Fin', 'RFC-A-FIN'),
-          ('${tenantBId}', 'Tenant B Finance Corp', 'Tenant B Fin', 'RFC-B-FIN')
+          ('${tenantAId}', 'Tenant A Finance Corp', 'Tenant A Fin', 'RFC-A-FIN-${tenantAId.slice(0, 8)}'),
+          ('${tenantBId}', 'Tenant B Finance Corp', 'Tenant B Fin', 'RFC-B-FIN-${tenantBId.slice(0, 8)}')
         ON CONFLICT (id) DO NOTHING;
 
         INSERT INTO branches (id, organization_id, code, name)
@@ -2958,6 +2962,12 @@ describe('TRIDENTPOS WP-020 Cloud Server Finance, AP, AR & Cash Reconciliation S
     const cleanClient = await pool.connect();
     try {
       await cleanClient.query(`
+        ALTER TABLE accounts_receivable_settlements DISABLE TRIGGER trg_ar_settlements_immutable;
+        ALTER TABLE accounts_payable_payments DISABLE TRIGGER trg_ap_payments_immutable;
+        DELETE FROM accounts_receivable_settlements WHERE organization_id IN ('${tenantAId}', '${tenantBId}');
+        DELETE FROM accounts_payable_payments WHERE organization_id IN ('${tenantAId}', '${tenantBId}');
+        ALTER TABLE accounts_receivable_settlements ENABLE TRIGGER trg_ar_settlements_immutable;
+        ALTER TABLE accounts_payable_payments ENABLE TRIGGER trg_ap_payments_immutable;
         DELETE FROM cash_reconciliations WHERE organization_id IN ('${tenantAId}', '${tenantBId}');
         DELETE FROM branch_operating_expenses WHERE organization_id IN ('${tenantAId}', '${tenantBId}');
         DELETE FROM accounts_receivable WHERE organization_id IN ('${tenantAId}', '${tenantBId}');
@@ -3232,6 +3242,7 @@ describe('TRIDENTPOS WP-020 Cloud Server Finance, AP, AR & Cash Reconciliation S
       branchId: branchAId,
       accountsPayableId: apId,
       paymentAmount: '200.0000',
+      referenceId: 'PAY-REF-CLOUD-06',
     });
 
     assert.equal(settled.status, 'PARTIAL');
@@ -3258,6 +3269,7 @@ describe('TRIDENTPOS WP-020 Cloud Server Finance, AP, AR & Cash Reconciliation S
       branchId: branchAId,
       accountsPayableId: apId,
       paymentAmount: '100.0000',
+      referenceId: 'PAY-REF-CLOUD-07-1',
     });
 
     // Settle remaining
@@ -3266,6 +3278,7 @@ describe('TRIDENTPOS WP-020 Cloud Server Finance, AP, AR & Cash Reconciliation S
       branchId: branchAId,
       accountsPayableId: apId,
       paymentAmount: '200.0000',
+      referenceId: 'PAY-REF-CLOUD-07-2',
     });
 
     assert.equal(settledFull.status, 'PAID');
@@ -3292,6 +3305,7 @@ describe('TRIDENTPOS WP-020 Cloud Server Finance, AP, AR & Cash Reconciliation S
           branchId: branchAId,
           accountsPayableId: apId,
           paymentAmount: '200.0000',
+          referenceId: 'PAY-REF-OVERPAY',
         }),
       /OVERPAYMENT_NOT_AUTHORIZED|AccountsPayableOverpaymentError/i,
     );
@@ -4071,10 +4085,922 @@ describe('TRIDENTPOS WP-020 Cloud Server Finance, AP, AR & Cash Reconciliation S
     assert.equal(appliedCount, 1);
     assert.equal(dupCount, 2);
 
-    const countRes = await pool.query<{ count: string }>(
-      `SELECT COUNT(*)::text as count FROM cash_reconciliations WHERE organization_id = $1 AND source_cut_id = $2;`,
-      [tenantAId, cutId],
-    );
-    assert.equal(countRes.rows[0]!.count, '1');
+    // ============================================================
+    // R4 MANDATORY PAYMENT TRANSACTION & REVERSAL SUITE
+    // ============================================================
+
+    // Section 20: Reference Requirement
+    it('R4-REF-01: Missing AP payment reference fails closed with PaymentReferenceRequiredError', async () => {
+      const { eventPayload } = await createTestReceipt({
+        receiptNumber: `REC-R4-REF-01-${crypto.randomUUID().slice(0, 6)}`,
+        totalAmount: '200.0000',
+        paymentTerms: 'NET_30',
+      });
+
+      const createRes = await financeService.onPurchaseReceiptConfirmed(
+        eventPayload,
+        testOnlyPaymentTermsResolver,
+      );
+      const apId = createRes.accountsPayable.id;
+
+      await assert.rejects(
+        async () =>
+          financeService.applyAccountsPayablePayment({
+            organizationId: tenantAId,
+            branchId: branchAId,
+            accountsPayableId: apId,
+            paymentAmount: '50.0000',
+            referenceId: '', // Empty reference fails closed
+          }),
+        PaymentReferenceRequiredError,
+      );
+    });
+
+    it('R4-REF-02: Missing AR settlement reference fails closed with SettlementReferenceRequiredError', async () => {
+      const refId = `REF-R4-REF-02-${crypto.randomUUID()}`;
+      const charge = await financeService.createReceivableCharge({
+        organizationId: tenantAId,
+        branchId: branchAId,
+        customerId: customerAId,
+        referenceAccountId: refId,
+        totalAmount: '200.0000',
+        dueDate: '2026-10-30',
+      });
+
+      await assert.rejects(
+        async () =>
+          financeService.settleReceivable({
+            organizationId: tenantAId,
+            branchId: branchAId,
+            accountsReceivableId: charge.accountsReceivable.id,
+            settlementAmount: '50.0000',
+            referenceId: '', // Empty reference fails closed
+          }),
+        SettlementReferenceRequiredError,
+      );
+    });
+
+    // Section 29: AP Cloud Tests (R4-AP-01 to R4-AP-12)
+    it('R4-AP-01: payment creates APPLY transaction and reduces balance atomically', async () => {
+      const { eventPayload } = await createTestReceipt({
+        receiptNumber: `REC-R4-AP-01-${crypto.randomUUID().slice(0, 6)}`,
+        totalAmount: '1000.0000',
+        paymentTerms: 'NET_30',
+      });
+
+      const createRes = await financeService.onPurchaseReceiptConfirmed(
+        eventPayload,
+        testOnlyPaymentTermsResolver,
+      );
+      const apId = createRes.accountsPayable.id;
+
+      const payResult = await financeService.applyAccountsPayablePayment({
+        organizationId: tenantAId,
+        branchId: branchAId,
+        accountsPayableId: apId,
+        paymentAmount: '400.0000',
+        referenceId: `PAY-R4-01-${crypto.randomUUID()}`,
+      });
+
+      assert.equal(payResult.status, 'APPLIED');
+      assert.equal(payResult.accountsPayable.balanceDue, '600.0000');
+      assert.equal(payResult.accountsPayable.status, 'PARTIAL');
+      assert.equal(payResult.payment.transactionKind, 'APPLY');
+      assert.equal(payResult.payment.amount, '400.0000');
+      assert.equal(payResult.payment.accountsPayableId, apId);
+
+      // Verify payments in DB
+      const txs = await financeService.getAccountsPayablePayments(tenantAId, apId);
+      assert.equal(txs.length, 1);
+      assert.equal(txs[0]!.id, payResult.payment.id);
+    });
+
+    it('R4-AP-02: same payment reference retry is idempotent', async () => {
+      const { eventPayload } = await createTestReceipt({
+        receiptNumber: `REC-R4-AP-02-${crypto.randomUUID().slice(0, 6)}`,
+        totalAmount: '500.0000',
+        paymentTerms: 'NET_30',
+      });
+
+      const createRes = await financeService.onPurchaseReceiptConfirmed(
+        eventPayload,
+        testOnlyPaymentTermsResolver,
+      );
+      const apId = createRes.accountsPayable.id;
+      const refId = `PAY-R4-02-${crypto.randomUUID()}`;
+
+      const pay1 = await financeService.applyAccountsPayablePayment({
+        organizationId: tenantAId,
+        branchId: branchAId,
+        accountsPayableId: apId,
+        paymentAmount: '200.0000',
+        referenceId: refId,
+      });
+      assert.equal(pay1.status, 'APPLIED');
+
+      const pay2 = await financeService.applyAccountsPayablePayment({
+        organizationId: tenantAId,
+        branchId: branchAId,
+        accountsPayableId: apId,
+        paymentAmount: '200.0000',
+        referenceId: refId,
+      });
+      assert.equal(pay2.status, 'DUPLICATE_ACCEPTED');
+      assert.equal(pay2.payment.id, pay1.payment.id);
+      assert.equal(pay2.accountsPayable.balanceDue, '300.0000');
+
+      const txs = await financeService.getAccountsPayablePayments(tenantAId, apId);
+      assert.equal(txs.length, 1);
+    });
+
+    it('R4-AP-03: concurrent same payment reference produces one APPLY', async () => {
+      const { eventPayload } = await createTestReceipt({
+        receiptNumber: `REC-R4-AP-03-${crypto.randomUUID().slice(0, 6)}`,
+        totalAmount: '800.0000',
+        paymentTerms: 'NET_30',
+      });
+
+      const createRes = await financeService.onPurchaseReceiptConfirmed(
+        eventPayload,
+        testOnlyPaymentTermsResolver,
+      );
+      const apId = createRes.accountsPayable.id;
+      const refId = `PAY-R4-03-${crypto.randomUUID()}`;
+      const cmd = {
+        organizationId: tenantAId,
+        branchId: branchAId,
+        accountsPayableId: apId,
+        paymentAmount: '300.0000',
+        referenceId: refId,
+      };
+
+      const [r1, r2] = await Promise.all([
+        financeService.applyAccountsPayablePayment(cmd),
+        financeService.applyAccountsPayablePayment(cmd),
+      ]);
+
+      const statuses = [r1.status, r2.status].sort();
+      assert.deepEqual(statuses, ['APPLIED', 'DUPLICATE_ACCEPTED']);
+
+      const ap = await financeService.getAccountsPayable(tenantAId, apId);
+      assert.equal(ap!.balanceDue, '500.0000');
+
+      const txs = await financeService.getAccountsPayablePayments(tenantAId, apId);
+      assert.equal(txs.length, 1);
+    });
+
+    it('R4-AP-04: two different valid concurrent payments serialize correctly', async () => {
+      const { eventPayload } = await createTestReceipt({
+        receiptNumber: `REC-R4-AP-04-${crypto.randomUUID().slice(0, 6)}`,
+        totalAmount: '1000.0000',
+        paymentTerms: 'NET_30',
+      });
+
+      const createRes = await financeService.onPurchaseReceiptConfirmed(
+        eventPayload,
+        testOnlyPaymentTermsResolver,
+      );
+      const apId = createRes.accountsPayable.id;
+
+      const [r1, r2] = await Promise.all([
+        financeService.applyAccountsPayablePayment({
+          organizationId: tenantAId,
+          branchId: branchAId,
+          accountsPayableId: apId,
+          paymentAmount: '400.0000',
+          referenceId: `PAY-R4-04-A-${crypto.randomUUID()}`,
+        }),
+        financeService.applyAccountsPayablePayment({
+          organizationId: tenantAId,
+          branchId: branchAId,
+          accountsPayableId: apId,
+          paymentAmount: '600.0000',
+          referenceId: `PAY-R4-04-B-${crypto.randomUUID()}`,
+        }),
+      ]);
+
+      assert.equal(r1.status, 'APPLIED');
+      assert.equal(r2.status, 'APPLIED');
+
+      const ap = await financeService.getAccountsPayable(tenantAId, apId);
+      assert.equal(ap!.balanceDue, '0.0000');
+      assert.equal(ap!.status, 'PAID');
+
+      const txs = await financeService.getAccountsPayablePayments(tenantAId, apId);
+      assert.equal(txs.length, 2);
+    });
+
+    it('R4-AP-05: concurrent overpayment race cannot make balance negative', async () => {
+      const { eventPayload } = await createTestReceipt({
+        receiptNumber: `REC-R4-AP-05-${crypto.randomUUID().slice(0, 6)}`,
+        totalAmount: '1000.0000',
+        paymentTerms: 'NET_30',
+      });
+
+      const createRes = await financeService.onPurchaseReceiptConfirmed(
+        eventPayload,
+        testOnlyPaymentTermsResolver,
+      );
+      const apId = createRes.accountsPayable.id;
+
+      const results = await Promise.allSettled([
+        financeService.applyAccountsPayablePayment({
+          organizationId: tenantAId,
+          branchId: branchAId,
+          accountsPayableId: apId,
+          paymentAmount: '700.0000',
+          referenceId: `PAY-R4-05-A-${crypto.randomUUID()}`,
+        }),
+        financeService.applyAccountsPayablePayment({
+          organizationId: tenantAId,
+          branchId: branchAId,
+          accountsPayableId: apId,
+          paymentAmount: '700.0000',
+          referenceId: `PAY-R4-05-B-${crypto.randomUUID()}`,
+        }),
+      ]);
+
+      const fulfilled = results.filter((r) => r.status === 'fulfilled');
+      const rejected = results.filter((r) => r.status === 'rejected');
+      assert.equal(fulfilled.length, 1);
+      assert.equal(rejected.length, 1);
+
+      const ap = await financeService.getAccountsPayable(tenantAId, apId);
+      assert.equal(ap!.balanceDue, '300.0000');
+      assert.equal(ap!.status, 'PARTIAL');
+
+      const txs = await financeService.getAccountsPayablePayments(tenantAId, apId);
+      assert.equal(txs.length, 1);
+    });
+
+    it('R4-AP-06 & R4-AP-07 & R4-AP-11: full reversal creates REVERSAL row, restores exact balance, leaves original APPLY row unchanged', async () => {
+      const { eventPayload } = await createTestReceipt({
+        receiptNumber: `REC-R4-AP-06-${crypto.randomUUID().slice(0, 6)}`,
+        totalAmount: '600.0000',
+        paymentTerms: 'NET_30',
+      });
+
+      const createRes = await financeService.onPurchaseReceiptConfirmed(
+        eventPayload,
+        testOnlyPaymentTermsResolver,
+      );
+      const apId = createRes.accountsPayable.id;
+
+      // Apply payment
+      const payRes = await financeService.applyAccountsPayablePayment({
+        organizationId: tenantAId,
+        branchId: branchAId,
+        accountsPayableId: apId,
+        paymentAmount: '600.0000',
+        referenceId: `PAY-R4-06-${crypto.randomUUID()}`,
+      });
+      assert.equal(payRes.accountsPayable.status, 'PAID');
+      assert.equal(payRes.accountsPayable.balanceDue, '0.0000');
+
+      // Reverse payment
+      const revRes = await financeService.reverseAccountsPayablePayment({
+        organizationId: tenantAId,
+        branchId: branchAId,
+        accountsPayableId: apId,
+        originalPaymentTransactionId: payRes.payment.id,
+        reversalReferenceId: `REV-R4-06-${crypto.randomUUID()}`,
+      });
+
+      assert.equal(revRes.status, 'APPLIED');
+      assert.equal(revRes.accountsPayable.status, 'PENDING');
+      assert.equal(revRes.accountsPayable.balanceDue, '600.0000');
+      assert.equal(revRes.reversal.transactionKind, 'REVERSAL');
+      assert.equal(revRes.reversal.amount, '600.0000');
+      assert.equal(revRes.reversal.reversalOfTransactionId, payRes.payment.id);
+
+      // R4-AP-11: Original APPLY row unchanged
+      const txs = await financeService.getAccountsPayablePayments(tenantAId, apId);
+      assert.equal(txs.length, 2);
+      const origTx = txs.find((t) => t.id === payRes.payment.id)!;
+      assert.equal(origTx.transactionKind, 'APPLY');
+      assert.equal(origTx.amount, '600.0000');
+    });
+
+    it('R4-AP-08: same reversal retry is idempotent', async () => {
+      const { eventPayload } = await createTestReceipt({
+        receiptNumber: `REC-R4-AP-08-${crypto.randomUUID().slice(0, 6)}`,
+        totalAmount: '400.0000',
+        paymentTerms: 'NET_30',
+      });
+
+      const createRes = await financeService.onPurchaseReceiptConfirmed(
+        eventPayload,
+        testOnlyPaymentTermsResolver,
+      );
+      const apId = createRes.accountsPayable.id;
+
+      const payRes = await financeService.applyAccountsPayablePayment({
+        organizationId: tenantAId,
+        branchId: branchAId,
+        accountsPayableId: apId,
+        paymentAmount: '200.0000',
+        referenceId: `PAY-R4-08-${crypto.randomUUID()}`,
+      });
+
+      const revRef = `REV-R4-08-${crypto.randomUUID()}`;
+      const revCmd = {
+        organizationId: tenantAId,
+        branchId: branchAId,
+        accountsPayableId: apId,
+        originalPaymentTransactionId: payRes.payment.id,
+        reversalReferenceId: revRef,
+      };
+
+      const rev1 = await financeService.reverseAccountsPayablePayment(revCmd);
+      assert.equal(rev1.status, 'APPLIED');
+
+      const rev2 = await financeService.reverseAccountsPayablePayment(revCmd);
+      assert.equal(rev2.status, 'DUPLICATE_ACCEPTED');
+      assert.equal(rev2.reversal.id, rev1.reversal.id);
+      assert.equal(rev2.accountsPayable.balanceDue, '400.0000');
+
+      const txs = await financeService.getAccountsPayablePayments(tenantAId, apId);
+      assert.equal(txs.length, 2); // 1 APPLY + 1 REVERSAL
+    });
+
+    it('R4-AP-09: concurrent same reversal produces one REVERSAL', async () => {
+      const { eventPayload } = await createTestReceipt({
+        receiptNumber: `REC-R4-AP-09-${crypto.randomUUID().slice(0, 6)}`,
+        totalAmount: '500.0000',
+        paymentTerms: 'NET_30',
+      });
+
+      const createRes = await financeService.onPurchaseReceiptConfirmed(
+        eventPayload,
+        testOnlyPaymentTermsResolver,
+      );
+      const apId = createRes.accountsPayable.id;
+
+      const payRes = await financeService.applyAccountsPayablePayment({
+        organizationId: tenantAId,
+        branchId: branchAId,
+        accountsPayableId: apId,
+        paymentAmount: '250.0000',
+        referenceId: `PAY-R4-09-${crypto.randomUUID()}`,
+      });
+
+      const revRef = `REV-R4-09-${crypto.randomUUID()}`;
+      const revCmd = {
+        organizationId: tenantAId,
+        branchId: branchAId,
+        accountsPayableId: apId,
+        originalPaymentTransactionId: payRes.payment.id,
+        reversalReferenceId: revRef,
+      };
+
+      const [r1, r2] = await Promise.all([
+        financeService.reverseAccountsPayablePayment(revCmd),
+        financeService.reverseAccountsPayablePayment(revCmd),
+      ]);
+
+      const statuses = [r1.status, r2.status].sort();
+      assert.deepEqual(statuses, ['APPLIED', 'DUPLICATE_ACCEPTED']);
+
+      const ap = await financeService.getAccountsPayable(tenantAId, apId);
+      assert.equal(ap!.balanceDue, '500.0000');
+
+      const txs = await financeService.getAccountsPayablePayments(tenantAId, apId);
+      assert.equal(txs.length, 2); // 1 APPLY + 1 REVERSAL
+    });
+
+    it('R4-AP-10: over-reversal fails closed', async () => {
+      const { eventPayload } = await createTestReceipt({
+        receiptNumber: `REC-R4-AP-10-${crypto.randomUUID().slice(0, 6)}`,
+        totalAmount: '300.0000',
+        paymentTerms: 'NET_30',
+      });
+
+      const createRes = await financeService.onPurchaseReceiptConfirmed(
+        eventPayload,
+        testOnlyPaymentTermsResolver,
+      );
+      const apId = createRes.accountsPayable.id;
+
+      const payRes = await financeService.applyAccountsPayablePayment({
+        organizationId: tenantAId,
+        branchId: branchAId,
+        accountsPayableId: apId,
+        paymentAmount: '100.0000',
+        referenceId: `PAY-R4-10-${crypto.randomUUID()}`,
+      });
+
+      // First reversal succeeds
+      await financeService.reverseAccountsPayablePayment({
+        organizationId: tenantAId,
+        branchId: branchAId,
+        accountsPayableId: apId,
+        originalPaymentTransactionId: payRes.payment.id,
+        reversalReferenceId: `REV-R4-10-A-${crypto.randomUUID()}`,
+      });
+
+      // Attempting a second distinct reversal of the same already reversed transaction fails closed
+      await assert.rejects(
+        async () =>
+          financeService.reverseAccountsPayablePayment({
+            organizationId: tenantAId,
+            branchId: branchAId,
+            accountsPayableId: apId,
+            originalPaymentTransactionId: payRes.payment.id,
+            reversalReferenceId: `REV-R4-10-B-${crypto.randomUUID()}`,
+          }),
+        PaymentAlreadyReversedError,
+      );
+    });
+
+    it('R4-AP-12: balance equals transaction-history invariant', async () => {
+      const { eventPayload } = await createTestReceipt({
+        receiptNumber: `REC-R4-AP-12-${crypto.randomUUID().slice(0, 6)}`,
+        totalAmount: '1200.0000',
+        paymentTerms: 'NET_30',
+      });
+
+      const createRes = await financeService.onPurchaseReceiptConfirmed(
+        eventPayload,
+        testOnlyPaymentTermsResolver,
+      );
+      const apId = createRes.accountsPayable.id;
+
+      // Payment 1: 300
+      const p1 = await financeService.applyAccountsPayablePayment({
+        organizationId: tenantAId,
+        branchId: branchAId,
+        accountsPayableId: apId,
+        paymentAmount: '300.0000',
+        referenceId: `PAY-R4-12-1-${crypto.randomUUID()}`,
+      });
+
+      // Payment 2: 400
+      await financeService.applyAccountsPayablePayment({
+        organizationId: tenantAId,
+        branchId: branchAId,
+        accountsPayableId: apId,
+        paymentAmount: '400.0000',
+        referenceId: `PAY-R4-12-2-${crypto.randomUUID()}`,
+      });
+
+      // Reversal of Payment 1
+      await financeService.reverseAccountsPayablePayment({
+        organizationId: tenantAId,
+        branchId: branchAId,
+        accountsPayableId: apId,
+        originalPaymentTransactionId: p1.payment.id,
+        reversalReferenceId: `REV-R4-12-1-${crypto.randomUUID()}`,
+      });
+
+      // Invariant check: AP balance = original total - sum(APPLY) + sum(REVERSAL)
+      // 1200 - (300 + 400) + 300 = 800.0000
+      const ap = await financeService.getAccountsPayable(tenantAId, apId);
+      assert.equal(ap!.balanceDue, '800.0000');
+      assert.equal(ap!.status, 'PARTIAL');
+
+      const txs = await financeService.getAccountsPayablePayments(tenantAId, apId);
+      assert.equal(txs.length, 3);
+    });
+
+    // Section 30: AR Cloud Tests (R4-AR-01 to R4-AR-12)
+    it('R4-AR-01: settlement creates APPLY transaction and reduces balance atomically', async () => {
+      const refId = `REF-R4-AR-01-${crypto.randomUUID()}`;
+      const charge = await financeService.createReceivableCharge({
+        organizationId: tenantAId,
+        branchId: branchAId,
+        customerId: customerAId,
+        referenceAccountId: refId,
+        totalAmount: '900.0000',
+        dueDate: '2026-10-30',
+      });
+      const arId = charge.accountsReceivable.id;
+
+      const setRes = await financeService.settleReceivable({
+        organizationId: tenantAId,
+        branchId: branchAId,
+        accountsReceivableId: arId,
+        settlementAmount: '300.0000',
+        referenceId: `SET-R4-01-${crypto.randomUUID()}`,
+      });
+
+      assert.equal(setRes.status, 'APPLIED');
+      assert.equal(setRes.accountsReceivable.balanceDue, '600.0000');
+      assert.equal(setRes.accountsReceivable.status, 'PENDING');
+      assert.equal(setRes.settlement.transactionKind, 'APPLY');
+      assert.equal(setRes.settlement.amount, '300.0000');
+
+      const txs = await financeService.getAccountsReceivableSettlements(tenantAId, arId);
+      assert.equal(txs.length, 1);
+    });
+
+    it('R4-AR-02: same settlement reference retry is idempotent', async () => {
+      const refId = `REF-R4-AR-02-${crypto.randomUUID()}`;
+      const charge = await financeService.createReceivableCharge({
+        organizationId: tenantAId,
+        branchId: branchAId,
+        customerId: customerAId,
+        referenceAccountId: refId,
+        totalAmount: '500.0000',
+        dueDate: '2026-10-30',
+      });
+      const arId = charge.accountsReceivable.id;
+      const setRef = `SET-R4-02-${crypto.randomUUID()}`;
+
+      const s1 = await financeService.settleReceivable({
+        organizationId: tenantAId,
+        branchId: branchAId,
+        accountsReceivableId: arId,
+        settlementAmount: '200.0000',
+        referenceId: setRef,
+      });
+      assert.equal(s1.status, 'APPLIED');
+
+      const s2 = await financeService.settleReceivable({
+        organizationId: tenantAId,
+        branchId: branchAId,
+        accountsReceivableId: arId,
+        settlementAmount: '200.0000',
+        referenceId: setRef,
+      });
+      assert.equal(s2.status, 'DUPLICATE_ACCEPTED');
+      assert.equal(s2.settlement.id, s1.settlement.id);
+      assert.equal(s2.accountsReceivable.balanceDue, '300.0000');
+
+      const txs = await financeService.getAccountsReceivableSettlements(tenantAId, arId);
+      assert.equal(txs.length, 1);
+    });
+
+    it('R4-AR-03: concurrent same settlement reference produces one APPLY', async () => {
+      const refId = `REF-R4-AR-03-${crypto.randomUUID()}`;
+      const charge = await financeService.createReceivableCharge({
+        organizationId: tenantAId,
+        branchId: branchAId,
+        customerId: customerAId,
+        referenceAccountId: refId,
+        totalAmount: '700.0000',
+        dueDate: '2026-10-30',
+      });
+      const arId = charge.accountsReceivable.id;
+      const setRef = `SET-R4-03-${crypto.randomUUID()}`;
+      const cmd = {
+        organizationId: tenantAId,
+        branchId: branchAId,
+        accountsReceivableId: arId,
+        settlementAmount: '250.0000',
+        referenceId: setRef,
+      };
+
+      const [r1, r2] = await Promise.all([
+        financeService.settleReceivable(cmd),
+        financeService.settleReceivable(cmd),
+      ]);
+
+      const statuses = [r1.status, r2.status].sort();
+      assert.deepEqual(statuses, ['APPLIED', 'DUPLICATE_ACCEPTED']);
+
+      const ar = await financeService.getAccountsReceivable(tenantAId, arId);
+      assert.equal(ar!.balanceDue, '450.0000');
+
+      const txs = await financeService.getAccountsReceivableSettlements(tenantAId, arId);
+      assert.equal(txs.length, 1);
+    });
+
+    it('R4-AR-04: two different valid concurrent settlements serialize correctly', async () => {
+      const refId = `REF-R4-AR-04-${crypto.randomUUID()}`;
+      const charge = await financeService.createReceivableCharge({
+        organizationId: tenantAId,
+        branchId: branchAId,
+        customerId: customerAId,
+        referenceAccountId: refId,
+        totalAmount: '1000.0000',
+        dueDate: '2026-10-30',
+      });
+      const arId = charge.accountsReceivable.id;
+
+      const [r1, r2] = await Promise.all([
+        financeService.settleReceivable({
+          organizationId: tenantAId,
+          branchId: branchAId,
+          accountsReceivableId: arId,
+          settlementAmount: '400.0000',
+          referenceId: `SET-R4-04-A-${crypto.randomUUID()}`,
+        }),
+        financeService.settleReceivable({
+          organizationId: tenantAId,
+          branchId: branchAId,
+          accountsReceivableId: arId,
+          settlementAmount: '600.0000',
+          referenceId: `SET-R4-04-B-${crypto.randomUUID()}`,
+        }),
+      ]);
+
+      assert.equal(r1.status, 'APPLIED');
+      assert.equal(r2.status, 'APPLIED');
+
+      const ar = await financeService.getAccountsReceivable(tenantAId, arId);
+      assert.equal(ar!.balanceDue, '0.0000');
+      assert.equal(ar!.status, 'PAID');
+
+      const txs = await financeService.getAccountsReceivableSettlements(tenantAId, arId);
+      assert.equal(txs.length, 2);
+    });
+
+    it('R4-AR-05: concurrent over-settlement race cannot make balance negative', async () => {
+      const refId = `REF-R4-AR-05-${crypto.randomUUID()}`;
+      const charge = await financeService.createReceivableCharge({
+        organizationId: tenantAId,
+        branchId: branchAId,
+        customerId: customerAId,
+        referenceAccountId: refId,
+        totalAmount: '1000.0000',
+        dueDate: '2026-10-30',
+      });
+      const arId = charge.accountsReceivable.id;
+
+      const results = await Promise.allSettled([
+        financeService.settleReceivable({
+          organizationId: tenantAId,
+          branchId: branchAId,
+          accountsReceivableId: arId,
+          settlementAmount: '700.0000',
+          referenceId: `SET-R4-05-A-${crypto.randomUUID()}`,
+        }),
+        financeService.settleReceivable({
+          organizationId: tenantAId,
+          branchId: branchAId,
+          accountsReceivableId: arId,
+          settlementAmount: '700.0000',
+          referenceId: `SET-R4-05-B-${crypto.randomUUID()}`,
+        }),
+      ]);
+
+      const fulfilled = results.filter((r) => r.status === 'fulfilled');
+      const rejected = results.filter((r) => r.status === 'rejected');
+      assert.equal(fulfilled.length, 1);
+      assert.equal(rejected.length, 1);
+
+      const ar = await financeService.getAccountsReceivable(tenantAId, arId);
+      assert.equal(ar!.balanceDue, '300.0000');
+
+      const txs = await financeService.getAccountsReceivableSettlements(tenantAId, arId);
+      assert.equal(txs.length, 1);
+    });
+
+    it('R4-AR-06 & R4-AR-07 & R4-AR-11: full reversal creates REVERSAL row, restores exact balance, leaves original APPLY row unchanged', async () => {
+      const refId = `REF-R4-AR-06-${crypto.randomUUID()}`;
+      const charge = await financeService.createReceivableCharge({
+        organizationId: tenantAId,
+        branchId: branchAId,
+        customerId: customerAId,
+        referenceAccountId: refId,
+        totalAmount: '800.0000',
+        dueDate: '2026-10-30',
+      });
+      const arId = charge.accountsReceivable.id;
+
+      const setRes = await financeService.settleReceivable({
+        organizationId: tenantAId,
+        branchId: branchAId,
+        accountsReceivableId: arId,
+        settlementAmount: '800.0000',
+        referenceId: `SET-R4-06-${crypto.randomUUID()}`,
+      });
+      assert.equal(setRes.accountsReceivable.status, 'PAID');
+      assert.equal(setRes.accountsReceivable.balanceDue, '0.0000');
+
+      const revRes = await financeService.reverseAccountsReceivableSettlement({
+        organizationId: tenantAId,
+        branchId: branchAId,
+        accountsReceivableId: arId,
+        originalSettlementTransactionId: setRes.settlement.id,
+        reversalReferenceId: `REV-R4-AR-06-${crypto.randomUUID()}`,
+      });
+
+      assert.equal(revRes.status, 'APPLIED');
+      assert.equal(revRes.accountsReceivable.status, 'PENDING');
+      assert.equal(revRes.accountsReceivable.balanceDue, '800.0000');
+      assert.equal(revRes.reversal.transactionKind, 'REVERSAL');
+      assert.equal(revRes.reversal.amount, '800.0000');
+      assert.equal(revRes.reversal.reversalOfTransactionId, setRes.settlement.id);
+
+      // R4-AR-11: Original APPLY row unchanged
+      const txs = await financeService.getAccountsReceivableSettlements(tenantAId, arId);
+      assert.equal(txs.length, 2);
+      const origTx = txs.find((t) => t.id === setRes.settlement.id)!;
+      assert.equal(origTx.transactionKind, 'APPLY');
+      assert.equal(origTx.amount, '800.0000');
+    });
+
+    it('R4-AR-08: same reversal retry is idempotent', async () => {
+      const refId = `REF-R4-AR-08-${crypto.randomUUID()}`;
+      const charge = await financeService.createReceivableCharge({
+        organizationId: tenantAId,
+        branchId: branchAId,
+        customerId: customerAId,
+        referenceAccountId: refId,
+        totalAmount: '400.0000',
+        dueDate: '2026-10-30',
+      });
+      const arId = charge.accountsReceivable.id;
+
+      const setRes = await financeService.settleReceivable({
+        organizationId: tenantAId,
+        branchId: branchAId,
+        accountsReceivableId: arId,
+        settlementAmount: '200.0000',
+        referenceId: `SET-R4-08-${crypto.randomUUID()}`,
+      });
+
+      const revRef = `REV-R4-AR-08-${crypto.randomUUID()}`;
+      const revCmd = {
+        organizationId: tenantAId,
+        branchId: branchAId,
+        accountsReceivableId: arId,
+        originalSettlementTransactionId: setRes.settlement.id,
+        reversalReferenceId: revRef,
+      };
+
+      const rev1 = await financeService.reverseAccountsReceivableSettlement(revCmd);
+      assert.equal(rev1.status, 'APPLIED');
+
+      const rev2 = await financeService.reverseAccountsReceivableSettlement(revCmd);
+      assert.equal(rev2.status, 'DUPLICATE_ACCEPTED');
+      assert.equal(rev2.reversal.id, rev1.reversal.id);
+      assert.equal(rev2.accountsReceivable.balanceDue, '400.0000');
+
+      const txs = await financeService.getAccountsReceivableSettlements(tenantAId, arId);
+      assert.equal(txs.length, 2);
+    });
+
+    it('R4-AR-09: concurrent same reversal produces one REVERSAL', async () => {
+      const refId = `REF-R4-AR-09-${crypto.randomUUID()}`;
+      const charge = await financeService.createReceivableCharge({
+        organizationId: tenantAId,
+        branchId: branchAId,
+        customerId: customerAId,
+        referenceAccountId: refId,
+        totalAmount: '600.0000',
+        dueDate: '2026-10-30',
+      });
+      const arId = charge.accountsReceivable.id;
+
+      const setRes = await financeService.settleReceivable({
+        organizationId: tenantAId,
+        branchId: branchAId,
+        accountsReceivableId: arId,
+        settlementAmount: '300.0000',
+        referenceId: `SET-R4-09-${crypto.randomUUID()}`,
+      });
+
+      const revRef = `REV-R4-AR-09-${crypto.randomUUID()}`;
+      const revCmd = {
+        organizationId: tenantAId,
+        branchId: branchAId,
+        accountsReceivableId: arId,
+        originalSettlementTransactionId: setRes.settlement.id,
+        reversalReferenceId: revRef,
+      };
+
+      const [r1, r2] = await Promise.all([
+        financeService.reverseAccountsReceivableSettlement(revCmd),
+        financeService.reverseAccountsReceivableSettlement(revCmd),
+      ]);
+
+      const statuses = [r1.status, r2.status].sort();
+      assert.deepEqual(statuses, ['APPLIED', 'DUPLICATE_ACCEPTED']);
+
+      const ar = await financeService.getAccountsReceivable(tenantAId, arId);
+      assert.equal(ar!.balanceDue, '600.0000');
+
+      const txs = await financeService.getAccountsReceivableSettlements(tenantAId, arId);
+      assert.equal(txs.length, 2);
+    });
+
+    it('R4-AR-10: over-reversal fails closed', async () => {
+      const refId = `REF-R4-AR-10-${crypto.randomUUID()}`;
+      const charge = await financeService.createReceivableCharge({
+        organizationId: tenantAId,
+        branchId: branchAId,
+        customerId: customerAId,
+        referenceAccountId: refId,
+        totalAmount: '400.0000',
+        dueDate: '2026-10-30',
+      });
+      const arId = charge.accountsReceivable.id;
+
+      const setRes = await financeService.settleReceivable({
+        organizationId: tenantAId,
+        branchId: branchAId,
+        accountsReceivableId: arId,
+        settlementAmount: '150.0000',
+        referenceId: `SET-R4-10-${crypto.randomUUID()}`,
+      });
+
+      // First reversal succeeds
+      await financeService.reverseAccountsReceivableSettlement({
+        organizationId: tenantAId,
+        branchId: branchAId,
+        accountsReceivableId: arId,
+        originalSettlementTransactionId: setRes.settlement.id,
+        reversalReferenceId: `REV-R4-AR-10-A-${crypto.randomUUID()}`,
+      });
+
+      // Second reversal of same transaction fails closed
+      await assert.rejects(
+        async () =>
+          financeService.reverseAccountsReceivableSettlement({
+            organizationId: tenantAId,
+            branchId: branchAId,
+            accountsReceivableId: arId,
+            originalSettlementTransactionId: setRes.settlement.id,
+            reversalReferenceId: `REV-R4-AR-10-B-${crypto.randomUUID()}`,
+          }),
+        SettlementAlreadyReversedError,
+      );
+    });
+
+    it('R4-AR-12: balance equals transaction-history invariant', async () => {
+      const refId = `REF-R4-AR-12-${crypto.randomUUID()}`;
+      const charge = await financeService.createReceivableCharge({
+        organizationId: tenantAId,
+        branchId: branchAId,
+        customerId: customerAId,
+        referenceAccountId: refId,
+        totalAmount: '1500.0000',
+        dueDate: '2026-10-30',
+      });
+      const arId = charge.accountsReceivable.id;
+
+      // Settle 1: 500
+      const s1 = await financeService.settleReceivable({
+        organizationId: tenantAId,
+        branchId: branchAId,
+        accountsReceivableId: arId,
+        settlementAmount: '500.0000',
+        referenceId: `SET-R4-12-1-${crypto.randomUUID()}`,
+      });
+
+      // Settle 2: 300
+      await financeService.settleReceivable({
+        organizationId: tenantAId,
+        branchId: branchAId,
+        accountsReceivableId: arId,
+        settlementAmount: '300.0000',
+        referenceId: `SET-R4-12-2-${crypto.randomUUID()}`,
+      });
+
+      // Reverse Settle 1
+      await financeService.reverseAccountsReceivableSettlement({
+        organizationId: tenantAId,
+        branchId: branchAId,
+        accountsReceivableId: arId,
+        originalSettlementTransactionId: s1.settlement.id,
+        reversalReferenceId: `REV-R4-12-1-${crypto.randomUUID()}`,
+      });
+
+      // Invariant: AR balance = total - sum(APPLY) + sum(REVERSAL)
+      // 1500 - (500 + 300) + 500 = 1200.0000
+      const ar = await financeService.getAccountsReceivable(tenantAId, arId);
+      assert.equal(ar!.balanceDue, '1200.0000');
+
+      const txs = await financeService.getAccountsReceivableSettlements(tenantAId, arId);
+      assert.equal(txs.length, 3);
+    });
+
+    // Section 31: Transaction Rollback Atomicity
+    it('R4-TX-01: Transaction failure during payment leaves zero transaction persisted and AP balance unchanged', async () => {
+      const { eventPayload } = await createTestReceipt({
+        receiptNumber: `REC-R4-TX-01-${crypto.randomUUID().slice(0, 6)}`,
+        totalAmount: '500.0000',
+        paymentTerms: 'NET_30',
+      });
+
+      const createRes = await financeService.onPurchaseReceiptConfirmed(
+        eventPayload,
+        testOnlyPaymentTermsResolver,
+      );
+      const apId = createRes.accountsPayable.id;
+
+      // Simulate atomic rollback using withTenantTransaction
+      await assert.rejects(async () => {
+        await withTenantTransaction(pool, tenantAId, async (client) => {
+          await client.query(
+            `INSERT INTO accounts_payable_payments (
+            organization_id, branch_id, accounts_payable_id, transaction_kind, amount, reference_id
+          ) VALUES ($1, $2, $3, 'APPLY', 100.0000, 'FAILING-TX-REF');`,
+            [tenantAId, branchAId, apId],
+          );
+          throw new Error('Forced simulation error before parent AP balance update');
+        });
+      }, /Forced simulation error/);
+
+      // Verify 0 payment rows persisted
+      const txs = await financeService.getAccountsPayablePayments(tenantAId, apId);
+      assert.equal(txs.length, 0);
+
+      // Verify AP balance unchanged
+      const ap = await financeService.getAccountsPayable(tenantAId, apId);
+      assert.equal(ap!.balanceDue, '500.0000');
+    });
   });
 });

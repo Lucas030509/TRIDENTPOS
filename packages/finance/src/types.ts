@@ -9,6 +9,8 @@ export type AccountsReceivableStatus = 'PENDING' | 'PAID' | 'OVERDUE' | 'DEFAULT
 
 export type ScheduledPaymentStatus = 'PENDING' | 'EXECUTED' | 'CANCELLED';
 
+export type FinanceTransactionKind = 'APPLY' | 'REVERSAL';
+
 export interface AccountsPayable {
   id: string;
   organizationId: string;
@@ -21,6 +23,19 @@ export interface AccountsPayable {
   status: AccountsPayableStatus;
   createdAt: string;
   updatedAt?: string;
+}
+
+export interface AccountsPayablePayment {
+  id: string;
+  organizationId: string;
+  branchId: string;
+  accountsPayableId: string;
+  transactionKind: FinanceTransactionKind;
+  amount: string; // Scale-4 string
+  paymentDate: string; // ISO timestamp
+  referenceId: string;
+  reversalOfTransactionId?: string | null;
+  createdAt: string;
 }
 
 export interface ScheduledPayment {
@@ -47,6 +62,19 @@ export interface AccountsReceivable {
   status: AccountsReceivableStatus;
   createdAt: string;
   updatedAt?: string;
+}
+
+export interface AccountsReceivableSettlement {
+  id: string;
+  organizationId: string;
+  branchId: string;
+  accountsReceivableId: string;
+  transactionKind: FinanceTransactionKind;
+  amount: string; // Scale-4 string
+  settlementDate: string; // ISO timestamp
+  referenceId: string;
+  reversalOfTransactionId?: string | null;
+  createdAt: string;
 }
 
 export interface BranchOperatingExpense {
@@ -140,8 +168,18 @@ export interface ApplyAccountsPayablePaymentCommand {
   branchId: string;
   accountsPayableId: string;
   paymentAmount: string; // Scale-4 string
+  referenceId?: string;
+  reference?: string; // Backwards-compatible alias
   paymentDate?: string;
-  reference?: string;
+}
+
+export interface ReverseAccountsPayablePaymentCommand {
+  organizationId: string;
+  branchId: string;
+  accountsPayableId: string;
+  originalPaymentTransactionId: string;
+  reversalReferenceId: string;
+  reversalDate?: string;
 }
 
 export interface CreateScheduledPaymentCommand {
@@ -168,7 +206,18 @@ export interface SettleReceivableCommand {
   branchId: string;
   accountsReceivableId: string;
   settlementAmount: string; // Scale-4 string
+  referenceId?: string;
+  reference?: string; // Backwards-compatible alias
   settlementDate?: string;
+}
+
+export interface ReverseAccountsReceivableSettlementCommand {
+  organizationId: string;
+  branchId: string;
+  accountsReceivableId: string;
+  originalSettlementTransactionId: string;
+  reversalReferenceId: string;
+  reversalDate?: string;
 }
 
 export interface RegisterOperatingExpenseCommand {
@@ -198,9 +247,33 @@ export interface ProcessPurchaseReceiptResult {
   accountsPayable: AccountsPayable;
 }
 
+export interface ApplyAccountsPayablePaymentResult {
+  status: 'APPLIED' | 'DUPLICATE_ACCEPTED';
+  accountsPayable: AccountsPayable;
+  payment: AccountsPayablePayment;
+}
+
+export interface ReverseAccountsPayablePaymentResult {
+  status: 'APPLIED' | 'DUPLICATE_ACCEPTED';
+  accountsPayable: AccountsPayable;
+  reversal: AccountsPayablePayment;
+}
+
 export interface CreateReceivableChargeResult {
   status: 'APPLIED' | 'DUPLICATE_ACCEPTED';
   accountsReceivable: AccountsReceivable;
+}
+
+export interface SettleAccountsReceivableResult {
+  status: 'APPLIED' | 'DUPLICATE_ACCEPTED';
+  accountsReceivable: AccountsReceivable;
+  settlement: AccountsReceivableSettlement;
+}
+
+export interface ReverseAccountsReceivableSettlementResult {
+  status: 'APPLIED' | 'DUPLICATE_ACCEPTED';
+  accountsReceivable: AccountsReceivable;
+  reversal: AccountsReceivableSettlement;
 }
 
 export interface ReconcileCashResult {

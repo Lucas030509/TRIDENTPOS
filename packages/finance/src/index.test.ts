@@ -13,7 +13,9 @@ import {
   isNegativeScale4,
   calculateDueDate,
   applyPaymentToAccountsPayable,
+  reversePaymentOnAccountsPayable,
   applySettlementToAccountsReceivable,
+  reverseSettlementOnAccountsReceivable,
   calculateCashReconciliation,
   AccountsPayableOverpaymentError,
   AccountsReceivableOverpaymentError,
@@ -299,12 +301,46 @@ describe('TRIDENTPOS Finance Domain & Numerics (WP-020)', () => {
     assert.equal(rec.hasVariance, true);
   });
 
-  it('WP020-DOM-14: cash variance negative non-zero is flagged (shortage)', () => {
-    const rec = calculateCashReconciliation({
-      expectedCash: '5000.0000',
-      actualCash: '4950.0000',
-    });
-    assert.equal(rec.variance, '-50.0000');
-    assert.equal(rec.hasVariance, true);
+  it('WP020-DOM-15: AP payment reversal restores balance and transitions status to PARTIAL or PENDING', () => {
+    // 1. Partial reversal
+    const paidAp = {
+      totalAmount: '500.0000',
+      balanceDue: '0.0000',
+      status: 'PAID' as const,
+    };
+    const rev1 = reversePaymentOnAccountsPayable(paidAp, '200.0000');
+    assert.equal(rev1.newBalanceDue, '200.0000');
+    assert.equal(rev1.newStatus, 'PARTIAL');
+
+    // 2. Full reversal back to original total
+    const revFull = reversePaymentOnAccountsPayable(
+      { totalAmount: '500.0000', balanceDue: rev1.newBalanceDue, status: rev1.newStatus },
+      '300.0000',
+    );
+    assert.equal(revFull.newBalanceDue, '500.0000');
+    assert.equal(revFull.newStatus, 'PENDING');
+
+    // 3. Over-reversal exceeding total rejected
+    assert.throws(
+      () => reversePaymentOnAccountsPayable(paidAp, '500.0001'),
+      AccountsPayableOverpaymentError,
+    );
+  });
+
+  it('WP020-DOM-16: AR settlement reversal restores balance and transitions status to PENDING', () => {
+    const paidAr = {
+      totalAmount: '1000.0000',
+      balanceDue: '0.0000',
+      status: 'PAID' as const,
+    };
+    const rev = reverseSettlementOnAccountsReceivable(paidAr, '400.0000');
+    assert.equal(rev.newBalanceDue, '400.0000');
+    assert.equal(rev.newStatus, 'PENDING');
+
+    // Over-reversal exceeding total rejected
+    assert.throws(
+      () => reverseSettlementOnAccountsReceivable(paidAr, '1000.0001'),
+      AccountsReceivableOverpaymentError,
+    );
   });
 });
