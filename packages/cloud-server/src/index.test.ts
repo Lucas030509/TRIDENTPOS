@@ -31,6 +31,9 @@ import {
   SettlementReferenceRequiredError,
   PaymentAlreadyReversedError,
   SettlementAlreadyReversedError,
+  PaymentIdempotencyConflictError,
+  SettlementIdempotencyConflictError,
+  AccountsReceivableInvalidStateError,
 } from './index.js';
 import type pg from 'pg';
 
@@ -5001,6 +5004,468 @@ describe('TRIDENTPOS WP-020 Cloud Server Finance, AP, AR & Cash Reconciliation S
       // Verify AP balance unchanged
       const ap = await financeService.getAccountsPayable(tenantAId, apId);
       assert.equal(ap!.balanceDue, '500.0000');
+    });
+
+    // ============================================================
+    // R5 MANDATORY SURGICAL IDENTITY HARDENING TEST SUITE (WP-020)
+    // ============================================================
+
+    describe('R5 AR Branch Identity & Audit Date Hardening', () => {
+      it('R5-AR-01: AR APPLY with wrong branch fails closed, 0 settlement rows, balance unchanged', async () => {
+        const refId = `REF-R5-AR-01-${crypto.randomUUID()}`;
+        const charge = await financeService.createReceivableCharge({
+          organizationId: tenantAId,
+          branchId: branchAId,
+          customerId: customerAId,
+          referenceAccountId: refId,
+          totalAmount: '1000.0000',
+          dueDate: '2026-10-30',
+        });
+        const arId = charge.accountsReceivable.id;
+
+        // Attempt settle with branchBId instead of branchAId
+        await assert.rejects(
+          async () =>
+            financeService.settleReceivable({
+              organizationId: tenantAId,
+              branchId: branchBId,
+              accountsReceivableId: arId,
+              settlementAmount: '250.0000',
+              referenceId: `SET-R5-AR-01-${crypto.randomUUID()}`,
+            }),
+          AccountsReceivableInvalidStateError,
+        );
+
+        // Verify zero settlement rows and balance unchanged
+        const txs = await financeService.getAccountsReceivableSettlements(tenantAId, arId);
+        assert.equal(txs.length, 0);
+
+        const ar = await financeService.getAccountsReceivable(tenantAId, arId);
+        assert.equal(ar!.balanceDue, '1000.0000');
+        assert.equal(ar!.status, 'PENDING');
+      });
+
+      it('R5-AR-02: AR REVERSAL with wrong branch fails closed, zero additional reversal row, balance unchanged', async () => {
+        const refId = `REF-R5-AR-02-${crypto.randomUUID()}`;
+        const charge = await financeService.createReceivableCharge({
+          organizationId: tenantAId,
+          branchId: branchAId,
+          customerId: customerAId,
+          referenceAccountId: refId,
+          totalAmount: '1000.0000',
+          dueDate: '2026-10-30',
+        });
+        const arId = charge.accountsReceivable.id;
+
+        const setRes = await financeService.settleReceivable({
+          organizationId: tenantAId,
+          branchId: branchAId,
+          accountsReceivableId: arId,
+          settlementAmount: '400.0000',
+          referenceId: `SET-R5-AR-02-${crypto.randomUUID()}`,
+        });
+        assert.equal(setRes.status, 'APPLIED');
+
+        // Attempt reversal with branchBId
+        await assert.rejects(
+          async () =>
+            financeService.reverseAccountsReceivableSettlement({
+              organizationId: tenantAId,
+              branchId: branchBId,
+              accountsReceivableId: arId,
+              originalSettlementTransactionId: setRes.settlement.id,
+              reversalReferenceId: `REV-R5-AR-02-${crypto.randomUUID()}`,
+            }),
+          AccountsReceivableInvalidStateError,
+        );
+
+        // Verify only original APPLY settlement row exists (0 REVERSAL rows)
+        const txs = await financeService.getAccountsReceivableSettlements(tenantAId, arId);
+        assert.equal(txs.length, 1);
+        assert.equal(txs[0]!.transactionKind, 'APPLY');
+
+        const ar = await financeService.getAccountsReceivable(tenantAId, arId);
+        assert.equal(ar!.balanceDue, '600.0000');
+      });
+
+      it('R5-AR-03: same settlement reference + different branch fails closed', async () => {
+        const refId = `REF-R5-AR-03-${crypto.randomUUID()}`;
+        const charge = await financeService.createReceivableCharge({
+          organizationId: tenantAId,
+          branchId: branchAId,
+          customerId: customerAId,
+          referenceAccountId: refId,
+          totalAmount: '500.0000',
+          dueDate: '2026-10-30',
+        });
+        const arId = charge.accountsReceivable.id;
+        const setRef = `SET-R5-AR-03-${crypto.randomUUID()}`;
+
+        const setRes = await financeService.settleReceivable({
+          organizationId: tenantAId,
+          branchId: branchAId,
+          accountsReceivableId: arId,
+          settlementAmount: '200.0000',
+          referenceId: setRef,
+        });
+        assert.equal(setRes.status, 'APPLIED');
+
+        // Retry same settlement reference with different branchId
+        await assert.rejects(
+          async () =>
+            financeService.settleReceivable({
+              organizationId: tenantAId,
+              branchId: branchBId,
+              accountsReceivableId: arId,
+              settlementAmount: '200.0000',
+              referenceId: setRef,
+            }),
+          SettlementIdempotencyConflictError,
+        );
+      });
+
+      it('R5-AR-04: same reversal reference + different branch fails closed', async () => {
+        const refId = `REF-R5-AR-04-${crypto.randomUUID()}`;
+        const charge = await financeService.createReceivableCharge({
+          organizationId: tenantAId,
+          branchId: branchAId,
+          customerId: customerAId,
+          referenceAccountId: refId,
+          totalAmount: '500.0000',
+          dueDate: '2026-10-30',
+        });
+        const arId = charge.accountsReceivable.id;
+
+        const setRes = await financeService.settleReceivable({
+          organizationId: tenantAId,
+          branchId: branchAId,
+          accountsReceivableId: arId,
+          settlementAmount: '200.0000',
+          referenceId: `SET-R5-AR-04-${crypto.randomUUID()}`,
+        });
+
+        const revRef = `REV-R5-AR-04-${crypto.randomUUID()}`;
+        const revRes = await financeService.reverseAccountsReceivableSettlement({
+          organizationId: tenantAId,
+          branchId: branchAId,
+          accountsReceivableId: arId,
+          originalSettlementTransactionId: setRes.settlement.id,
+          reversalReferenceId: revRef,
+        });
+        assert.equal(revRes.status, 'APPLIED');
+
+        // Retry same reversal reference with different branchId
+        await assert.rejects(
+          async () =>
+            financeService.reverseAccountsReceivableSettlement({
+              organizationId: tenantAId,
+              branchId: branchBId,
+              accountsReceivableId: arId,
+              originalSettlementTransactionId: setRes.settlement.id,
+              reversalReferenceId: revRef,
+            }),
+          SettlementIdempotencyConflictError,
+        );
+      });
+
+      it('R5-AP-DATE-01: same payment reference + same explicit paymentDate + same facts → DUPLICATE_ACCEPTED', async () => {
+        const { eventPayload } = await createTestReceipt({
+          receiptNumber: `REC-R5-AP-D01-${crypto.randomUUID().slice(0, 6)}`,
+          totalAmount: '600.0000',
+          paymentTerms: 'NET_30',
+        });
+        const apRes = await financeService.onPurchaseReceiptConfirmed(
+          eventPayload,
+          testOnlyPaymentTermsResolver,
+        );
+        const apId = apRes.accountsPayable.id;
+
+        const payRef = `PAY-R5-AP-D01-${crypto.randomUUID()}`;
+        const explicitDate = '2026-09-20T12:00:00.000Z';
+
+        const res1 = await financeService.applyAccountsPayablePayment({
+          organizationId: tenantAId,
+          branchId: branchAId,
+          accountsPayableId: apId,
+          paymentAmount: '150.0000',
+          referenceId: payRef,
+          paymentDate: explicitDate,
+        });
+        assert.equal(res1.status, 'APPLIED');
+
+        const res2 = await financeService.applyAccountsPayablePayment({
+          organizationId: tenantAId,
+          branchId: branchAId,
+          accountsPayableId: apId,
+          paymentAmount: '150.0000',
+          referenceId: payRef,
+          paymentDate: explicitDate,
+        });
+        assert.equal(res2.status, 'DUPLICATE_ACCEPTED');
+        assert.equal(res2.payment.id, res1.payment.id);
+      });
+
+      it('R5-AP-DATE-02: same payment reference + different explicit paymentDate → PAYMENT_IDEMPOTENCY_CONFLICT', async () => {
+        const { eventPayload } = await createTestReceipt({
+          receiptNumber: `REC-R5-AP-D02-${crypto.randomUUID().slice(0, 6)}`,
+          totalAmount: '600.0000',
+          paymentTerms: 'NET_30',
+        });
+        const apRes = await financeService.onPurchaseReceiptConfirmed(
+          eventPayload,
+          testOnlyPaymentTermsResolver,
+        );
+        const apId = apRes.accountsPayable.id;
+
+        const payRef = `PAY-R5-AP-D02-${crypto.randomUUID()}`;
+        await financeService.applyAccountsPayablePayment({
+          organizationId: tenantAId,
+          branchId: branchAId,
+          accountsPayableId: apId,
+          paymentAmount: '150.0000',
+          referenceId: payRef,
+          paymentDate: '2026-09-20T12:00:00.000Z',
+        });
+
+        await assert.rejects(
+          async () =>
+            financeService.applyAccountsPayablePayment({
+              organizationId: tenantAId,
+              branchId: branchAId,
+              accountsPayableId: apId,
+              paymentAmount: '150.0000',
+              referenceId: payRef,
+              paymentDate: '2026-09-21T12:00:00.000Z',
+            }),
+          PaymentIdempotencyConflictError,
+        );
+      });
+
+      it('R5-AP-DATE-03: same reversal reference + different explicit reversalDate → PAYMENT_IDEMPOTENCY_CONFLICT', async () => {
+        const { eventPayload } = await createTestReceipt({
+          receiptNumber: `REC-R5-AP-D03-${crypto.randomUUID().slice(0, 6)}`,
+          totalAmount: '600.0000',
+          paymentTerms: 'NET_30',
+        });
+        const apRes = await financeService.onPurchaseReceiptConfirmed(
+          eventPayload,
+          testOnlyPaymentTermsResolver,
+        );
+        const apId = apRes.accountsPayable.id;
+
+        const pay = await financeService.applyAccountsPayablePayment({
+          organizationId: tenantAId,
+          branchId: branchAId,
+          accountsPayableId: apId,
+          paymentAmount: '200.0000',
+          referenceId: `PAY-R5-AP-D03-${crypto.randomUUID()}`,
+        });
+
+        const revRef = `REV-R5-AP-D03-${crypto.randomUUID()}`;
+        const rev1 = await financeService.reverseAccountsPayablePayment({
+          organizationId: tenantAId,
+          branchId: branchAId,
+          accountsPayableId: apId,
+          originalPaymentTransactionId: pay.payment.id,
+          reversalReferenceId: revRef,
+          reversalDate: '2026-09-20T14:00:00.000Z',
+        });
+        assert.equal(rev1.status, 'APPLIED');
+
+        await assert.rejects(
+          async () =>
+            financeService.reverseAccountsPayablePayment({
+              organizationId: tenantAId,
+              branchId: branchAId,
+              accountsPayableId: apId,
+              originalPaymentTransactionId: pay.payment.id,
+              reversalReferenceId: revRef,
+              reversalDate: '2026-09-22T14:00:00.000Z',
+            }),
+          PaymentIdempotencyConflictError,
+        );
+      });
+
+      it('R5-AR-DATE-01: same settlement reference + same explicit settlementDate → DUPLICATE_ACCEPTED', async () => {
+        const charge = await financeService.createReceivableCharge({
+          organizationId: tenantAId,
+          branchId: branchAId,
+          customerId: customerAId,
+          referenceAccountId: `REF-R5-AR-D01-${crypto.randomUUID()}`,
+          totalAmount: '700.0000',
+          dueDate: '2026-10-30',
+        });
+        const arId = charge.accountsReceivable.id;
+
+        const setRef = `SET-R5-AR-D01-${crypto.randomUUID()}`;
+        const explicitDate = '2026-09-20T10:00:00.000Z';
+
+        const res1 = await financeService.settleReceivable({
+          organizationId: tenantAId,
+          branchId: branchAId,
+          accountsReceivableId: arId,
+          settlementAmount: '100.0000',
+          referenceId: setRef,
+          settlementDate: explicitDate,
+        });
+        assert.equal(res1.status, 'APPLIED');
+
+        const res2 = await financeService.settleReceivable({
+          organizationId: tenantAId,
+          branchId: branchAId,
+          accountsReceivableId: arId,
+          settlementAmount: '100.0000',
+          referenceId: setRef,
+          settlementDate: explicitDate,
+        });
+        assert.equal(res2.status, 'DUPLICATE_ACCEPTED');
+        assert.equal(res2.settlement.id, res1.settlement.id);
+      });
+
+      it('R5-AR-DATE-02: same settlement reference + different explicit settlementDate → SETTLEMENT_IDEMPOTENCY_CONFLICT', async () => {
+        const charge = await financeService.createReceivableCharge({
+          organizationId: tenantAId,
+          branchId: branchAId,
+          customerId: customerAId,
+          referenceAccountId: `REF-R5-AR-D02-${crypto.randomUUID()}`,
+          totalAmount: '700.0000',
+          dueDate: '2026-10-30',
+        });
+        const arId = charge.accountsReceivable.id;
+
+        const setRef = `SET-R5-AR-D02-${crypto.randomUUID()}`;
+        await financeService.settleReceivable({
+          organizationId: tenantAId,
+          branchId: branchAId,
+          accountsReceivableId: arId,
+          settlementAmount: '100.0000',
+          referenceId: setRef,
+          settlementDate: '2026-09-20T10:00:00.000Z',
+        });
+
+        await assert.rejects(
+          async () =>
+            financeService.settleReceivable({
+              organizationId: tenantAId,
+              branchId: branchAId,
+              accountsReceivableId: arId,
+              settlementAmount: '100.0000',
+              referenceId: setRef,
+              settlementDate: '2026-09-21T10:00:00.000Z',
+            }),
+          SettlementIdempotencyConflictError,
+        );
+      });
+
+      it('R5-AR-DATE-03: same reversal reference + different explicit reversalDate → SETTLEMENT_IDEMPOTENCY_CONFLICT', async () => {
+        const charge = await financeService.createReceivableCharge({
+          organizationId: tenantAId,
+          branchId: branchAId,
+          customerId: customerAId,
+          referenceAccountId: `REF-R5-AR-D03-${crypto.randomUUID()}`,
+          totalAmount: '700.0000',
+          dueDate: '2026-10-30',
+        });
+        const arId = charge.accountsReceivable.id;
+
+        const setRes = await financeService.settleReceivable({
+          organizationId: tenantAId,
+          branchId: branchAId,
+          accountsReceivableId: arId,
+          settlementAmount: '150.0000',
+          referenceId: `SET-R5-AR-D03-${crypto.randomUUID()}`,
+        });
+
+        const revRef = `REV-R5-AR-D03-${crypto.randomUUID()}`;
+        const rev1 = await financeService.reverseAccountsReceivableSettlement({
+          organizationId: tenantAId,
+          branchId: branchAId,
+          accountsReceivableId: arId,
+          originalSettlementTransactionId: setRes.settlement.id,
+          reversalReferenceId: revRef,
+          reversalDate: '2026-09-20T15:00:00.000Z',
+        });
+        assert.equal(rev1.status, 'APPLIED');
+
+        await assert.rejects(
+          async () =>
+            financeService.reverseAccountsReceivableSettlement({
+              organizationId: tenantAId,
+              branchId: branchAId,
+              accountsReceivableId: arId,
+              originalSettlementTransactionId: setRes.settlement.id,
+              reversalReferenceId: revRef,
+              reversalDate: '2026-09-25T15:00:00.000Z',
+            }),
+          SettlementIdempotencyConflictError,
+        );
+      });
+
+      it('R5-DATE-01: original call omits date, retry same reference also omits date → DUPLICATE_ACCEPTED', async () => {
+        const charge = await financeService.createReceivableCharge({
+          organizationId: tenantAId,
+          branchId: branchAId,
+          customerId: customerAId,
+          referenceAccountId: `REF-R5-DATE-01-${crypto.randomUUID()}`,
+          totalAmount: '500.0000',
+          dueDate: '2026-10-30',
+        });
+        const arId = charge.accountsReceivable.id;
+
+        const setRef = `SET-R5-DATE-01-${crypto.randomUUID()}`;
+        const res1 = await financeService.settleReceivable({
+          organizationId: tenantAId,
+          branchId: branchAId,
+          accountsReceivableId: arId,
+          settlementAmount: '200.0000',
+          referenceId: setRef,
+        });
+        assert.equal(res1.status, 'APPLIED');
+
+        const res2 = await financeService.settleReceivable({
+          organizationId: tenantAId,
+          branchId: branchAId,
+          accountsReceivableId: arId,
+          settlementAmount: '200.0000',
+          referenceId: setRef,
+        });
+        assert.equal(res2.status, 'DUPLICATE_ACCEPTED');
+        assert.equal(res2.settlement.id, res1.settlement.id);
+      });
+
+      it('R5-DATE-02: same instant represented with different timezone formatting is EQUIVALENT', async () => {
+        const charge = await financeService.createReceivableCharge({
+          organizationId: tenantAId,
+          branchId: branchAId,
+          customerId: customerAId,
+          referenceAccountId: `REF-R5-DATE-02-${crypto.randomUUID()}`,
+          totalAmount: '500.0000',
+          dueDate: '2026-10-30',
+        });
+        const arId = charge.accountsReceivable.id;
+
+        const setRef = `SET-R5-DATE-02-${crypto.randomUUID()}`;
+        const res1 = await financeService.settleReceivable({
+          organizationId: tenantAId,
+          branchId: branchAId,
+          accountsReceivableId: arId,
+          settlementAmount: '120.0000',
+          referenceId: setRef,
+          settlementDate: '2026-09-20T16:00:00.000Z',
+        });
+        assert.equal(res1.status, 'APPLIED');
+
+        const res2 = await financeService.settleReceivable({
+          organizationId: tenantAId,
+          branchId: branchAId,
+          accountsReceivableId: arId,
+          settlementAmount: '120.0000',
+          referenceId: setRef,
+          settlementDate: '2026-09-20T10:00:00.000-06:00',
+        });
+        assert.equal(res2.status, 'DUPLICATE_ACCEPTED');
+        assert.equal(res2.settlement.id, res1.settlement.id);
+      });
     });
   });
 });

@@ -1,4 +1,4 @@
-# WP-020 CANONICAL BUILDER EVIDENCE (R4 PAYMENT TRANSACTION REMEDIATION)
+# WP-020 CANONICAL BUILDER EVIDENCE (R5 FINAL SURGICAL IDENTITY HARDENING)
 
 ## Work Package Information
 - **Work Package:** WP-020 — Finance, Accounts Payable / Receivable & Cash Reconciliation
@@ -8,8 +8,9 @@
 - **R1 Frozen Subject SHA:** `c762e2522c3e4845611614e9c27e414a8e532199`
 - **R2 Frozen Subject SHA:** `fa2ea8d09ba4c3ec02e1ec0d15d1d5442d7a5ef0`
 - **R3 Frozen Subject SHA:** `28bedeedeb0206055d84bc7e71e48301cdf9b9ce`
-- **R4 Branch:** `feat/wp-020-finance-ap-ar-reconciliation-r4`
-- **Direct Parent:** R3 Frozen Subject (`28bedeedeb0206055d84bc7e71e48301cdf9b9ce`)
+- **R4 Frozen Subject SHA:** `3001bb5807592bea86a35a90436df0c0a1520260`
+- **R5 Branch:** `feat/wp-020-finance-ap-ar-reconciliation-r5`
+- **Direct Parent:** R4 Frozen Subject (`3001bb5807592bea86a35a90436df0c0a1520260`)
 - **WP-019 Status:** CANONICAL / VERIFIED (PR #55 merged at `16b41e3d471eeaf5a5d439f448626de05c318b1e`)
 
 ---
@@ -64,6 +65,23 @@
 
 ---
 
+## 2.1 R5 Final Surgical Identity Hardening
+- **Blocker 1 Resolved — AR Branch Identity Enforcement:**
+  - `settleReceivable()` and `reverseAccountsReceivableSettlement()` enforce durable AR branch matches command branch: `currentAr.branchId === command.branchId`.
+  - Mismatches fail closed with `AccountsReceivableInvalidStateError` without creating settlement rows or mutating balance.
+  - Same-reference idempotency checks validate `branch_id === command.branchId` pre-lock, under-lock, and during concurrent conflict resolution; branch mismatch throws `SettlementIdempotencyConflictError`.
+- **Blocker 2 Resolved — Explicit Financial Transaction Date Idempotency:**
+  - Audit date normalization: `normalizeInstant()` converts timestamps to normalized UTC ISO strings (`new Date(value).toISOString()`).
+  - Timezone equivalence: Distinct timezone representations of the same instant (`2026-09-20T16:00:00Z` vs `2026-09-20T10:00:00-06:00`) are treated as identical.
+  - Same-reference retries with explicit `paymentDate`, `settlementDate`, or `reversalDate` must match the persisted transaction instant.
+  - Explicit date mismatch fails closed with `PaymentIdempotencyConflictError` (`PAYMENT_IDEMPOTENCY_CONFLICT`) or `SettlementIdempotencyConflictError` (`SETTLEMENT_IDEMPOTENCY_CONFLICT`).
+  - Omitted date semantics: When original transaction omitted explicit date (relying on server/database NOW), a retry that also omits the date returns `DUPLICATE_ACCEPTED` without requiring client knowledge of server NOW.
+- **Optional Advisory — Down Migration CASCADE Removal:**
+  - `20260905020000_finance_ap_ar_cash_reconciliation.sql` down migration replaces `DROP TABLE ... CASCADE` with deterministic reverse dependency order `DROP TABLE` without `CASCADE`.
+  - Verified with full down-migration regression testing.
+
+---
+
 ## 3. R3 Persistence Boundary Decoupling (Preserved)
 - Cross-context physical FKs from `accounts_payable` to `suppliers` and `purchase_receipts` remain **REMOVED**.
 - External aggregate identities `supplier_id` and `purchase_receipt_id` remain **PRESERVED** as UUID fields.
@@ -96,7 +114,7 @@
   - `(organization_id, reversal_of_transaction_id) REFERENCES accounts_receivable_settlements(organization_id, id)`
 
 ### Down Migration Clean Rollback
-- Down migration cleanly drops triggers, functions, and all 7 tables with `CASCADE`.
+- Down migration cleanly drops triggers, functions, and all 7 tables in reverse dependency order without `CASCADE`.
 - Tested in `WP019-DOWN-01`, `R4-DB-11`, and `R4-DB-12`: all predecessor tables (Platform Core, Outbox, Sync, Recipes, Kárdex, Procurement) survive cleanly.
 
 ---
@@ -143,10 +161,24 @@
 |------------|------|-------|------|------|--------|
 | Finance Domain | `packages/finance/src/index.test.ts` | 15 | 15 | 0 | PASS |
 | Database Integration | `packages/database/src/finance.test.ts` + all DB suites | 320 | 320 | 0 | PASS |
-| Cloud Server Integration | `packages/cloud-server/src/index.test.ts` | 112 | 112 | 0 | PASS |
+| Cloud Server Integration | `packages/cloud-server/src/index.test.ts` | 124 | 124 | 0 | PASS |
 | Cross-Package E2E | `tests/integration/wp013-sync-e2e.test.mjs` | 1 | 1 | 0 | PASS |
 | Dependency Graph | `scripts/check-graph.test.mjs` | 44 | 44 | 0 | PASS |
 | Electron Runtime | `packages/edge/src/electron.test.ts` | 10 | 10 | 0 | PASS |
+
+### R5 Specific Cloud Tests (`packages/cloud-server/src/index.test.ts`)
+- **R5-AR-01:** AR APPLY with wrong branch fails closed (`AccountsReceivableInvalidStateError`), 0 settlement rows, balance unchanged.
+- **R5-AR-02:** AR REVERSAL with wrong branch fails closed (`AccountsReceivableInvalidStateError`), 0 additional reversal rows, balance unchanged.
+- **R5-AR-03:** Same settlement reference + different branch fails closed (`SettlementIdempotencyConflictError`).
+- **R5-AR-04:** Same reversal reference + different branch fails closed (`SettlementIdempotencyConflictError`).
+- **R5-AP-DATE-01:** Same payment reference + same explicit paymentDate + same facts -> `DUPLICATE_ACCEPTED`.
+- **R5-AP-DATE-02:** Same payment reference + different explicit paymentDate -> `PAYMENT_IDEMPOTENCY_CONFLICT`.
+- **R5-AP-DATE-03:** Same reversal reference + different explicit reversalDate -> `PAYMENT_IDEMPOTENCY_CONFLICT`.
+- **R5-AR-DATE-01:** Same settlement reference + same explicit settlementDate -> `DUPLICATE_ACCEPTED`.
+- **R5-AR-DATE-02:** Same settlement reference + different explicit settlementDate -> `SETTLEMENT_IDEMPOTENCY_CONFLICT`.
+- **R5-AR-DATE-03:** Same reversal reference + different explicit reversalDate -> `SETTLEMENT_IDEMPOTENCY_CONFLICT`.
+- **R5-DATE-01:** Original call omits date, retry same reference also omits date -> `DUPLICATE_ACCEPTED`.
+- **R5-DATE-02:** Same instant represented with different timezone formatting (`2026-09-20T16:00:00Z` vs `2026-09-20T10:00:00-06:00`) -> `DUPLICATE_ACCEPTED` (EQUIVALENT).
 
 ### R4 Specific Database Tests (`packages/database/src/finance.test.ts`)
 - **R4-DB-01:** `accounts_payable_payments` table exists with all required columns.

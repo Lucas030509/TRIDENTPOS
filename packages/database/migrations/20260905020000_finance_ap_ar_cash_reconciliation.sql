@@ -263,11 +263,11 @@ CREATE POLICY tenant_isolation_policy ON cash_reconciliations
     WITH CHECK (organization_id = current_app_org_id());
 
 -- Down
-DROP TABLE IF EXISTS accounts_receivable_settlements CASCADE;
-DROP TABLE IF EXISTS accounts_payable_payments CASCADE;
-DROP TABLE IF EXISTS cash_reconciliations CASCADE;
-DROP TABLE IF EXISTS branch_operating_expenses CASCADE;
-DROP TABLE IF EXISTS scheduled_payments CASCADE;
-DROP TABLE IF EXISTS accounts_receivable CASCADE;
-DROP TABLE IF EXISTS accounts_payable CASCADE;
-DROP FUNCTION IF EXISTS trg_finance_payments_append_only() CASCADE;
+DROP TABLE IF EXISTS accounts_receivable_settlements;
+DROP TABLE IF EXISTS accounts_payable_payments;
+DROP TABLE IF EXISTS cash_reconciliations;
+DROP TABLE IF EXISTS branch_operating_expenses;
+DROP TABLE IF EXISTS scheduled_payments;
+DROP TABLE IF EXISTS accounts_receivable;
+DROP TABLE IF EXISTS accounts_payable;
+DROP FUNCTION IF EXISTS trg_finance_payments_append_only();

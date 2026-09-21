@@ -2591,6 +2591,31 @@ function normalizeDateStr(d: string | Date | null | undefined): string {
   return d.toISOString().slice(0, 10);
 }
 
+function normalizeInstant(d: string | Date | null | undefined): string | null {
+  if (d === null || d === undefined || d === '') return null;
+  const parsed = typeof d === 'string' ? new Date(d) : d;
+  if (Number.isNaN(parsed.getTime())) {
+    throw new InvalidFinancialAmountError(`Invalid date/time format: ${String(d)}`);
+  }
+  return parsed.toISOString();
+}
+
+function matchesTransactionDate(
+  persistedDate: string | Date,
+  incomingExplicitDate: string | Date | null | undefined,
+): boolean {
+  if (
+    incomingExplicitDate === null ||
+    incomingExplicitDate === undefined ||
+    incomingExplicitDate === ''
+  ) {
+    return true;
+  }
+  const normIncoming = normalizeInstant(incomingExplicitDate);
+  const normPersisted = normalizeInstant(persistedDate);
+  return normIncoming === normPersisted;
+}
+
 export class PostgresFinanceService implements CloudFinanceCompositionService {
   constructor(private readonly pool: pg.Pool = getPool()) {}
 
@@ -2863,7 +2888,8 @@ export class PostgresFinanceService implements CloudFinanceCompositionService {
           payRow.accounts_payable_id !== command.accountsPayableId ||
           payRow.branch_id !== command.branchId ||
           payRow.transaction_kind !== 'APPLY' ||
-          cmpFinanceScale4(payRow.amount, command.paymentAmount) !== 0
+          cmpFinanceScale4(payRow.amount, command.paymentAmount) !== 0 ||
+          !matchesTransactionDate(payRow.payment_date, command.paymentDate)
         ) {
           throw new PaymentIdempotencyConflictError(
             `Payment reference '${referenceId}' already exists with different transaction facts`,
@@ -2960,7 +2986,8 @@ export class PostgresFinanceService implements CloudFinanceCompositionService {
           payRow.accounts_payable_id !== command.accountsPayableId ||
           payRow.branch_id !== command.branchId ||
           payRow.transaction_kind !== 'APPLY' ||
-          cmpFinanceScale4(payRow.amount, command.paymentAmount) !== 0
+          cmpFinanceScale4(payRow.amount, command.paymentAmount) !== 0 ||
+          !matchesTransactionDate(payRow.payment_date, command.paymentDate)
         ) {
           throw new PaymentIdempotencyConflictError(
             `Payment reference '${referenceId}' already exists with different transaction facts`,
@@ -3074,7 +3101,8 @@ export class PostgresFinanceService implements CloudFinanceCompositionService {
           revRow.accounts_payable_id !== command.accountsPayableId ||
           revRow.branch_id !== command.branchId ||
           revRow.transaction_kind !== 'REVERSAL' ||
-          revRow.reversal_of_transaction_id !== command.originalPaymentTransactionId
+          revRow.reversal_of_transaction_id !== command.originalPaymentTransactionId ||
+          !matchesTransactionDate(revRow.payment_date, command.reversalDate)
         ) {
           throw new PaymentIdempotencyConflictError(
             `Reversal reference '${reversalRef}' already exists with different transaction facts`,
@@ -3171,7 +3199,8 @@ export class PostgresFinanceService implements CloudFinanceCompositionService {
           revRow.accounts_payable_id !== command.accountsPayableId ||
           revRow.branch_id !== command.branchId ||
           revRow.transaction_kind !== 'REVERSAL' ||
-          revRow.reversal_of_transaction_id !== command.originalPaymentTransactionId
+          revRow.reversal_of_transaction_id !== command.originalPaymentTransactionId ||
+          !matchesTransactionDate(revRow.payment_date, command.reversalDate)
         ) {
           throw new PaymentIdempotencyConflictError(
             `Reversal reference '${reversalRef}' already exists with different transaction facts`,
@@ -3644,8 +3673,10 @@ export class PostgresFinanceService implements CloudFinanceCompositionService {
         const row = existingTxRes.rows[0]!;
         if (
           row.accounts_receivable_id !== command.accountsReceivableId ||
+          row.branch_id !== command.branchId ||
           row.transaction_kind !== 'APPLY' ||
-          cmpFinanceScale4(row.amount, command.settlementAmount) !== 0
+          cmpFinanceScale4(row.amount, command.settlementAmount) !== 0 ||
+          !matchesTransactionDate(row.settlement_date, command.settlementDate)
         ) {
           throw new SettlementIdempotencyConflictError(
             `Accounts receivable settlement idempotency conflict for reference '${referenceId}': existing transaction differs from incoming settlement facts`,
@@ -3698,6 +3729,13 @@ export class PostgresFinanceService implements CloudFinanceCompositionService {
         );
       }
 
+      const currentAr = this.mapArRow(res.rows[0]!);
+      if (currentAr.branchId !== command.branchId) {
+        throw new AccountsReceivableInvalidStateError(
+          `Branch mismatch for accounts receivable: record is branch '${currentAr.branchId}', command specifies '${command.branchId}'`,
+        );
+      }
+
       // Re-check tx existence under lock to handle concurrent race
       const concurrentTxRes = await client.query<{
         id: string;
@@ -3722,8 +3760,10 @@ export class PostgresFinanceService implements CloudFinanceCompositionService {
         const row = concurrentTxRes.rows[0]!;
         if (
           row.accounts_receivable_id !== command.accountsReceivableId ||
+          row.branch_id !== command.branchId ||
           row.transaction_kind !== 'APPLY' ||
-          cmpFinanceScale4(row.amount, command.settlementAmount) !== 0
+          cmpFinanceScale4(row.amount, command.settlementAmount) !== 0 ||
+          !matchesTransactionDate(row.settlement_date, command.settlementDate)
         ) {
           throw new SettlementIdempotencyConflictError(
             `Accounts receivable settlement idempotency conflict for reference '${referenceId}': existing transaction differs from incoming settlement facts`,
@@ -3732,12 +3772,11 @@ export class PostgresFinanceService implements CloudFinanceCompositionService {
 
         return {
           status: 'DUPLICATE_ACCEPTED',
-          accountsReceivable: this.mapArRow(res.rows[0]!),
+          accountsReceivable: currentAr,
           settlement: this.mapArSettlementRow(row),
         };
       }
 
-      const currentAr = this.mapArRow(res.rows[0]!);
       const { newBalanceDue, newStatus } = applySettlementToAccountsReceivable(
         currentAr,
         command.settlementAmount,
@@ -3764,7 +3803,7 @@ export class PostgresFinanceService implements CloudFinanceCompositionService {
                   amount::text, settlement_date, reference_id, reversal_of_transaction_id, created_at;`,
         [
           command.organizationId,
-          currentAr.branchId,
+          command.branchId,
           command.accountsReceivableId,
           command.settlementAmount,
           command.settlementDate ?? null,
@@ -3844,8 +3883,10 @@ export class PostgresFinanceService implements CloudFinanceCompositionService {
         const row = existingRevRes.rows[0]!;
         if (
           row.accounts_receivable_id !== command.accountsReceivableId ||
+          row.branch_id !== command.branchId ||
           row.transaction_kind !== 'REVERSAL' ||
-          row.reversal_of_transaction_id !== originalSettlementId
+          row.reversal_of_transaction_id !== originalSettlementId ||
+          !matchesTransactionDate(row.settlement_date, reversalDate)
         ) {
           throw new SettlementIdempotencyConflictError(
             `Accounts receivable settlement reversal idempotency conflict for reference '${referenceId}'`,
@@ -3898,6 +3939,13 @@ export class PostgresFinanceService implements CloudFinanceCompositionService {
         );
       }
 
+      const currentAr = this.mapArRow(res.rows[0]!);
+      if (currentAr.branchId !== command.branchId) {
+        throw new AccountsReceivableInvalidStateError(
+          `Branch mismatch for accounts receivable: record is branch '${currentAr.branchId}', command specifies '${command.branchId}'`,
+        );
+      }
+
       // Check again under lock
       const concurrentRevRes = await client.query<{
         id: string;
@@ -3922,8 +3970,10 @@ export class PostgresFinanceService implements CloudFinanceCompositionService {
         const row = concurrentRevRes.rows[0]!;
         if (
           row.accounts_receivable_id !== command.accountsReceivableId ||
+          row.branch_id !== command.branchId ||
           row.transaction_kind !== 'REVERSAL' ||
-          row.reversal_of_transaction_id !== originalSettlementId
+          row.reversal_of_transaction_id !== originalSettlementId ||
+          !matchesTransactionDate(row.settlement_date, reversalDate)
         ) {
           throw new SettlementIdempotencyConflictError(
             `Accounts receivable settlement reversal idempotency conflict for reference '${referenceId}'`,
@@ -3932,7 +3982,7 @@ export class PostgresFinanceService implements CloudFinanceCompositionService {
 
         return {
           status: 'DUPLICATE_ACCEPTED',
-          accountsReceivable: this.mapArRow(res.rows[0]!),
+          accountsReceivable: currentAr,
           reversal: this.mapArSettlementRow(row),
         };
       }
@@ -3983,7 +4033,6 @@ export class PostgresFinanceService implements CloudFinanceCompositionService {
         );
       }
 
-      const currentAr = this.mapArRow(res.rows[0]!);
       const { newBalanceDue, newStatus } = reverseSettlementOnAccountsReceivable(
         currentAr,
         origRow.amount,
@@ -4010,7 +4059,7 @@ export class PostgresFinanceService implements CloudFinanceCompositionService {
                   amount::text, settlement_date, reference_id, reversal_of_transaction_id, created_at;`,
         [
           command.organizationId,
-          currentAr.branchId,
+          command.branchId,
           command.accountsReceivableId,
           origRow.amount,
           reversalDate ?? null,
