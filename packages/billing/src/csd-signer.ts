@@ -83,22 +83,5 @@ export function generateTestCsd(): CsdCredentials {
   };
 }
 
-/**
- * Interface for CSD Secret Vault provider.
- */
-export interface ICsdVault {
-  getCsdCredentials(organizationId: string): Promise<CsdCredentials | null>;
-  storeCsdCredentials(organizationId: string, credentials: CsdCredentials): Promise<void>;
-}
-
-export class InMemoryCsdVault implements ICsdVault {
-  private readonly store = new Map<string, CsdCredentials>();
-
-  async getCsdCredentials(organizationId: string): Promise<CsdCredentials | null> {
-    return this.store.get(organizationId) ?? null;
-  }
-
-  async storeCsdCredentials(organizationId: string, credentials: CsdCredentials): Promise<void> {
-    this.store.set(organizationId, credentials);
-  }
-}
+export type { ICsdVault } from './csd-vault.js';
+export { UnavailableCsdVault, InMemoryCsdVault } from './csd-vault.js';

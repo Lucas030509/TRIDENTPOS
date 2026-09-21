@@ -169,7 +169,40 @@ CREATE POLICY tenant_isolation_policy ON lotes_facturacion_global
     USING (organization_id = current_app_org_id())
     WITH CHECK (organization_id = current_app_org_id());
 
+-- 6. Fiscal Stamping Operations (Durable Stamping State & Retry Protocol)
+-- Governed by QI-BLK-021-R1-03 and QI-BLK-021-R1-04.
+CREATE TABLE IF NOT EXISTS fiscal_stamping_operations (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    organization_id UUID NOT NULL REFERENCES organizations(id),
+    branch_id UUID NOT NULL REFERENCES branches(id),
+    invoice_id UUID NOT NULL,
+    idempotency_key VARCHAR(100) NOT NULL,
+    request_hash VARCHAR(100) NOT NULL,
+    status VARCHAR(50) NOT NULL, -- PENDING, IN_FLIGHT, RETRYABLE, SUCCEEDED, FAILED_TERMINAL, RECONCILIATION_REQUIRED
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT NULL,
+    external_reference VARCHAR(100) NULL,
+    external_uuid VARCHAR(100) NULL,
+    next_retry_at TIMESTAMPTZ NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_stamping_ops_org_id UNIQUE (organization_id, id),
+    CONSTRAINT uq_stamping_ops_org_idempotency UNIQUE (organization_id, idempotency_key),
+    CONSTRAINT fk_fiscal_stamping_ops_invoice FOREIGN KEY (organization_id, invoice_id)
+        REFERENCES fiscal_invoices(organization_id, id) ON DELETE CASCADE,
+    CONSTRAINT chk_stamping_ops_status CHECK (status IN ('PENDING', 'IN_FLIGHT', 'RETRYABLE', 'SUCCEEDED', 'FAILED_TERMINAL', 'RECONCILIATION_REQUIRED'))
+);
+
+ALTER TABLE fiscal_stamping_operations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE fiscal_stamping_operations FORCE ROW LEVEL SECURITY;
+
+CREATE POLICY tenant_isolation_policy ON fiscal_stamping_operations
+    FOR ALL
+    USING (organization_id = current_app_org_id())
+    WITH CHECK (organization_id = current_app_org_id());
+
 -- Down
+DROP TABLE IF EXISTS fiscal_stamping_operations;
 DROP TABLE IF EXISTS lotes_facturacion_global;
 DROP TABLE IF EXISTS fiscal_invoice_items;
 DROP TABLE IF EXISTS fiscal_invoices;

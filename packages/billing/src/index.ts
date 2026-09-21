@@ -11,6 +11,7 @@ export * from './rfc-validator.js';
 export * from './tax-calculator.js';
 export * from './cfdi-xml.js';
 export * from './csd-signer.js';
+export * from './csd-vault.js';
 export * from './pac-connector.js';
 export * from './invoice-lifecycle.js';
 export * from './batch-candidate-query.js';

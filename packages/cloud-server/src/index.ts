@@ -93,7 +93,10 @@ import {
   type CreateGlobalInvoiceBatchCommand,
   type GlobalInvoiceBatch,
   type IPacConnector,
-  MockPacConnector,
+  type ICsdVault,
+  type FiscalStampingOperationStatus,
+  UnavailablePacConnector,
+  UnavailableCsdVault,
   calculateItemTaxes,
   generateCfdi40Xml,
   buildCadenaOriginal40,
@@ -108,6 +111,8 @@ import {
   InvalidTaxSchemeError,
   InvalidEmisorConfigError,
   InvalidFiscalInvoiceError,
+  InvoiceIdempotencyConflictError,
+  CsdCredentialsMissingError,
   PacTimeoutError,
 } from '@trident/billing';
 import { getPool, withTenantTransaction, CloudIntegrationOutboxService } from '@trident/database';
@@ -4577,7 +4582,8 @@ export class PostgresBillingService implements CloudBillingCompositionService {
 
   constructor(
     private readonly pool: pg.Pool = getPool(),
-    private readonly pacConnector: IPacConnector = new MockPacConnector(),
+    private readonly pacConnector: IPacConnector = new UnavailablePacConnector(),
+    private readonly csdVault: ICsdVault = new UnavailableCsdVault(),
     outboxService?: CloudIntegrationOutboxService,
   ) {
     this.outboxService = outboxService ?? new CloudIntegrationOutboxService();
@@ -4906,104 +4912,287 @@ export class PostgresBillingService implements CloudBillingCompositionService {
   }
 
   async stampFiscalInvoice(command: StampFiscalInvoiceCommand): Promise<FiscalInvoice> {
-    return withTenantTransaction(this.pool, command.organizationId, async (client) => {
-      // 1. Lock invoice FOR UPDATE
-      const invoiceRes = await client.query(
-        `SELECT * FROM fiscal_invoices WHERE organization_id = $1 AND id = $2 FOR UPDATE;`,
-        [command.organizationId, command.invoiceId],
-      );
+    const idempotencyKey = command.idempotencyKey ?? command.invoiceId;
 
-      if (invoiceRes.rows.length === 0) {
-        throw new InvalidFiscalInvoiceError(`Fiscal invoice '${command.invoiceId}' not found`);
-      }
-
-      const currentInvoiceRow = invoiceRes.rows[0]!;
-
-      // Idempotency check: if already stamped, return existing
-      if (currentInvoiceRow.status === 'STAMPED') {
-        const fullInvoice = await this.getInvoiceInternal(
-          client,
-          command.organizationId,
-          command.invoiceId,
+    // Phase 1: Prepare Operation & Sign XML within tenant TX
+    const prepared = await withTenantTransaction(
+      this.pool,
+      command.organizationId,
+      async (client) => {
+        // 1. Lock invoice FOR UPDATE
+        const invoiceRes = await client.query(
+          `SELECT * FROM fiscal_invoices WHERE organization_id = $1 AND id = $2 FOR UPDATE;`,
+          [command.organizationId, command.invoiceId],
         );
-        return fullInvoice!;
-      }
 
-      validateCanStamp(currentInvoiceRow.status);
-
-      // 2. Fetch items
-      const itemsRes = await client.query(
-        `SELECT * FROM fiscal_invoice_items WHERE organization_id = $1 AND invoice_id = $2 ORDER BY line_number ASC;`,
-        [command.organizationId, command.invoiceId],
-      );
-      const items = itemsRes.rows.map((r) => this.mapItemRow(r));
-
-      // 3. Fetch emisor config
-      const emisorRes = await client.query(
-        `SELECT * FROM emisor_fiscal_config WHERE organization_id = $1;`,
-        [command.organizationId],
-      );
-      if (emisorRes.rows.length === 0) {
-        throw new InvalidEmisorConfigError(
-          `Emisor config missing for organization '${command.organizationId}'`,
-        );
-      }
-      const emisor = this.mapEmisorRow(emisorRes.rows[0]!);
-
-      // 4. Build Cadena Original & Sign
-      const invoiceToStamp: FiscalInvoice = {
-        ...this.mapInvoiceRow(currentInvoiceRow),
-        emisorRfc: emisor.rfc,
-        emisorNombre: emisor.razonSocial,
-        emisorRegimenFiscal: emisor.regimenFiscal,
-        emisorCodigoPostal: emisor.codigoPostal,
-        items,
-      };
-
-      const cadenaOriginal = buildCadenaOriginal40(invoiceToStamp, items, emisor);
-
-      let selloEmisor = 'SELLO_EMISOR_MOCK';
-      const noCertificado = emisor.certificateNumber ?? '30001000000500003416';
-      const certificadoBase64 = emisor.certificatePem
-        ? formatCertBase64SingleLine(emisor.certificatePem)
-        : 'MIIFuzCCA6OgAwIBAgIUMzAwMDEwMDAwMDA1MDAwMDM0MTYwDQYJKoZIhvcNAQELBQAw...';
-
-      if (command.csd?.privateKeyPem) {
-        try {
-          selloEmisor = signCadenaOriginal(cadenaOriginal, command.csd.privateKeyPem);
-        } catch {
-          selloEmisor = 'SELLO_EMISOR_MOCK';
+        if (invoiceRes.rows.length === 0) {
+          throw new InvalidFiscalInvoiceError(`Fiscal invoice '${command.invoiceId}' not found`);
         }
-      }
 
-      // 5. Generate CFDI 4.0 XML
-      const cfdiXml = generateCfdi40Xml({
-        invoice: invoiceToStamp,
-        items,
-        emisor,
-        sello: selloEmisor,
-        certificateNumber: noCertificado,
-        certificateBase64: certificadoBase64,
-      });
+        const currentInvoiceRow = invoiceRes.rows[0]!;
 
-      // 6. Call PAC Connector
-      const stampResult = await this.pacConnector.timbrar({
+        // Idempotency check: if already stamped, return existing
+        if (currentInvoiceRow.status === 'STAMPED') {
+          const fullInvoice = await this.getInvoiceInternal(
+            client,
+            command.organizationId,
+            command.invoiceId,
+          );
+          return { alreadyCompleted: true, invoice: fullInvoice! };
+        }
+
+        validateCanStamp(currentInvoiceRow.status);
+
+        // 2. Compute request hash for idempotency integrity check
+        const requestHash = nodeCrypto
+          .createHash('sha256')
+          .update(
+            `${command.invoiceId}:${currentInvoiceRow.series}:${currentInvoiceRow.folio}:${currentInvoiceRow.total_amount}:${currentInvoiceRow.customer_tax_id}`,
+          )
+          .digest('hex');
+
+        // 3. Check / insert durable stamping operation record
+        const opRes = await client.query<{
+          id: string;
+          organization_id: string;
+          branch_id: string;
+          invoice_id: string;
+          idempotency_key: string;
+          request_hash: string;
+          status: FiscalStampingOperationStatus;
+          attempt_count: number;
+          last_error: string | null;
+          external_reference: string | null;
+          external_uuid: string | null;
+        }>(
+          `SELECT * FROM fiscal_stamping_operations WHERE organization_id = $1 AND idempotency_key = $2 FOR UPDATE;`,
+          [command.organizationId, idempotencyKey],
+        );
+
+        if (opRes.rows.length > 0) {
+          const existingOp = opRes.rows[0]!;
+          if (existingOp.request_hash !== requestHash) {
+            throw new InvoiceIdempotencyConflictError(
+              `Idempotency key '${idempotencyKey}' reused with conflicting request semantics`,
+            );
+          }
+
+          if (existingOp.status === 'SUCCEEDED' && existingOp.external_uuid) {
+            // Reconcile local state if commit failed earlier
+            await client.query(
+              `UPDATE fiscal_invoices
+               SET status = 'STAMPED',
+                   invoice_uuid = $1,
+                   stamped_at = COALESCE(stamped_at, NOW()),
+                   updated_at = NOW()
+               WHERE organization_id = $2 AND id = $3;`,
+              [existingOp.external_uuid, command.organizationId, command.invoiceId],
+            );
+            const fullInvoice = await this.getInvoiceInternal(
+              client,
+              command.organizationId,
+              command.invoiceId,
+            );
+            return { alreadyCompleted: true, invoice: fullInvoice! };
+          }
+
+          if (existingOp.status === 'FAILED_TERMINAL') {
+            throw new InvalidFiscalInvoiceError(
+              existingOp.last_error ?? 'Fiscal stamping failed terminally',
+            );
+          }
+
+          // Operation is RETRYABLE, IN_FLIGHT, or RECONCILIATION_REQUIRED -> increment attempt
+          await client.query(
+            `UPDATE fiscal_stamping_operations
+             SET status = 'IN_FLIGHT',
+                 attempt_count = attempt_count + 1,
+                 updated_at = NOW()
+             WHERE organization_id = $1 AND id = $2;`,
+            [command.organizationId, existingOp.id],
+          );
+        } else {
+          await client.query(
+            `INSERT INTO fiscal_stamping_operations (
+               id, organization_id, branch_id, invoice_id, idempotency_key, request_hash, status, attempt_count
+             ) VALUES (
+               gen_random_uuid(), $1, $2, $3, $4, $5, 'IN_FLIGHT', 1
+             );`,
+            [
+              command.organizationId,
+              currentInvoiceRow.branch_id,
+              command.invoiceId,
+              idempotencyKey,
+              requestHash,
+            ],
+          );
+        }
+
+        // 4. Fetch items
+        const itemsRes = await client.query(
+          `SELECT * FROM fiscal_invoice_items WHERE organization_id = $1 AND invoice_id = $2 ORDER BY line_number ASC;`,
+          [command.organizationId, command.invoiceId],
+        );
+        const items = itemsRes.rows.map((r) => this.mapItemRow(r));
+
+        // 5. Fetch emisor config
+        const emisorRes = await client.query(
+          `SELECT * FROM emisor_fiscal_config WHERE organization_id = $1;`,
+          [command.organizationId],
+        );
+        if (emisorRes.rows.length === 0) {
+          throw new InvalidEmisorConfigError(
+            `Emisor config missing for organization '${command.organizationId}'`,
+          );
+        }
+        const emisor = this.mapEmisorRow(emisorRes.rows[0]!);
+
+        // 6. Resolve CSD credentials via Vault (SEC-VAL-05 fail-closed)
+        if (!emisor.privateKeyVaultId) {
+          throw new CsdCredentialsMissingError(
+            `Emisor private key vault reference (private_key_vault_id) is missing for organization '${command.organizationId}'`,
+          );
+        }
+
+        const privateKeyPem = await this.csdVault.getPrivateKeyPem(
+          command.organizationId,
+          emisor.privateKeyVaultId,
+        );
+
+        if (!privateKeyPem) {
+          throw new CsdCredentialsMissingError(
+            `CSD private key not found in vault for vault ID '${emisor.privateKeyVaultId}'`,
+          );
+        }
+
+        // 7. Build Cadena Original & Sign (Fail-closed on any error)
+        const invoiceToStamp: FiscalInvoice = {
+          ...this.mapInvoiceRow(currentInvoiceRow),
+          emisorRfc: emisor.rfc,
+          emisorNombre: emisor.razonSocial,
+          emisorRegimenFiscal: emisor.regimenFiscal,
+          emisorCodigoPostal: emisor.codigoPostal,
+          items,
+        };
+
+        const cadenaOriginal = buildCadenaOriginal40(invoiceToStamp, items, emisor);
+        const selloEmisor = signCadenaOriginal(cadenaOriginal, privateKeyPem);
+        // Note: privateKeyPem exists only in this local execution stack frame and is immediately discarded.
+
+        const noCertificado = emisor.certificateNumber ?? '30001000000500003416';
+        const certificadoBase64 = emisor.certificatePem
+          ? formatCertBase64SingleLine(emisor.certificatePem)
+          : 'MIIFuzCCA6OgAwIBAgIUMzAwMDEwMDAwMDA1MDAwMDM0MTYwDQYJKoZIhvcNAQELBQAw...';
+
+        // 8. Generate CFDI 4.0 XML
+        const cfdiXml = generateCfdi40Xml({
+          invoice: invoiceToStamp,
+          items,
+          emisor,
+          sello: selloEmisor,
+          certificateNumber: noCertificado,
+          certificateBase64: certificadoBase64,
+        });
+
+        return {
+          alreadyCompleted: false,
+          invoiceToStamp,
+          cfdiXml,
+          selloEmisor,
+          cadenaOriginal,
+          emisor,
+        };
+      },
+    );
+
+    if (prepared.alreadyCompleted) {
+      return prepared.invoice!;
+    }
+
+    const { invoiceToStamp, cfdiXml, selloEmisor, cadenaOriginal, emisor } = prepared;
+
+    // Phase 2: Call PAC Gateway outside DB transaction (QI-BLK-021-R1-04)
+    let stampResult: any;
+    try {
+      stampResult = await this.pacConnector.timbrar({
         organizationId: command.organizationId,
         invoiceId: command.invoiceId,
         referenceId: command.invoiceId,
         xmlPayload: cfdiXml,
       });
-
-      if (stampResult.status === 'TIMEOUT') {
-        throw new PacTimeoutError('PAC service timed out');
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      await withTenantTransaction(this.pool, command.organizationId, async (client) => {
+        await client.query(
+          `UPDATE fiscal_stamping_operations
+           SET status = 'RECONCILIATION_REQUIRED',
+               last_error = $1,
+               next_retry_at = NOW() + interval '5 seconds',
+               updated_at = NOW()
+           WHERE organization_id = $2 AND idempotency_key = $3;`,
+          [errMsg, command.organizationId, idempotencyKey],
+        );
+      });
+      if (err instanceof PacTimeoutError) {
+        throw err;
       }
-      if (stampResult.status === 'REJECTED') {
-        throw new InvalidFiscalInvoiceError(stampResult.errorMessage ?? 'PAC rejected invoice');
-      }
+      throw new PacTimeoutError(`PAC gateway error: ${errMsg}`);
+    }
 
-      // 7. Update row to STAMPED
-      const cadenaHash = nodeCrypto.createHash('sha256').update(cadenaOriginal).digest('hex');
+    // Phase 3: Reconcile / Commit Outcome in DB transaction
+    if (stampResult.status === 'TIMEOUT') {
+      await withTenantTransaction(this.pool, command.organizationId, async (client) => {
+        await client.query(
+          `UPDATE fiscal_stamping_operations
+           SET status = 'RECONCILIATION_REQUIRED',
+               last_error = $1,
+               next_retry_at = NOW() + interval '5 seconds',
+               updated_at = NOW()
+           WHERE organization_id = $2 AND idempotency_key = $3;`,
+          [
+            stampResult.errorMessage ?? 'PAC gateway timed out',
+            command.organizationId,
+            idempotencyKey,
+          ],
+        );
+      });
+      throw new PacTimeoutError(stampResult.errorMessage ?? 'PAC service timed out');
+    }
 
+    if (stampResult.status === 'REJECTED') {
+      await withTenantTransaction(this.pool, command.organizationId, async (client) => {
+        await client.query(
+          `UPDATE fiscal_stamping_operations
+           SET status = 'FAILED_TERMINAL',
+               last_error = $1,
+               updated_at = NOW()
+           WHERE organization_id = $2 AND idempotency_key = $3;`,
+          [
+            stampResult.errorMessage ?? 'PAC rejected invoice',
+            command.organizationId,
+            idempotencyKey,
+          ],
+        );
+      });
+      throw new InvalidFiscalInvoiceError(stampResult.errorMessage ?? 'PAC rejected invoice');
+    }
+
+    return withTenantTransaction(this.pool, command.organizationId, async (client) => {
+      const cadenaHash = nodeCrypto.createHash('sha256').update(cadenaOriginal!).digest('hex');
+      const pacProviderName = stampResult.pacProvider ?? this.pacConnector.providerName;
+
+      // Update durable operation to SUCCEEDED
+      await client.query(
+        `UPDATE fiscal_stamping_operations
+         SET status = 'SUCCEEDED',
+             external_uuid = $1,
+             last_error = NULL,
+             updated_at = NOW()
+         WHERE organization_id = $2 AND idempotency_key = $3;`,
+        [stampResult.uuid, command.organizationId, idempotencyKey],
+      );
+
+      // Update invoice to STAMPED
       await client.query(
         `UPDATE fiscal_invoices
          SET status = 'STAMPED',
@@ -5031,23 +5220,23 @@ export class PostgresBillingService implements CloudBillingCompositionService {
         ],
       );
 
-      // 8. Enqueue Outbox Event
+      // Enqueue Outbox Event with real pacProvider
       await this.outboxService.enqueue(client, {
         organizationId: command.organizationId,
-        branchId: invoiceToStamp.branchId,
+        branchId: invoiceToStamp!.branchId,
         eventType: 'FacturaFiscalEmitida',
         aggregateType: 'FiscalInvoice',
         aggregateId: command.invoiceId,
         payload: {
           invoiceId: command.invoiceId,
           uuid: stampResult.uuid,
-          rfcEmisor: emisor.rfc,
-          rfcReceptor: invoiceToStamp.customerTaxId ?? invoiceToStamp.receptorRfc,
-          totalAmount: invoiceToStamp.totalAmount,
-          series: invoiceToStamp.series,
-          folio: invoiceToStamp.folio,
+          rfcEmisor: emisor!.rfc,
+          rfcReceptor: invoiceToStamp!.customerTaxId ?? invoiceToStamp!.receptorRfc,
+          totalAmount: invoiceToStamp!.totalAmount,
+          series: invoiceToStamp!.series,
+          folio: invoiceToStamp!.folio,
           fechaTimbrado: stampResult.fechaTimbrado,
-          pacProvider: 'MOCK_PAC',
+          pacProvider: pacProviderName,
         },
       });
 
@@ -5222,8 +5411,10 @@ export class PostgresBillingService implements CloudBillingCompositionService {
   ): Promise<GlobalInvoiceBatch> {
     return withTenantTransaction(this.pool, command.organizationId, async (client) => {
       const batchRef = `BATCH-${command.anio}${command.mes}-${crypto.randomUUID().substring(0, 6)}`;
+      const lastDay = new Date(command.anio, Number(command.mes), 0).getDate();
+      const lastDayStr = String(lastDay).padStart(2, '0');
       const periodStart = `${command.anio}-${command.mes}-01T00:00:00Z`;
-      const periodEnd = `${command.anio}-${command.mes}-28T23:59:59Z`;
+      const periodEnd = `${command.anio}-${command.mes}-${lastDayStr}T23:59:59Z`;
 
       const res = await client.query<{
         id: string;
@@ -5353,7 +5544,10 @@ export class PostgresBillingService implements CloudBillingCompositionService {
           : row.valid_to.toISOString()
         : null,
       pacEnvironment: 'TEST',
-      pacPrimaryProvider: 'MOCK_PAC',
+      pacPrimaryProvider:
+        row.private_key_vault_id && this.pacConnector.providerName !== 'UNAVAILABLE_PAC'
+          ? this.pacConnector.providerName
+          : null,
       isActive: Boolean(row.is_active),
       createdAt: typeof row.created_at === 'string' ? row.created_at : row.created_at.toISOString(),
       updatedAt: typeof row.created_at === 'string' ? row.created_at : row.created_at.toISOString(),
@@ -5413,7 +5607,11 @@ export class PostgresBillingService implements CloudBillingCompositionService {
       cadenaOriginalHash: row.cadena_original_hash,
       cadenaOriginal: row.cadena_original_hash,
       pacRequestReferenceId: row.pac_request_reference_id,
-      pacProvider: 'MOCK_PAC',
+      pacProvider:
+        row.pac_provider ??
+        (row.status === 'STAMPED' && this.pacConnector.providerName !== 'UNAVAILABLE_PAC'
+          ? this.pacConnector.providerName
+          : null),
       createdAt: typeof row.created_at === 'string' ? row.created_at : row.created_at.toISOString(),
       updatedAt: typeof row.updated_at === 'string' ? row.updated_at : row.updated_at.toISOString(),
     };
@@ -5462,12 +5660,18 @@ export {
   type GlobalInvoiceBatch,
   type FiscalInvoiceStatus,
   type IPacConnector,
+  type ICsdVault,
+  type FiscalStampingOperation,
+  type FiscalStampingOperationStatus,
   type PacStampRequest,
   type PacStampResult,
   type PacCancelRequest,
   type PacCancelResult,
   PacCircuitBreaker,
   MockPacConnector,
+  UnavailablePacConnector,
+  UnavailableCsdVault,
+  InMemoryCsdVault,
   calculateLineTaxes,
   calculateInvoiceTaxes,
   buildCfdi40Xml,
@@ -5489,6 +5693,8 @@ export {
   InvalidFiscalInvoiceError,
   InvoiceStatusTransitionError,
   FiscalSigningError,
+  CsdCredentialsMissingError,
+  CsdSignatureError,
   PacConnectorError,
   PacCircuitBreakerOpenError,
   PacTimeoutError,

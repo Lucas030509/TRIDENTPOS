@@ -19,7 +19,11 @@ import {
   verifyCadenaOriginalSignature,
   cleanCertificateToSingleLineBase64,
   MockPacConnector,
+  UnavailablePacConnector,
   PacCircuitBreaker,
+  UnavailableCsdVault,
+  InMemoryCsdVault,
+  CsdCredentialsMissingError,
   validateInvoiceForStamping,
   applyStampToInvoice,
   applyCancellationToInvoice,
@@ -557,6 +561,51 @@ describe('TRIDENTPOS WP-021 Billing & Fiscal Invoicing Unit Suite', () => {
       assert.equal(batch.subtotal, '300.0000');
       assert.equal(batch.taxTotal, '48.0000');
       assert.equal(batch.totalAmount, '348.0000');
+    });
+  });
+
+  describe('7. CSD Vault and Runtime Connectors (SEC-VAL-05 & QI-BLK-021-R1-01/02)', () => {
+    it('WP021-VAULT-01: UnavailableCsdVault fails closed', async () => {
+      const vault = new UnavailableCsdVault();
+      await assert.rejects(
+        () => vault.getPrivateKeyPem('org-1', 'vault-1'),
+        CsdCredentialsMissingError,
+      );
+    });
+
+    it('WP021-VAULT-02: InMemoryCsdVault stores and retrieves private key pem', async () => {
+      const vault = new InMemoryCsdVault();
+      await vault.storePrivateKeyPem('org-1', 'vault-1', testKeyPair.privateKey);
+      const retrieved = await vault.getPrivateKeyPem('org-1', 'vault-1');
+      assert.equal(retrieved, testKeyPair.privateKey);
+
+      // Non-existent key returns null
+      const missing = await vault.getPrivateKeyPem('org-1', 'non-existent');
+      assert.equal(missing, null);
+    });
+
+    it('WP021-PAC-06: UnavailablePacConnector fails closed on stamping and cancellation', async () => {
+      const pac = new UnavailablePacConnector();
+      assert.equal(pac.providerName, 'UNAVAILABLE_PAC');
+
+      await assert.rejects(
+        () =>
+          pac.timbrar({
+            organizationId: 'org-1',
+            invoiceId: 'inv-1',
+          }),
+        PacTimeoutError,
+      );
+
+      await assert.rejects(
+        () =>
+          pac.cancelar({
+            organizationId: 'org-1',
+            uuid: 'UUID-123',
+            rfcEmisor: 'TRI200101ABC',
+          }),
+        PacTimeoutError,
+      );
     });
   });
 });

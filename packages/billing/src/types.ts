@@ -328,10 +328,35 @@ export interface CreateDraftInvoiceCommand {
   items: CreateDraftInvoiceItemInput[];
 }
 
+export type FiscalStampingOperationStatus =
+  | 'PENDING'
+  | 'IN_FLIGHT'
+  | 'RETRYABLE'
+  | 'SUCCEEDED'
+  | 'FAILED_TERMINAL'
+  | 'RECONCILIATION_REQUIRED';
+
+export interface FiscalStampingOperation {
+  id: string;
+  organizationId: string;
+  branchId: string;
+  invoiceId: string;
+  idempotencyKey: string;
+  requestHash: string;
+  status: FiscalStampingOperationStatus;
+  attemptCount: number;
+  lastError?: string | null;
+  externalReference?: string | null;
+  externalUuid?: string | null;
+  nextRetryAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface StampFiscalInvoiceCommand {
   organizationId: string;
   invoiceId: string;
-  csd?: CsdCredentials;
+  idempotencyKey?: string;
   actorId?: string;
 }
 

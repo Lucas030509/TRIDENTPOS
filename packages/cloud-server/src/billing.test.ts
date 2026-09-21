@@ -17,9 +17,14 @@ import { getPool, migrateUp } from '@trident/database';
 import {
   PostgresBillingService,
   MockPacConnector,
+  UnavailablePacConnector,
+  UnavailableCsdVault,
+  InMemoryCsdVault,
   InvalidRfcError,
   InvalidFiscalInvoiceError,
   InvoiceStatusTransitionError,
+  InvoiceIdempotencyConflictError,
+  CsdCredentialsMissingError,
   PacTimeoutError,
 } from './index.js';
 
@@ -36,13 +41,28 @@ describe(
 
     const rfcEmisorA = 'AAA010101AAA';
     const rfcReceptor = 'URE180429TM6';
+    const testVaultId = `vault-key-${testRunId}`;
 
+    let testKeyPair: crypto.KeyPairSyncResult<string, string>;
+    let csdVault: InMemoryCsdVault;
+    let mockPac: MockPacConnector;
     let billingService: PostgresBillingService;
     let taxSchemeIva16Id: string;
 
     before(async () => {
       pool = getPool();
       await migrateUp(pool);
+
+      testKeyPair = crypto.generateKeyPairSync('rsa', {
+        modulusLength: 2048,
+        publicKeyEncoding: { type: 'spki', format: 'pem' },
+        privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+      });
+
+      csdVault = new InMemoryCsdVault();
+      await csdVault.storePrivateKeyPem(tenantAId, testVaultId, testKeyPair.privateKey);
+
+      mockPac = new MockPacConnector();
 
       const client = await pool.connect();
       try {
@@ -64,13 +84,14 @@ describe(
         client.release();
       }
 
-      billingService = new PostgresBillingService(pool, new MockPacConnector());
+      billingService = new PostgresBillingService(pool, mockPac, csdVault);
     });
 
     after(async () => {
       const client = await pool.connect();
       try {
         await client.query(`
+        DELETE FROM fiscal_stamping_operations WHERE organization_id IN ('${tenantAId}', '${tenantBId}');
         DELETE FROM lotes_facturacion_global WHERE organization_id IN ('${tenantAId}', '${tenantBId}');
         DELETE FROM fiscal_invoice_items WHERE organization_id IN ('${tenantAId}', '${tenantBId}');
         DELETE FROM fiscal_invoices WHERE organization_id IN ('${tenantAId}', '${tenantBId}');
@@ -124,7 +145,7 @@ describe(
       );
     });
 
-    it('WP021-CS-02: Configure Emisor Fiscal with SAT validation and RFC rules', async () => {
+    it('WP021-CS-02: Configure Emisor Fiscal with SAT validation and vault reference', async () => {
       // Rejects invalid RFC
       await assert.rejects(
         billingService.configureEmisorFiscal({
@@ -137,13 +158,16 @@ describe(
         InvalidRfcError,
       );
 
-      // Valid configuration
+      // Valid configuration with vault reference
       const emisor = await billingService.configureEmisorFiscal({
         organizationId: tenantAId,
         rfc: rfcEmisorA,
         razonSocial: 'TRIDENT RESTAURANTES S.A. DE C.V.',
         regimenFiscal: '601',
         codigoPostal: '06600',
+        certificateNumber: '30001000000500003416',
+        certificatePem: testKeyPair.publicKey,
+        privateKeyVaultId: testVaultId,
         pacEnvironment: 'TEST',
         pacPrimaryProvider: 'MOCK_PAC',
       });
@@ -152,11 +176,13 @@ describe(
       assert.equal(emisor.razonSocial, 'TRIDENT RESTAURANTES S.A. DE C.V.');
       assert.equal(emisor.regimenFiscal, '601');
       assert.equal(emisor.codigoPostal, '06600');
+      assert.equal(emisor.privateKeyVaultId, testVaultId);
       assert.equal(emisor.pacEnvironment, 'TEST');
 
       const fetched = await billingService.getEmisorFiscalConfig(tenantAId);
       assert.ok(fetched);
       assert.equal(fetched.rfc, rfcEmisorA);
+      assert.equal(fetched.privateKeyVaultId, testVaultId);
     });
 
     it('WP021-CS-03: Create Draft Invoice with multi-item tax calculation', async () => {
@@ -258,6 +284,7 @@ describe(
           typeof event.payload === 'string' ? JSON.parse(event.payload) : event.payload;
         assert.equal(payload.uuid, stamped.uuid);
         assert.equal(payload.totalAmount, stamped.totalAmount);
+        assert.equal(payload.pacProvider, 'MOCK_PAC');
       } finally {
         client.release();
       }
@@ -429,10 +456,10 @@ describe(
       assert.equal(cancelled.status, 'CANCELLED');
     });
 
-    it('WP021-CS-08: PAC Connector Timeout and Circuit Breaker fail closed without corrupting DB state', async () => {
+    it('WP021-CS-08: PAC Connector Timeout creates durable retry state without corrupting DB', async () => {
       const failingPac = new MockPacConnector();
       failingPac.setBehavior({ simulateTimeout: true });
-      const serviceWithFailingPac = new PostgresBillingService(pool, failingPac);
+      const serviceWithFailingPac = new PostgresBillingService(pool, failingPac, csdVault);
 
       const draft = await billingService.createDraftInvoice({
         organizationId: tenantAId,
@@ -469,6 +496,25 @@ describe(
       const fetchedDraft = await billingService.getFiscalInvoiceById(tenantAId, draft.id);
       assert.equal(fetchedDraft?.status, 'DRAFT');
       assert.equal(fetchedDraft?.uuid, null);
+
+      // Verify durable stamping operation is recorded as RECONCILIATION_REQUIRED
+      const client = await pool.connect();
+      try {
+        const opRes = await client.query<{
+          status: string;
+          attempt_count: number;
+          last_error: string;
+        }>(
+          `SELECT status, attempt_count, last_error FROM fiscal_stamping_operations WHERE organization_id = $1 AND invoice_id = $2;`,
+          [tenantAId, draft.id],
+        );
+        assert.equal(opRes.rows.length, 1);
+        assert.equal(opRes.rows[0]!.status, 'RECONCILIATION_REQUIRED');
+        assert.equal(opRes.rows[0]!.attempt_count, 1);
+        assert.ok(opRes.rows[0]!.last_error);
+      } finally {
+        client.release();
+      }
     });
 
     it('WP021-CS-09: OQ-ARCH-02 Batch Candidate Query and Global Invoice Batch creation', async () => {
@@ -503,6 +549,235 @@ describe(
       assert.equal(batch.folioCount, 15);
       assert.equal(batch.totalAmount, '17400.0000');
       assert.equal(batch.status, 'DRAFT');
+      assert.ok(batch.periodEnd?.includes('-09-30')); // Calendar-correct boundary for September
+    });
+
+    it('WP021-SEC-01: SEC-VAL-05 Missing vault or key fails closed without mock signature', async () => {
+      // 1. Service with UnavailableCsdVault fails closed
+      const noVaultService = new PostgresBillingService(pool, mockPac, new UnavailableCsdVault());
+
+      const draft = await billingService.createDraftInvoice({
+        organizationId: tenantAId,
+        branchId: branchA1Id,
+        tipoComprobante: 'I',
+        serie: 'FAC',
+        folio: `SEC-01-${testRunId}`,
+        receptorRfc: rfcReceptor,
+        receptorNombre: 'CLIENTE SEC TEST',
+        receptorRegimenFiscal: '601',
+        receptorCodigoPostal: '64000',
+        receptorUsoCfdi: 'G03',
+        items: [
+          {
+            claveProdServ: '90101501',
+            claveUnidad: 'E48',
+            description: 'Item Sec 1',
+            quantity: '1.0000',
+            unitPrice: '100.0000',
+          },
+        ],
+      });
+
+      await assert.rejects(
+        noVaultService.stampFiscalInvoice({
+          organizationId: tenantAId,
+          invoiceId: draft.id,
+        }),
+        CsdCredentialsMissingError,
+      );
+
+      // Invoice must remain DRAFT, never STAMPED
+      const checkDraft = await billingService.getFiscalInvoiceById(tenantAId, draft.id);
+      assert.equal(checkDraft?.status, 'DRAFT');
+      assert.equal(checkDraft?.selloEmisor, null);
+
+      // 2. Missing key in configured vault fails closed
+      const emptyVault = new InMemoryCsdVault();
+      const emptyVaultService = new PostgresBillingService(pool, mockPac, emptyVault);
+
+      await assert.rejects(
+        emptyVaultService.stampFiscalInvoice({
+          organizationId: tenantAId,
+          invoiceId: draft.id,
+        }),
+        CsdCredentialsMissingError,
+      );
+    });
+
+    it('WP021-SEC-02: Default composition without PAC connector fails closed', async () => {
+      const defaultService = new PostgresBillingService(pool);
+
+      const draft = await billingService.createDraftInvoice({
+        organizationId: tenantAId,
+        branchId: branchA1Id,
+        tipoComprobante: 'I',
+        serie: 'FAC',
+        folio: `SEC-02-${testRunId}`,
+        receptorRfc: rfcReceptor,
+        receptorNombre: 'CLIENTE NO PAC TEST',
+        receptorRegimenFiscal: '601',
+        receptorCodigoPostal: '64000',
+        receptorUsoCfdi: 'G03',
+        items: [
+          {
+            claveProdServ: '90101501',
+            claveUnidad: 'E48',
+            description: 'Item Sec 2',
+            quantity: '1.0000',
+            unitPrice: '100.0000',
+          },
+        ],
+      });
+
+      // Default runtime fails closed with CsdCredentialsMissingError (since no vault)
+      await assert.rejects(
+        defaultService.stampFiscalInvoice({
+          organizationId: tenantAId,
+          invoiceId: draft.id,
+        }),
+        CsdCredentialsMissingError,
+      );
+
+      // Even with vault injected, UnavailablePacConnector fails closed
+      const serviceWithNoPac = new PostgresBillingService(
+        pool,
+        new UnavailablePacConnector(),
+        csdVault,
+      );
+      await assert.rejects(
+        serviceWithNoPac.stampFiscalInvoice({
+          organizationId: tenantAId,
+          invoiceId: draft.id,
+        }),
+        PacTimeoutError,
+      );
+    });
+
+    it('WP021-SEC-03: Conflicting semantic idempotency key reuse fails closed', async () => {
+      const draftA = await billingService.createDraftInvoice({
+        organizationId: tenantAId,
+        branchId: branchA1Id,
+        tipoComprobante: 'I',
+        serie: 'FAC',
+        folio: `IDEM-A-${testRunId}`,
+        receptorRfc: rfcReceptor,
+        receptorNombre: 'CLIENTE IDEM A',
+        receptorRegimenFiscal: '601',
+        receptorCodigoPostal: '64000',
+        receptorUsoCfdi: 'G03',
+        items: [
+          {
+            claveProdServ: '90101501',
+            claveUnidad: 'E48',
+            description: 'Item Idem A',
+            quantity: '1.0000',
+            unitPrice: '100.0000',
+          },
+        ],
+      });
+
+      const draftB = await billingService.createDraftInvoice({
+        organizationId: tenantAId,
+        branchId: branchA1Id,
+        tipoComprobante: 'I',
+        serie: 'FAC',
+        folio: `IDEM-B-${testRunId}`,
+        receptorRfc: rfcReceptor,
+        receptorNombre: 'CLIENTE IDEM B',
+        receptorRegimenFiscal: '601',
+        receptorCodigoPostal: '64000',
+        receptorUsoCfdi: 'G03',
+        items: [
+          {
+            claveProdServ: '90101501',
+            claveUnidad: 'E48',
+            description: 'Item Idem B',
+            quantity: '1.0000',
+            unitPrice: '200.0000',
+          },
+        ],
+      });
+
+      const sharedKey = `shared-key-${testRunId}`;
+
+      // First stamp with sharedKey succeeds
+      const stampedA = await billingService.stampFiscalInvoice({
+        organizationId: tenantAId,
+        invoiceId: draftA.id,
+        idempotencyKey: sharedKey,
+      });
+      assert.equal(stampedA.status, 'STAMPED');
+
+      // Second stamp using same sharedKey on different invoice fails closed
+      await assert.rejects(
+        billingService.stampFiscalInvoice({
+          organizationId: tenantAId,
+          invoiceId: draftB.id,
+          idempotencyKey: sharedKey,
+        }),
+        InvoiceIdempotencyConflictError,
+      );
+    });
+
+    it('WP021-SEC-04: Private key is never persisted or exposed in outbox or returned DTO', async () => {
+      const draft = await billingService.createDraftInvoice({
+        organizationId: tenantAId,
+        branchId: branchA1Id,
+        tipoComprobante: 'I',
+        serie: 'FAC',
+        folio: `PRIV-01-${testRunId}`,
+        receptorRfc: rfcReceptor,
+        receptorNombre: 'CLIENTE PRIV SEC',
+        receptorRegimenFiscal: '601',
+        receptorCodigoPostal: '64000',
+        receptorUsoCfdi: 'G03',
+        items: [
+          {
+            claveProdServ: '90101501',
+            claveUnidad: 'E48',
+            description: 'Item Priv Sec',
+            quantity: '1.0000',
+            unitPrice: '100.0000',
+          },
+        ],
+      });
+
+      const stamped = await billingService.stampFiscalInvoice({
+        organizationId: tenantAId,
+        invoiceId: draft.id,
+      });
+
+      // 1. Returned object contains NO private key PEM
+      const serialized = JSON.stringify(stamped);
+      assert.equal(serialized.includes('PRIVATE KEY'), false);
+      assert.equal(serialized.includes(testKeyPair.privateKey.substring(30, 60)), false);
+
+      // 2. Database rows contain NO private key PEM
+      const client = await pool.connect();
+      try {
+        const emisorRow = await client.query(
+          `SELECT * FROM emisor_fiscal_config WHERE organization_id = $1;`,
+          [tenantAId],
+        );
+        const emisorJson = JSON.stringify(emisorRow.rows[0]);
+        assert.equal(emisorJson.includes('PRIVATE KEY'), false);
+
+        const invoiceRow = await client.query(
+          `SELECT * FROM fiscal_invoices WHERE organization_id = $1 AND id = $2;`,
+          [tenantAId, draft.id],
+        );
+        const invoiceJson = JSON.stringify(invoiceRow.rows[0]);
+        assert.equal(invoiceJson.includes('PRIVATE KEY'), false);
+
+        const outboxRow = await client.query(
+          `SELECT payload FROM cloud_integration_outbox WHERE organization_id = $1 AND aggregate_id = $2;`,
+          [tenantAId, draft.id],
+        );
+        const outboxJson = JSON.stringify(outboxRow.rows[0]);
+        assert.equal(outboxJson.includes('PRIVATE KEY'), false);
+      } finally {
+        client.release();
+      }
     });
   },
 );

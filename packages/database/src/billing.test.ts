@@ -71,6 +71,16 @@ describe('TRIDENTPOS WP-021 Billing & Fiscal Invoicing Database Suite', { concur
   }
 
   before(async () => {
+    const initClient = await pool.connect();
+    try {
+      await initClient.query(`
+        DROP TABLE IF EXISTS fiscal_stamping_operations, lotes_facturacion_global, fiscal_invoice_items, fiscal_invoices, emisor_fiscal_config, tax_schemes CASCADE;
+        DELETE FROM _migrations WHERE id = '20260905030000' OR name = 'billing_fiscal_invoicing';
+      `);
+    } finally {
+      initClient.release();
+    }
+
     // Apply all migrations
     await migrateUp(pool);
 
@@ -289,6 +299,78 @@ describe('TRIDENTPOS WP-021 Billing & Fiscal Invoicing Database Suite', { concur
     });
   });
 
+  it('WP021-DB-07: fiscal_stamping_operations RLS, unique idempotency, and status constraint', async () => {
+    const invoiceId = crypto.randomUUID();
+    const opId = crypto.randomUUID();
+
+    await asTestRole(async (client) => {
+      await client.query('BEGIN;');
+      await setTenantContext(client, tenantAId);
+
+      // Create draft invoice first
+      await client.query(`
+        INSERT INTO fiscal_invoices (
+          id, organization_id, branch_id, series, folio, customer_tax_id, customer_name,
+          customer_regimen_fiscal, customer_postal_code, cfdi_use, payment_method, payment_way,
+          subtotal, tax_total, total_amount, status
+        ) VALUES (
+          '${invoiceId}', '${tenantAId}', '${branchAId}', 'A', '0003', 'XAXX010101000', 'PUBLICO EN GENERAL',
+          '616', '06000', 'S01', 'PUE', '01', 100.0000, 16.0000, 116.0000, 'DRAFT'
+        );
+      `);
+
+      // Insert stamping operation
+      await client.query(`
+        INSERT INTO fiscal_stamping_operations (
+          id, organization_id, branch_id, invoice_id, idempotency_key, request_hash, status, attempt_count
+        ) VALUES (
+          '${opId}', '${tenantAId}', '${branchAId}', '${invoiceId}', 'idem-001', 'hash-001', 'IN_FLIGHT', 1
+        );
+      `);
+
+      const ops = await client.query('SELECT * FROM fiscal_stamping_operations;');
+      assert.equal(ops.rows.length, 1);
+      assert.equal(ops.rows[0].idempotency_key, 'idem-001');
+
+      // Duplicate idempotency key fails closed
+      await assertQueryRejects(
+        client,
+        `INSERT INTO fiscal_stamping_operations (
+          organization_id, branch_id, invoice_id, idempotency_key, request_hash, status, attempt_count
+        ) VALUES (
+          '${tenantAId}', '${branchAId}', '${invoiceId}', 'idem-001', 'hash-different', 'IN_FLIGHT', 1
+        );`,
+        [],
+        /uq_stamping_ops_org_idempotency/i,
+      );
+
+      // Invalid status fails closed
+      await assertQueryRejects(
+        client,
+        `INSERT INTO fiscal_stamping_operations (
+          organization_id, branch_id, invoice_id, idempotency_key, request_hash, status, attempt_count
+        ) VALUES (
+          '${tenantAId}', '${branchAId}', '${invoiceId}', 'idem-002', 'hash-002', 'INVALID_STATUS', 1
+        );`,
+        [],
+        /chk_stamping_ops_status/i,
+      );
+
+      await client.query('COMMIT;');
+    });
+
+    // Tenant B cannot see Tenant A's stamping operations
+    await asTestRole(async (client) => {
+      await client.query('BEGIN;');
+      await setTenantContext(client, tenantBId);
+
+      const opsB = await client.query('SELECT * FROM fiscal_stamping_operations;');
+      assert.equal(opsB.rows.length, 0);
+
+      await client.query('COMMIT;');
+    });
+  });
+
   it('WP021-DOWN-01: Non-production rollback of WP-021 removes billing tables and preserves predecessors', async () => {
     const downResult = await migrateDown(pool, { allowDestructiveDown: true });
     assert.equal(downResult.reverted, '20260905030000_billing_fiscal_invoicing');
@@ -297,7 +379,7 @@ describe('TRIDENTPOS WP-021 Billing & Fiscal Invoicing Database Suite', { concur
       SELECT table_name FROM information_schema.tables
       WHERE table_schema = 'public' AND table_name IN (
         'tax_schemes', 'emisor_fiscal_config', 'fiscal_invoices',
-        'fiscal_invoice_items', 'lotes_facturacion_global'
+        'fiscal_invoice_items', 'lotes_facturacion_global', 'fiscal_stamping_operations'
       );
     `);
     assert.equal(checkTables.rows.length, 0);

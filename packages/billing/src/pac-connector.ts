@@ -13,11 +13,46 @@ import type {
 } from './types.js';
 
 export interface IPacConnector {
+  readonly providerName: string;
   timbrar(request: PacStampRequest): Promise<PacStampResult>;
   cancelar(request: PacCancelRequest): Promise<PacCancelResult>;
   consultarEstatus(uuid: string): Promise<{ status: string; esCancelable: boolean }>;
   stampInvoice(request: PacStampRequest): Promise<PacStampResult>;
   cancelInvoice(request: PacCancelRequest): Promise<PacCancelResult>;
+}
+
+/**
+ * Fail-closed PAC Connector for production runtime when no certified PAC adapter is configured.
+ * Implements QI-BLK-021-R1-02 fail-closed requirement.
+ */
+export class UnavailablePacConnector implements IPacConnector {
+  public readonly providerName = 'UNAVAILABLE_PAC';
+
+  async timbrar(_request: PacStampRequest): Promise<PacStampResult> {
+    throw new PacTimeoutError(
+      'No approved PAC connector configured in runtime composition. Fiscal stamping is fail-closed.',
+    );
+  }
+
+  async cancelar(_request: PacCancelRequest): Promise<PacCancelResult> {
+    throw new PacTimeoutError(
+      'No approved PAC connector configured in runtime composition. Fiscal cancellation is fail-closed.',
+    );
+  }
+
+  async consultarEstatus(_uuid: string): Promise<{ status: string; esCancelable: boolean }> {
+    throw new PacTimeoutError(
+      'No approved PAC connector configured in runtime composition. Consultation is fail-closed.',
+    );
+  }
+
+  async stampInvoice(request: PacStampRequest): Promise<PacStampResult> {
+    return this.timbrar(request);
+  }
+
+  async cancelInvoice(request: PacCancelRequest): Promise<PacCancelResult> {
+    return this.cancelar(request);
+  }
 }
 
 export type CircuitState = 'CLOSED' | 'OPEN' | 'HALF_OPEN';
@@ -85,6 +120,7 @@ export interface MockPacBehaviorOptions {
  * Simulates real SAT PAC behavior with deterministic idempotency.
  */
 export class MockPacConnector implements IPacConnector {
+  public readonly providerName = 'MOCK_PAC';
   public readonly circuitBreaker: PacCircuitBreaker;
   private behavior: MockPacBehaviorOptions = {};
   private readonly stampedRegistry = new Map<string, PacStampResult>();
