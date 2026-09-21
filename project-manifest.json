@@ -5,11 +5,7 @@
   "project_repository": "https://github.com/Lucas030509/TRIDENTPOS.git",
   "default_branch": "main",
   "preferred_evidence_backend": "GIT_SIDECAR",
-  "allowed_evidence_backends": [
-    "GIT_SIDECAR",
-    "GITHUB_ATTESTATION",
-    "CI_ARTIFACT"
-  ],
+  "allowed_evidence_backends": ["GIT_SIDECAR", "GITHUB_ATTESTATION", "CI_ARTIFACT"],
   "risk_policy": {
     "default_class": "RC3",
     "fast_track_enabled": true
