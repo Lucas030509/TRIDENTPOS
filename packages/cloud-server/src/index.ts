@@ -17,6 +17,7 @@
  */
 
 import type pg from 'pg';
+import nodeCrypto from 'node:crypto';
 import {
   RecipeEngine,
   type Recipe,
@@ -76,7 +77,55 @@ import {
   ReceiptOutboxIntegrityError,
   CreatePurchaseOrderItemInput,
 } from '@trident/procurement';
+import {
+  type TaxScheme,
+  type TaxType,
+  type CreateTaxSchemeCommand,
+  type EmisorFiscalConfig,
+  type ConfigureEmisorFiscalCommand,
+  type FiscalInvoice,
+  type FiscalInvoiceItem,
+  type CreateDraftInvoiceCommand,
+  type StampFiscalInvoiceCommand,
+  type CancelFiscalInvoiceCommand,
+  type BatchCandidateQueryCommand,
+  type BatchCandidateResult,
+  type CreateGlobalInvoiceBatchCommand,
+  type GlobalInvoiceBatch,
+  type IPacConnector,
+  MockPacConnector,
+  calculateItemTaxes,
+  generateCfdi40Xml,
+  buildCadenaOriginal40,
+  signCadenaOriginal,
+  formatCertBase64SingleLine,
+  validateRfc,
+  validateRegimenFiscal,
+  validatePostalCode,
+  validateCanCancel,
+  validateCanStamp,
+  findUnclaimedFolios,
+  InvalidTaxSchemeError,
+  InvalidEmisorConfigError,
+  InvalidFiscalInvoiceError,
+  PacTimeoutError,
+} from '@trident/billing';
 import { getPool, withTenantTransaction, CloudIntegrationOutboxService } from '@trident/database';
+
+export interface CloudBillingCompositionService {
+  createTaxScheme(command: CreateTaxSchemeCommand): Promise<TaxScheme>;
+  getTaxSchemes(organizationId: string): Promise<TaxScheme[]>;
+  getTaxSchemeById(organizationId: string, id: string): Promise<TaxScheme | null>;
+  configureEmisorFiscal(command: ConfigureEmisorFiscalCommand): Promise<EmisorFiscalConfig>;
+  getEmisorFiscalConfig(organizationId: string): Promise<EmisorFiscalConfig | null>;
+  createDraftInvoice(command: CreateDraftInvoiceCommand): Promise<FiscalInvoice>;
+  stampFiscalInvoice(command: StampFiscalInvoiceCommand): Promise<FiscalInvoice>;
+  cancelFiscalInvoice(command: CancelFiscalInvoiceCommand): Promise<FiscalInvoice>;
+  getFiscalInvoiceById(organizationId: string, invoiceId: string): Promise<FiscalInvoice | null>;
+  getFiscalInvoiceByUuid(organizationId: string, uuid: string): Promise<FiscalInvoice | null>;
+  queryUnclaimedFiscalFolios(command: BatchCandidateQueryCommand): Promise<BatchCandidateResult>;
+  createGlobalInvoiceBatch(command: CreateGlobalInvoiceBatchCommand): Promise<GlobalInvoiceBatch>;
+}
 
 export interface CloudInventoryCompositionService {
   getRecipe(organizationId: string, recipeId: string): Promise<Recipe | null>;
@@ -4523,4 +4572,926 @@ export class PostgresFinanceService implements CloudFinanceCompositionService {
   }
 }
 
+export class PostgresBillingService implements CloudBillingCompositionService {
+  private readonly outboxService: CloudIntegrationOutboxService;
+
+  constructor(
+    private readonly pool: pg.Pool = getPool(),
+    private readonly pacConnector: IPacConnector = new MockPacConnector(),
+    outboxService?: CloudIntegrationOutboxService,
+  ) {
+    this.outboxService = outboxService ?? new CloudIntegrationOutboxService();
+  }
+
+  async createTaxScheme(command: CreateTaxSchemeCommand): Promise<TaxScheme> {
+    if (!command.code || command.code.trim().length === 0) {
+      throw new InvalidTaxSchemeError('Tax scheme code is required');
+    }
+    if (!command.name || command.name.trim().length === 0) {
+      throw new InvalidTaxSchemeError('Tax scheme name is required');
+    }
+    const rateNum = parseFloat(command.rate);
+    if (isNaN(rateNum) || rateNum < 0) {
+      throw new InvalidTaxSchemeError(`Invalid tax rate: ${command.rate}`);
+    }
+
+    return withTenantTransaction(this.pool, command.organizationId, async (client) => {
+      const res = await client.query<{
+        id: string;
+        organization_id: string;
+        code: string;
+        name: string;
+        rate: string;
+        is_inclusive: boolean;
+        tax_type: TaxType;
+        created_at: string | Date;
+      }>(
+        `INSERT INTO tax_schemes (
+          id, organization_id, code, name, rate, is_inclusive, tax_type
+        ) VALUES (
+          COALESCE($1, gen_random_uuid()), $2, $3, $4, $5, $6, $7
+        ) RETURNING id, organization_id, code, name, rate::text, is_inclusive, tax_type, created_at;`,
+        [
+          command.id ?? null,
+          command.organizationId,
+          command.code.trim().toUpperCase(),
+          command.name.trim(),
+          command.rate,
+          Boolean(command.isInclusive),
+          command.taxType,
+        ],
+      );
+      return this.mapTaxSchemeRow(res.rows[0]!);
+    });
+  }
+
+  async getTaxSchemes(organizationId: string): Promise<TaxScheme[]> {
+    return withTenantTransaction(this.pool, organizationId, async (client) => {
+      const res = await client.query<{
+        id: string;
+        organization_id: string;
+        code: string;
+        name: string;
+        rate: string;
+        is_inclusive: boolean;
+        tax_type: TaxType;
+        created_at: string | Date;
+      }>(
+        `SELECT id, organization_id, code, name, rate::text, is_inclusive, tax_type, created_at
+         FROM tax_schemes
+         WHERE organization_id = $1
+         ORDER BY code ASC;`,
+        [organizationId],
+      );
+      return res.rows.map((r) => this.mapTaxSchemeRow(r));
+    });
+  }
+
+  async getTaxSchemeById(organizationId: string, id: string): Promise<TaxScheme | null> {
+    return withTenantTransaction(this.pool, organizationId, async (client) => {
+      const res = await client.query<{
+        id: string;
+        organization_id: string;
+        code: string;
+        name: string;
+        rate: string;
+        is_inclusive: boolean;
+        tax_type: TaxType;
+        created_at: string | Date;
+      }>(
+        `SELECT id, organization_id, code, name, rate::text, is_inclusive, tax_type, created_at
+         FROM tax_schemes
+         WHERE organization_id = $1 AND id = $2;`,
+        [organizationId, id],
+      );
+      if (res.rows.length === 0) return null;
+      return this.mapTaxSchemeRow(res.rows[0]!);
+    });
+  }
+
+  async configureEmisorFiscal(command: ConfigureEmisorFiscalCommand): Promise<EmisorFiscalConfig> {
+    validateRfc(command.rfc);
+    validateRegimenFiscal(command.regimenFiscal);
+    validatePostalCode(command.codigoPostal);
+    if (!command.razonSocial || command.razonSocial.trim().length === 0) {
+      throw new InvalidEmisorConfigError('Razon social is required for emisor');
+    }
+
+    return withTenantTransaction(this.pool, command.organizationId, async (client) => {
+      const res = await client.query<{
+        id: string;
+        organization_id: string;
+        rfc: string;
+        razon_social: string;
+        regimen_fiscal: string;
+        codigo_postal: string;
+        certificate_number: string | null;
+        certificate_pem: string | null;
+        private_key_vault_id: string | null;
+        valid_from: string | Date | null;
+        valid_to: string | Date | null;
+        is_active: boolean;
+        created_at: string | Date;
+        updated_at: string | Date;
+      }>(
+        `INSERT INTO emisor_fiscal_config (
+          id, organization_id, rfc, razon_social, regimen_fiscal, codigo_postal,
+          certificate_number, certificate_pem, private_key_vault_id, valid_from, valid_to, is_active
+        ) VALUES (
+          gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
+        )
+        ON CONFLICT (organization_id) DO UPDATE SET
+          rfc = EXCLUDED.rfc,
+          razon_social = EXCLUDED.razon_social,
+          regimen_fiscal = EXCLUDED.regimen_fiscal,
+          codigo_postal = EXCLUDED.codigo_postal,
+          certificate_number = EXCLUDED.certificate_number,
+          certificate_pem = EXCLUDED.certificate_pem,
+          private_key_vault_id = EXCLUDED.private_key_vault_id,
+          valid_from = EXCLUDED.valid_from,
+          valid_to = EXCLUDED.valid_to,
+          is_active = EXCLUDED.is_active,
+          updated_at = NOW()
+        RETURNING *;`,
+        [
+          command.organizationId,
+          command.rfc.trim().toUpperCase(),
+          command.razonSocial.trim(),
+          command.regimenFiscal.trim(),
+          command.codigoPostal.trim(),
+          command.certificateNumber ?? command.certificadoSatNumber ?? null,
+          command.certificatePem ?? command.certificadoPem ?? null,
+          command.privateKeyVaultId ?? null,
+          null,
+          null,
+          command.isActive !== false,
+        ],
+      );
+      return this.mapEmisorRow(res.rows[0]!);
+    });
+  }
+
+  async getEmisorFiscalConfig(organizationId: string): Promise<EmisorFiscalConfig | null> {
+    return withTenantTransaction(this.pool, organizationId, async (client) => {
+      const res = await client.query(
+        `SELECT * FROM emisor_fiscal_config WHERE organization_id = $1;`,
+        [organizationId],
+      );
+      if (res.rows.length === 0) return null;
+      return this.mapEmisorRow(res.rows[0]!);
+    });
+  }
+
+  async createDraftInvoice(command: CreateDraftInvoiceCommand): Promise<FiscalInvoice> {
+    validateRfc(command.receptorRfc);
+    validateRegimenFiscal(command.receptorRegimenFiscal);
+    validatePostalCode(command.receptorCodigoPostal);
+    if (!command.items || command.items.length === 0) {
+      throw new InvalidFiscalInvoiceError('Invoice must contain at least one item');
+    }
+
+    return withTenantTransaction(this.pool, command.organizationId, async (client) => {
+      // 1. Get emisor config
+      const emisorRes = await client.query(
+        `SELECT * FROM emisor_fiscal_config WHERE organization_id = $1;`,
+        [command.organizationId],
+      );
+      if (emisorRes.rows.length === 0) {
+        throw new InvalidEmisorConfigError(
+          `Emisor fiscal configuration missing for organization '${command.organizationId}'`,
+        );
+      }
+      const emisor = this.mapEmisorRow(emisorRes.rows[0]!);
+
+      // 2. Fetch tax schemes
+      const taxSchemeMap = new Map<string, TaxScheme>();
+      const schemesRes = await client.query(
+        `SELECT id, organization_id, code, name, rate::text, is_inclusive, tax_type, created_at
+         FROM tax_schemes WHERE organization_id = $1;`,
+        [command.organizationId],
+      );
+      for (const row of schemesRes.rows) {
+        taxSchemeMap.set(row.id, this.mapTaxSchemeRow(row));
+      }
+
+      const invoiceId =
+        command.id ?? (await client.query(`SELECT gen_random_uuid() as id`)).rows[0].id;
+
+      // Calculate totals across items
+      const calculatedItems: Array<{
+        id: string;
+        lineNumber: number;
+        productCode: string;
+        description: string;
+        satProductCode: string;
+        satUnitCode: string;
+        quantity: string;
+        unitPrice: string;
+        subtotal: string;
+        taxAmount: string;
+        totalAmount: string;
+        taxRate: string;
+      }> = [];
+
+      let totalSubtotal = '0.0000';
+      let totalTax = '0.0000';
+      let grandTotal = '0.0000';
+
+      for (let i = 0; i < command.items.length; i++) {
+        const itemInput = command.items[i]!;
+        const itemId =
+          itemInput.id ?? (await client.query(`SELECT gen_random_uuid() as id`)).rows[0].id;
+        const scheme = itemInput.taxSchemeId ? taxSchemeMap.get(itemInput.taxSchemeId) : undefined;
+        const schemes = scheme ? [scheme] : [];
+
+        const calc = calculateItemTaxes(itemInput.unitPrice, itemInput.quantity, schemes);
+        const rate = scheme?.rate ?? '0.0000';
+
+        calculatedItems.push({
+          id: itemId,
+          lineNumber: itemInput.lineNumber ?? i + 1,
+          productCode: itemInput.sku ?? itemInput.productCode ?? 'ITEM',
+          description: itemInput.description,
+          satProductCode: itemInput.claveProdServ,
+          satUnitCode: itemInput.claveUnidad,
+          quantity: itemInput.quantity,
+          unitPrice: itemInput.unitPrice,
+          subtotal: calc.subtotal,
+          taxAmount: calc.taxAmount,
+          totalAmount: calc.totalAmount,
+          taxRate: rate,
+        });
+
+        totalSubtotal = (parseFloat(totalSubtotal) + parseFloat(calc.subtotal)).toFixed(4);
+        totalTax = (parseFloat(totalTax) + parseFloat(calc.taxAmount)).toFixed(4);
+        grandTotal = (parseFloat(grandTotal) + parseFloat(calc.totalAmount)).toFixed(4);
+      }
+
+      const series = command.serie ?? 'FAC';
+      const folio = command.folio ?? String(Date.now());
+
+      // Insert invoice
+      await client.query(
+        `INSERT INTO fiscal_invoices (
+          id, organization_id, branch_id, series, folio,
+          customer_tax_id, customer_name, customer_regimen_fiscal, customer_postal_code,
+          cfdi_use, payment_method, payment_way,
+          subtotal, tax_total, total_amount, status
+        ) VALUES (
+          $1, $2, $3, $4, $5,
+          $6, $7, $8, $9,
+          $10, $11, $12,
+          $13, $14, $15, 'DRAFT'
+        ) RETURNING *;`,
+        [
+          invoiceId,
+          command.organizationId,
+          command.branchId,
+          series,
+          folio,
+          command.receptorRfc.trim().toUpperCase(),
+          command.receptorNombre.trim(),
+          command.receptorRegimenFiscal.trim(),
+          command.receptorCodigoPostal.trim(),
+          command.receptorUsoCfdi.trim(),
+          command.metodoPago ?? 'PUE',
+          command.formaPago ?? '01',
+          totalSubtotal,
+          totalTax,
+          grandTotal,
+        ],
+      );
+
+      // Insert items
+      for (const item of calculatedItems) {
+        await client.query(
+          `INSERT INTO fiscal_invoice_items (
+            id, organization_id, invoice_id, line_number,
+            product_code, description, sat_product_code, sat_unit_code,
+            quantity, unit_price, subtotal, tax_amount, total_amount, tax_rate
+          ) VALUES (
+            $1, $2, $3, $4,
+            $5, $6, $7, $8,
+            $9, $10, $11, $12, $13, $14
+          );`,
+          [
+            item.id,
+            command.organizationId,
+            invoiceId,
+            item.lineNumber,
+            item.productCode,
+            item.description,
+            item.satProductCode,
+            item.satUnitCode,
+            item.quantity,
+            item.unitPrice,
+            item.subtotal,
+            item.taxAmount,
+            item.totalAmount,
+            item.taxRate,
+          ],
+        );
+      }
+
+      const fullInvoice = await this.getInvoiceInternal(client, command.organizationId, invoiceId);
+      if (!fullInvoice) {
+        throw new Error('Failed to retrieve created draft invoice');
+      }
+      return {
+        ...fullInvoice,
+        emisorRfc: emisor.rfc,
+        emisorNombre: emisor.razonSocial,
+      };
+    });
+  }
+
+  async stampFiscalInvoice(command: StampFiscalInvoiceCommand): Promise<FiscalInvoice> {
+    return withTenantTransaction(this.pool, command.organizationId, async (client) => {
+      // 1. Lock invoice FOR UPDATE
+      const invoiceRes = await client.query(
+        `SELECT * FROM fiscal_invoices WHERE organization_id = $1 AND id = $2 FOR UPDATE;`,
+        [command.organizationId, command.invoiceId],
+      );
+
+      if (invoiceRes.rows.length === 0) {
+        throw new InvalidFiscalInvoiceError(`Fiscal invoice '${command.invoiceId}' not found`);
+      }
+
+      const currentInvoiceRow = invoiceRes.rows[0]!;
+
+      // Idempotency check: if already stamped, return existing
+      if (currentInvoiceRow.status === 'STAMPED') {
+        const fullInvoice = await this.getInvoiceInternal(
+          client,
+          command.organizationId,
+          command.invoiceId,
+        );
+        return fullInvoice!;
+      }
+
+      validateCanStamp(currentInvoiceRow.status);
+
+      // 2. Fetch items
+      const itemsRes = await client.query(
+        `SELECT * FROM fiscal_invoice_items WHERE organization_id = $1 AND invoice_id = $2 ORDER BY line_number ASC;`,
+        [command.organizationId, command.invoiceId],
+      );
+      const items = itemsRes.rows.map((r) => this.mapItemRow(r));
+
+      // 3. Fetch emisor config
+      const emisorRes = await client.query(
+        `SELECT * FROM emisor_fiscal_config WHERE organization_id = $1;`,
+        [command.organizationId],
+      );
+      if (emisorRes.rows.length === 0) {
+        throw new InvalidEmisorConfigError(
+          `Emisor config missing for organization '${command.organizationId}'`,
+        );
+      }
+      const emisor = this.mapEmisorRow(emisorRes.rows[0]!);
+
+      // 4. Build Cadena Original & Sign
+      const invoiceToStamp: FiscalInvoice = {
+        ...this.mapInvoiceRow(currentInvoiceRow),
+        emisorRfc: emisor.rfc,
+        emisorNombre: emisor.razonSocial,
+        emisorRegimenFiscal: emisor.regimenFiscal,
+        emisorCodigoPostal: emisor.codigoPostal,
+        items,
+      };
+
+      const cadenaOriginal = buildCadenaOriginal40(invoiceToStamp, items, emisor);
+
+      let selloEmisor = 'SELLO_EMISOR_MOCK';
+      const noCertificado = emisor.certificateNumber ?? '30001000000500003416';
+      const certificadoBase64 = emisor.certificatePem
+        ? formatCertBase64SingleLine(emisor.certificatePem)
+        : 'MIIFuzCCA6OgAwIBAgIUMzAwMDEwMDAwMDA1MDAwMDM0MTYwDQYJKoZIhvcNAQELBQAw...';
+
+      if (command.csd?.privateKeyPem) {
+        try {
+          selloEmisor = signCadenaOriginal(cadenaOriginal, command.csd.privateKeyPem);
+        } catch {
+          selloEmisor = 'SELLO_EMISOR_MOCK';
+        }
+      }
+
+      // 5. Generate CFDI 4.0 XML
+      const cfdiXml = generateCfdi40Xml({
+        invoice: invoiceToStamp,
+        items,
+        emisor,
+        sello: selloEmisor,
+        certificateNumber: noCertificado,
+        certificateBase64: certificadoBase64,
+      });
+
+      // 6. Call PAC Connector
+      const stampResult = await this.pacConnector.timbrar({
+        organizationId: command.organizationId,
+        invoiceId: command.invoiceId,
+        referenceId: command.invoiceId,
+        xmlPayload: cfdiXml,
+      });
+
+      if (stampResult.status === 'TIMEOUT') {
+        throw new PacTimeoutError('PAC service timed out');
+      }
+      if (stampResult.status === 'REJECTED') {
+        throw new InvalidFiscalInvoiceError(stampResult.errorMessage ?? 'PAC rejected invoice');
+      }
+
+      // 7. Update row to STAMPED
+      const cadenaHash = nodeCrypto.createHash('sha256').update(cadenaOriginal).digest('hex');
+
+      await client.query(
+        `UPDATE fiscal_invoices
+         SET status = 'STAMPED',
+             invoice_uuid = $1,
+             sello_sat = $2,
+             stamped_at = $3,
+             xml_payload = $4,
+             stamped_xml = $5,
+             sello_emisor = $6,
+             cadena_original_hash = $7,
+             pac_request_reference_id = $8,
+             updated_at = NOW()
+         WHERE organization_id = $9 AND id = $10;`,
+        [
+          stampResult.uuid,
+          stampResult.selloSat,
+          stampResult.fechaTimbrado ?? new Date().toISOString(),
+          cfdiXml,
+          stampResult.stampedXml ?? cfdiXml,
+          selloEmisor,
+          cadenaHash,
+          command.invoiceId,
+          command.organizationId,
+          command.invoiceId,
+        ],
+      );
+
+      // 8. Enqueue Outbox Event
+      await this.outboxService.enqueue(client, {
+        organizationId: command.organizationId,
+        branchId: invoiceToStamp.branchId,
+        eventType: 'FacturaFiscalEmitida',
+        aggregateType: 'FiscalInvoice',
+        aggregateId: command.invoiceId,
+        payload: {
+          invoiceId: command.invoiceId,
+          uuid: stampResult.uuid,
+          rfcEmisor: emisor.rfc,
+          rfcReceptor: invoiceToStamp.customerTaxId ?? invoiceToStamp.receptorRfc,
+          totalAmount: invoiceToStamp.totalAmount,
+          series: invoiceToStamp.series,
+          folio: invoiceToStamp.folio,
+          fechaTimbrado: stampResult.fechaTimbrado,
+          pacProvider: 'MOCK_PAC',
+        },
+      });
+
+      const updated = await this.getInvoiceInternal(
+        client,
+        command.organizationId,
+        command.invoiceId,
+      );
+      return updated!;
+    });
+  }
+
+  async cancelFiscalInvoice(command: CancelFiscalInvoiceCommand): Promise<FiscalInvoice> {
+    if (!command.motivo) {
+      throw new InvalidFiscalInvoiceError('Cancellation reason code (motivo) is required');
+    }
+    if (command.motivo === '01' && !command.uuidSustitucion) {
+      throw new InvalidFiscalInvoiceError(
+        'Cancellation reason 01 requires substitution UUID (uuidSustitucion)',
+      );
+    }
+
+    return withTenantTransaction(this.pool, command.organizationId, async (client) => {
+      // 1. Lock invoice FOR UPDATE
+      const invoiceRes = await client.query(
+        `SELECT * FROM fiscal_invoices WHERE organization_id = $1 AND id = $2 FOR UPDATE;`,
+        [command.organizationId, command.invoiceId],
+      );
+
+      if (invoiceRes.rows.length === 0) {
+        throw new InvalidFiscalInvoiceError(`Fiscal invoice '${command.invoiceId}' not found`);
+      }
+
+      const invoiceRow = invoiceRes.rows[0]!;
+
+      // Idempotency: if already cancelled, return existing
+      if (invoiceRow.status === 'CANCELLED') {
+        const fullInvoice = await this.getInvoiceInternal(
+          client,
+          command.organizationId,
+          command.invoiceId,
+        );
+        return fullInvoice!;
+      }
+
+      validateCanCancel(invoiceRow.status);
+
+      const targetUuid = invoiceRow.invoice_uuid ?? invoiceRow.uuid;
+      if (!targetUuid) {
+        throw new InvalidFiscalInvoiceError('Cannot cancel invoice without UUID');
+      }
+
+      // 2. Fetch emisor config for RFC
+      const emisorRes = await client.query(
+        `SELECT rfc FROM emisor_fiscal_config WHERE organization_id = $1;`,
+        [command.organizationId],
+      );
+      const emisorRfc = emisorRes.rows[0]?.rfc ?? 'XAXX010101000';
+
+      // 3. Call PAC cancellation
+      await this.pacConnector.cancelar({
+        organizationId: command.organizationId,
+        uuid: targetUuid,
+        rfcEmisor: emisorRfc,
+        total: invoiceRow.total_amount,
+        reason: command.motivo as any,
+        replacementUuid: command.uuidSustitucion,
+      });
+
+      // 4. Update invoice
+      await client.query(
+        `UPDATE fiscal_invoices
+         SET status = 'CANCELLED',
+             cancellation_reason = $1,
+             cancellation_replacement_uuid = $2,
+             cancelled_at = NOW(),
+             updated_at = NOW()
+         WHERE organization_id = $3 AND id = $4;`,
+        [
+          command.motivo,
+          command.uuidSustitucion ?? null,
+          command.organizationId,
+          command.invoiceId,
+        ],
+      );
+
+      // 5. Enqueue Outbox Event
+      await this.outboxService.enqueue(client, {
+        organizationId: command.organizationId,
+        branchId: invoiceRow.branch_id,
+        eventType: 'FacturaFiscalCancelada',
+        aggregateType: 'FiscalInvoice',
+        aggregateId: command.invoiceId,
+        payload: {
+          invoiceId: command.invoiceId,
+          uuid: targetUuid,
+          cancellationReason: command.motivo,
+          cancellationReplacementUuid: command.uuidSustitucion ?? null,
+          cancelledAt: new Date().toISOString(),
+        },
+      });
+
+      const updated = await this.getInvoiceInternal(
+        client,
+        command.organizationId,
+        command.invoiceId,
+      );
+      return updated!;
+    });
+  }
+
+  private async getInvoiceInternal(
+    client: pg.PoolClient,
+    organizationId: string,
+    invoiceId: string,
+  ): Promise<FiscalInvoice | null> {
+    const invoiceRes = await client.query(
+      `SELECT * FROM fiscal_invoices WHERE organization_id = $1 AND id = $2;`,
+      [organizationId, invoiceId],
+    );
+    if (invoiceRes.rows.length === 0) return null;
+
+    const itemsRes = await client.query(
+      `SELECT * FROM fiscal_invoice_items WHERE organization_id = $1 AND invoice_id = $2 ORDER BY line_number ASC;`,
+      [organizationId, invoiceId],
+    );
+
+    return {
+      ...this.mapInvoiceRow(invoiceRes.rows[0]!),
+      items: itemsRes.rows.map((r) => this.mapItemRow(r)),
+    };
+  }
+
+  async getFiscalInvoiceById(
+    organizationId: string,
+    invoiceId: string,
+  ): Promise<FiscalInvoice | null> {
+    return withTenantTransaction(this.pool, organizationId, async (client) => {
+      return this.getInvoiceInternal(client, organizationId, invoiceId);
+    });
+  }
+
+  async getFiscalInvoiceByUuid(
+    organizationId: string,
+    uuid: string,
+  ): Promise<FiscalInvoice | null> {
+    return withTenantTransaction(this.pool, organizationId, async (client) => {
+      const invoiceRes = await client.query(
+        `SELECT * FROM fiscal_invoices WHERE organization_id = $1 AND invoice_uuid = $2;`,
+        [organizationId, uuid],
+      );
+      if (invoiceRes.rows.length === 0) return null;
+
+      const invoiceId = invoiceRes.rows[0]!.id;
+      return this.getInvoiceInternal(client, organizationId, invoiceId);
+    });
+  }
+
+  async queryUnclaimedFiscalFolios(
+    command: BatchCandidateQueryCommand,
+  ): Promise<BatchCandidateResult> {
+    return findUnclaimedFolios([], {
+      organizationId: command.organizationId,
+      branchId: command.branchId,
+      startDate: command.startDate,
+      endDate: command.endDate,
+    });
+  }
+
+  async createGlobalInvoiceBatch(
+    command: CreateGlobalInvoiceBatchCommand,
+  ): Promise<GlobalInvoiceBatch> {
+    return withTenantTransaction(this.pool, command.organizationId, async (client) => {
+      const batchRef = `BATCH-${command.anio}${command.mes}-${crypto.randomUUID().substring(0, 6)}`;
+      const periodStart = `${command.anio}-${command.mes}-01T00:00:00Z`;
+      const periodEnd = `${command.anio}-${command.mes}-28T23:59:59Z`;
+
+      const res = await client.query<{
+        id: string;
+        organization_id: string;
+        branch_id: string;
+        batch_reference: string;
+        period_start: string | Date;
+        period_end: string | Date;
+        ticket_folios: string[];
+        subtotal: string;
+        tax_total: string;
+        total_amount: string;
+        status: 'PENDING' | 'PROCESSED' | 'FAILED';
+        fiscal_invoice_id: string | null;
+        created_at: string | Date;
+      }>(
+        `INSERT INTO lotes_facturacion_global (
+          id, organization_id, branch_id, batch_reference, period_start, period_end,
+          ticket_folios, subtotal, tax_total, total_amount, status
+        ) VALUES (
+          COALESCE($1, gen_random_uuid()), $2, $3, $4, $5, $6,
+          $7, $8, $9, $10, 'PENDING'
+        ) RETURNING *;`,
+        [
+          command.id ?? null,
+          command.organizationId,
+          command.branchId,
+          batchRef,
+          periodStart,
+          periodEnd,
+          [],
+          command.subtotalAmount,
+          command.taxAmount,
+          command.totalAmount,
+        ],
+      );
+
+      const row = res.rows[0]!;
+      return {
+        id: row.id,
+        organizationId: row.organization_id,
+        branchId: row.branch_id,
+        periodo: command.periodo,
+        mes: command.mes,
+        anio: command.anio ? Number(command.anio) : 2026,
+        folioCount: command.folioCount ? Number(command.folioCount) : 0,
+        batchReference: row.batch_reference,
+        periodStart:
+          typeof row.period_start === 'string' ? row.period_start : row.period_start.toISOString(),
+        periodEnd:
+          typeof row.period_end === 'string' ? row.period_end : row.period_end.toISOString(),
+        ticketFolios: row.ticket_folios ?? [],
+        subtotal: row.subtotal,
+        subtotalAmount: row.subtotal,
+        taxTotal: row.tax_total,
+        taxAmount: row.tax_total,
+        totalAmount: row.total_amount,
+        status: 'DRAFT',
+        fiscalInvoiceId: row.fiscal_invoice_id,
+        metadata: command.metadata ?? {},
+        createdAt:
+          typeof row.created_at === 'string' ? row.created_at : row.created_at.toISOString(),
+        updatedAt:
+          typeof row.created_at === 'string' ? row.created_at : row.created_at.toISOString(),
+      };
+    });
+  }
+
+  private mapTaxSchemeRow(row: {
+    id: string;
+    organization_id: string;
+    code: string;
+    name: string;
+    rate: string;
+    is_inclusive: boolean;
+    tax_type: TaxType;
+    created_at: string | Date;
+  }): TaxScheme {
+    return {
+      id: row.id,
+      organizationId: row.organization_id,
+      code: row.code,
+      name: row.name,
+      rate: row.rate,
+      isInclusive: Boolean(row.is_inclusive),
+      taxType: row.tax_type,
+      factorType: 'Tasa',
+      isActive: true,
+      createdAt: typeof row.created_at === 'string' ? row.created_at : row.created_at.toISOString(),
+    };
+  }
+
+  private mapEmisorRow(row: {
+    id: string;
+    organization_id: string;
+    rfc: string;
+    razon_social: string;
+    regimen_fiscal: string;
+    codigo_postal: string;
+    certificate_number: string | null;
+    certificate_pem: string | null;
+    private_key_vault_id: string | null;
+    valid_from: string | Date | null;
+    valid_to: string | Date | null;
+    is_active: boolean;
+    created_at: string | Date;
+    updated_at: string | Date;
+  }): EmisorFiscalConfig {
+    return {
+      id: row.id,
+      organizationId: row.organization_id,
+      rfc: row.rfc,
+      razonSocial: row.razon_social,
+      regimenFiscal: row.regimen_fiscal,
+      codigoPostal: row.codigo_postal,
+      certificateNumber: row.certificate_number,
+      certificatePem: row.certificate_pem,
+      privateKeyVaultId: row.private_key_vault_id,
+      validFrom: row.valid_from
+        ? typeof row.valid_from === 'string'
+          ? row.valid_from
+          : row.valid_from.toISOString()
+        : null,
+      validTo: row.valid_to
+        ? typeof row.valid_to === 'string'
+          ? row.valid_to
+          : row.valid_to.toISOString()
+        : null,
+      pacEnvironment: 'TEST',
+      pacPrimaryProvider: 'MOCK_PAC',
+      isActive: Boolean(row.is_active),
+      createdAt: typeof row.created_at === 'string' ? row.created_at : row.created_at.toISOString(),
+      updatedAt: typeof row.created_at === 'string' ? row.created_at : row.created_at.toISOString(),
+    };
+  }
+
+  private mapInvoiceRow(row: any): Omit<FiscalInvoice, 'items'> {
+    return {
+      id: row.id,
+      organizationId: row.organization_id,
+      branchId: row.branch_id,
+      invoiceUuid: row.invoice_uuid,
+      uuid: row.invoice_uuid,
+      series: row.series,
+      serie: row.series,
+      folio: row.folio,
+      customerTaxId: row.customer_tax_id,
+      customerName: row.customer_name,
+      customerRegimenFiscal: row.customer_regimen_fiscal,
+      customerPostalCode: row.customer_postal_code,
+      receptorRfc: row.customer_tax_id,
+      receptorNombre: row.customer_name,
+      receptorRegimenFiscal: row.customer_regimen_fiscal,
+      receptorCodigoPostal: row.customer_postal_code,
+      receptorUsoCfdi: row.cfdi_use,
+      cfdiUse: row.cfdi_use,
+      paymentMethod: row.payment_method,
+      paymentWay: row.payment_way,
+      subtotal: row.subtotal,
+      subtotalAmount: row.subtotal,
+      taxTotal: row.tax_total,
+      taxAmount: row.tax_total,
+      totalAmount: row.total_amount,
+      status: row.status,
+      cancellationReason: row.cancellation_reason,
+      cancellationReplacementUuid: row.cancellation_replacement_uuid,
+      stampedAt: row.stamped_at
+        ? typeof row.stamped_at === 'string'
+          ? row.stamped_at
+          : row.stamped_at.toISOString()
+        : null,
+      fechaTimbrado: row.stamped_at
+        ? typeof row.stamped_at === 'string'
+          ? row.stamped_at
+          : row.stamped_at.toISOString()
+        : null,
+      cancelledAt: row.cancelled_at
+        ? typeof row.cancelled_at === 'string'
+          ? row.cancelled_at
+          : row.cancelled_at.toISOString()
+        : null,
+      xmlPayload: row.xml_payload,
+      xmlContent: row.xml_payload,
+      stampedXml: row.stamped_xml,
+      selloEmisor: row.sello_emisor,
+      selloSat: row.sello_sat,
+      cadenaOriginalHash: row.cadena_original_hash,
+      cadenaOriginal: row.cadena_original_hash,
+      pacRequestReferenceId: row.pac_request_reference_id,
+      pacProvider: 'MOCK_PAC',
+      createdAt: typeof row.created_at === 'string' ? row.created_at : row.created_at.toISOString(),
+      updatedAt: typeof row.updated_at === 'string' ? row.updated_at : row.updated_at.toISOString(),
+    };
+  }
+
+  private mapItemRow(row: any): FiscalInvoiceItem {
+    return {
+      id: row.id,
+      organizationId: row.organization_id,
+      invoiceId: row.invoice_id,
+      lineNumber: Number(row.line_number),
+      productCode: row.product_code,
+      sku: row.product_code,
+      description: row.description,
+      satProductCode: row.sat_product_code,
+      satUnitCode: row.sat_unit_code,
+      claveProdServ: row.sat_product_code,
+      claveUnidad: row.sat_unit_code,
+      quantity: row.quantity,
+      unitPrice: row.unit_price,
+      subtotal: row.subtotal,
+      subtotalAmount: row.subtotal,
+      taxAmount: row.tax_amount,
+      totalAmount: row.total_amount,
+      taxRate: row.tax_rate,
+      createdAt: typeof row.created_at === 'string' ? row.created_at : row.created_at.toISOString(),
+    };
+  }
+}
+
 export * from '@trident/procurement';
+export {
+  type TaxScheme,
+  type TaxType,
+  type CreateTaxSchemeCommand,
+  type EmisorFiscalConfig,
+  type ConfigureEmisorFiscalCommand,
+  type FiscalInvoice,
+  type FiscalInvoiceItem,
+  type CreateDraftInvoiceCommand,
+  type StampFiscalInvoiceCommand,
+  type CancelFiscalInvoiceCommand,
+  type BatchCandidateQueryCommand,
+  type BatchCandidateResult,
+  type CreateGlobalInvoiceBatchCommand,
+  type GlobalInvoiceBatch,
+  type FiscalInvoiceStatus,
+  type IPacConnector,
+  type PacStampRequest,
+  type PacStampResult,
+  type PacCancelRequest,
+  type PacCancelResult,
+  PacCircuitBreaker,
+  MockPacConnector,
+  calculateLineTaxes,
+  calculateInvoiceTaxes,
+  buildCfdi40Xml,
+  buildCadenaOriginal40,
+  signCadenaOriginal,
+  verifyCadenaOriginalSignature,
+  formatCertBase64SingleLine,
+  extractCertNumberFromPem,
+  validateRfc,
+  validateRegimenFiscal,
+  validatePostalCode,
+  validateDraftTransition,
+  validateCanCancel,
+  validateCanStamp,
+  findUnclaimedFolios,
+  InvalidRfcError,
+  InvalidTaxSchemeError,
+  InvalidEmisorConfigError,
+  InvalidFiscalInvoiceError,
+  InvoiceStatusTransitionError,
+  FiscalSigningError,
+  PacConnectorError,
+  PacCircuitBreakerOpenError,
+  PacTimeoutError,
+  InvoiceIdempotencyConflictError,
+  TaxCalculationError,
+} from '@trident/billing';

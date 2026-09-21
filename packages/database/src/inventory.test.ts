@@ -77,6 +77,11 @@ describe('TRIDENTPOS WP-017 Inventory & Recipes Database Suite', () => {
       if (!orgCheck.rows[0]?.reg) {
         await prepClient.query(`
           DROP TABLE IF EXISTS
+            lotes_facturacion_global,
+            fiscal_invoice_items,
+            fiscal_invoices,
+            emisor_fiscal_config,
+            tax_schemes,
             accounts_receivable_settlements,
             accounts_payable_payments,
             cash_reconciliations,
