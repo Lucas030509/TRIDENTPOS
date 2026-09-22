@@ -1,13 +1,15 @@
 # ACR-2026-020 — WP-021 PAC RECONCILIATION & FISCAL SUCCESS CONTRACT
 
-**Status:** PROPOSED / FROZEN CANDIDATE R1 — PENDING INDEPENDENT REVIEW  
+**Status:** PROPOSED / FROZEN CANDIDATE R2 — PENDING INDEPENDENT REVIEW  
 **Date:** 2026-09-22  
 **Scope:** WP-021 — Fiscal Invoicing Engine  
 **Canonical Governance Base:** `0c46307e09fe77383320a86b6daff86d2983e9af`  
 **Governing Framework:** EAAF v1.3.0 @ `167cea36c09c1031c763971ff790db2e0d0f7362`  
 **Parent Governance:** ACR-2026-019 — DONE / CANONICAL  
-**ACR-2026-019 Canonical Migration Merge:** `0c46307e09fe77383320a86b6daff86d2983e9af`  
-**ACR-2026-019 Post-Merge Evidence:** `bc7ddad3cf3425b7c8cb8e7ca10d20693ad3a6f7`  
+**Superseded Frozen Candidate R1:** `2b71ed748c9ae542533b91b23be51159a6ab81c8`  
+**Integration R1 Gate:** HOLD  
+**Integration R1 Evidence:** `dea99835a04ea3e4f44b3f78909b52983c418f1d`  
+**R2 Remediation Purpose:** Remediation of `ACR020-R1-INT-BLK-01` (Operation-specific idempotency / safe-replay capabilities) and `ACR020-R1-INT-BLK-02` (Authoritative cancellation reconciliation / final-success contract), incorporating `ACR020-R1-INT-ADV-01` (Contractual capability provenance).  
 **Observed WP-021 R2 Subject:** `2d9cd149120c60b4d30778d0583344196bd210b7`  
 **Risk Class:** RC4 — CRITICAL  
 **Primary Review Domains:** Solution Architecture, Integration, Data, Security, QA, Code Review  
@@ -24,12 +26,13 @@ This ACR does not select a PAC vendor, invent provider-specific APIs, close `OQ-
 It defines the minimum architecture and safety invariants that any future PAC adapter must satisfy before TRIDENTPOS can claim:
 
 - safe fiscal stamping;
+- safe cancellation;
 - durable retry;
 - restart recovery;
-- duplicate-stamp prevention;
-- authoritative reconciliation;
-- valid fiscal success;
-- safe cancellation recovery.
+- duplicate-stamp and duplicate-cancellation prevention;
+- authoritative reconciliation for all fiscal operations;
+- valid fiscal success and cancellation confirmation;
+- safe crash recovery.
 
 ---
 
@@ -41,7 +44,8 @@ WP-021 R2 materially improves fiscal safety, but independent inspection identifi
 2. `RECONCILIATION_REQUIRED` currently returns to `IN_FLIGHT` and may call `timbrar()` again without first obtaining an authoritative provider result.
 3. A PAC response labeled `STAMPED` can be accepted even when required fiscal evidence is missing.
 4. The current mock provides deterministic replay behavior that is not yet guaranteed by any real PAC provider contract.
-5. Cancellation is also an external fiscal effect and requires the same ambiguity discipline.
+5. Cancellation is also an external fiscal effect with legal consequences and requires equivalent operation-specific idempotency, reconciliation, and ambiguity discipline (`ACR020-R1-INT-BLK-01`, `ACR020-R1-INT-BLK-02`).
+6. Provider capability declarations must have immutable contractual provenance to prevent unfounded claims of replay or idempotency support (`ACR020-R1-INT-ADV-01`).
 
 The canonical Implementation Plan already states:
 
@@ -67,7 +71,7 @@ Billing is authoritative for:
 - CSD readiness validation;
 - signed pre-stamp XML;
 - authoritative storage of successful fiscal result after validation;
-- durable `FacturaFiscalEmitida` / cancellation event publication.
+- durable `FacturaFiscalEmitida` and `FacturaFiscalCancelada` event publication.
 
 ### 3.2 PAC owns
 
@@ -77,38 +81,57 @@ The external PAC/provider is authoritative for:
 - fiscal UUID returned by certification;
 - certified/stamped XML;
 - PAC/SAT fiscal response metadata available under the provider contract;
-- provider-side cancellation outcome;
+- provider-side cancellation outcome and acknowledgment;
 - provider-side status/reconciliation response.
 
 ### 3.3 No dual authority
 
-A local timeout, socket close, process crash, or missing HTTP response does not prove that the PAC did not perform the fiscal operation.
+A local timeout, socket close, process crash, or missing HTTP response does not prove that the PAC did not perform the fiscal operation (stamping or cancellation).
 
 TRIDENTPOS MUST NOT convert transport uncertainty into a fiscal conclusion.
 
 ---
 
-## 4. Provider Capability Declaration
+## 4. Provider Capability Declaration & Contractual Provenance
 
 Every production PAC adapter SHALL expose an immutable capability declaration established from an approved provider contract.
 
-Minimum logical capabilities:
+Capabilities MUST be declared and evaluated **independently per fiscal operation type** (`STAMP` vs `CANCEL`). A capability established for stamping does NOT imply or grant that capability for cancellation, nor vice versa.
+
+Minimum logical capability model:
 
 ```text
 providerName
+contractProvenance {
+  contractIdentifier
+  contractVersion
+  evidenceUriOrReference
+  evidenceDigestOrHash
+  effectivePeriod
+  guaranteeScopeOrLimitations
+}
+
 supportsStampIdempotencyKey
+supportsCancellationIdempotencyKey
+
 supportsAuthoritativeStampLookup
 supportsAuthoritativeCancellationLookup
-supportsSafeReplayAfterConfirmedNotFound
+
+supportsSafeStampReplayAfterConfirmedNotFound
+supportsSafeCancellationReplayAfterConfirmedNotFound
+
 stampLookupKeyType
 cancellationLookupKeyType
 ```
 
-Names are conceptual; implementation naming may vary.
+Names are conceptual; implementation naming may vary as long as semantics remain exact and independent.
 
-The adapter MUST NOT declare a capability merely because the mock supports it.
+### 4.1 Strict Fail-Closed & Provenance Rules
 
-If the approved provider documentation/contract does not establish a capability, it is `false / unavailable`.
+1. **Operation Independence (`ACR020-R1-INT-BLK-01`):** `supportsStampIdempotencyKey` and `supportsCancellationIdempotencyKey` are distinct declarations. Likewise, lookup capabilities (`supportsAuthoritativeStampLookup`, `supportsAuthoritativeCancellationLookup`) and safe-replay capabilities (`supportsSafeStampReplayAfterConfirmedNotFound`, `supportsSafeCancellationReplayAfterConfirmedNotFound`) are independently evaluated per operation type.
+2. **Contractual Provenance (`ACR020-R1-INT-ADV-01`):** Every capability declared `true` in a production adapter MUST be bound to identifiable contractual evidence recorded in `contractProvenance` (e.g., contract identifier, version, evidence reference/URI, digest/hash, validity window, semantic limitations). A capability declared without approved contractual evidence MUST fail closed / be rejected during adapter initialization/validation.
+3. **No Inference or Defaults:** Any capability not explicitly established by an approved provider contract MUST strictly default to `false / unavailable`.
+4. **Mocks Excluded:** The adapter MUST NOT declare a capability merely because a test mock supports it. Mocks cannot establish production provider capabilities.
 
 ---
 
@@ -122,6 +145,7 @@ Minimum identity:
 - `organizationId`
 - `branchId`
 - `invoiceId`
+- fiscal UUID being operated on (for cancellation, the specific stamped UUID target)
 - `operationType` = `STAMP` or `CANCEL`
 - `semanticIdempotencyKey`
 - `requestHash`
@@ -158,7 +182,7 @@ IN_FLIGHT
 
 ### 6.1 SUCCEEDED
 
-Allowed only after authoritative fiscal success evidence passes validation.
+Allowed only after authoritative fiscal success evidence (for stamping) or authoritative cancellation confirmation (for cancellation) passes validation.
 
 ### 6.2 FAILED_TERMINAL
 
@@ -166,13 +190,13 @@ Allowed only for a definitive provider/application rejection for which repeating
 
 ### 6.3 RETRYABLE_CONFIRMED
 
-Allowed only when it is known that repeating the provider request cannot duplicate an already-completed fiscal operation.
+Allowed only when it is proven under §8 that repeating the provider request for that specific operation type cannot duplicate an already-completed fiscal operation.
 
 Examples:
 
 - failure occurred before dispatch;
-- provider authoritatively reports not found/not accepted and the approved provider contract declares replay safe;
-- provider contract guarantees idempotent replay for the exact same provider idempotency key and immutable fiscal request.
+- provider authoritatively reports not found/not accepted and the approved provider contract declares replay safe for that operation type;
+- provider contract guarantees idempotent replay for that operation type with the exact same provider idempotency key and immutable fiscal request.
 
 A generic timeout is NOT enough.
 
@@ -184,12 +208,12 @@ Examples:
 
 - timeout after possible dispatch;
 - socket drop after request transmission;
-- process crash after outbound call but before durable local success commit;
+- process crash after outbound call but before durable local commit;
 - response cannot be authenticated/validated;
 - provider returned a transient/unknown status;
-- provider success response was incomplete.
+- provider success or cancellation response was incomplete.
 
-This state MUST NOT automatically redispatch the fiscal command unless §8 safe replay conditions have been proven.
+This state MUST NOT automatically redispatch the fiscal command unless §8 safe replay conditions have been proven for that operation type.
 
 ---
 
@@ -201,9 +225,9 @@ When a stamp attempt becomes ambiguous:
 2. preserve the original immutable request hash and provider reference/idempotency key;
 3. do not mark invoice `STAMPED`;
 4. do not emit `FacturaFiscalEmitida`;
-5. on retry/restart, perform authoritative reconciliation before any new `timbrar()` call unless provider-guaranteed idempotent replay applies.
+5. on retry/restart, perform authoritative reconciliation before any new `timbrar()` call unless provider-guaranteed idempotent stamp replay applies.
 
-Authoritative reconciliation returns one of the logical outcomes:
+Authoritative stamp reconciliation returns one of the logical outcomes:
 
 ```text
 STAMPED_CONFIRMED
@@ -223,7 +247,7 @@ Persist terminal failure if provider semantics establish final rejection.
 
 ### NOT_FOUND_CONFIRMED
 
-Redispatch is allowed only if the provider contract explicitly states that this result proves the original operation was not completed and that replay is safe.
+Redispatch is allowed only if the provider contract explicitly states that this result proves the original stamp operation was not completed and that replay is safe (`supportsSafeStampReplayAfterConfirmedNotFound == true`).
 
 ### PENDING / UNKNOWN
 
@@ -233,38 +257,58 @@ No blind redispatch.
 
 ---
 
-## 8. Safe Replay Rule
+## 8. Operation-Specific Safe Replay Rule
 
-A fiscal operation may be redispatched after an ambiguous outcome only if at least one of these is true:
+A fiscal operation (`STAMP` or `CANCEL`) may be redispatched after an ambiguous outcome only if safe replay is explicitly proven for that specific operation type under an approved provider contract (`ACR020-R1-INT-BLK-01`).
 
-### Rule A — Provider idempotency guarantee
+Conceptually:
 
-The approved PAC contract guarantees that replaying the exact same semantic request with the exact same provider idempotency key cannot create a second fiscal certification.
+```text
+safeReplay(operationType) =
+  providerContractGuaranteesIdempotentReplay(operationType)
+  OR
+  (
+    authoritativeNotFound(operationType)
+    AND
+    providerContractGuaranteesReplaySafeAfterNotFound(operationType)
+  )
+```
+
+### 8.1 Rule A — Provider Idempotency Guarantee (per operation type)
+
+The approved PAC contract explicitly guarantees that replaying the exact same semantic request with the exact same provider idempotency key cannot create a second fiscal certification or duplicate cancellation action.
 
 Required:
 
 - same provider;
+- same operation type (`STAMP` or `CANCEL`);
+- `supportsStampIdempotencyKey == true` (for `STAMP`) or `supportsCancellationIdempotencyKey == true` (for `CANCEL`);
 - same semantic idempotency key;
 - same request hash;
-- same signed fiscal payload identity.
+- same signed fiscal payload / target fiscal UUID identity.
 
-### Rule B — Authoritative not-found reconciliation
+### 8.2 Rule B — Authoritative Not-Found Reconciliation & Safe Replay (per operation type)
 
-The provider authoritatively confirms the original operation does not exist / was not accepted, and its approved contract declares replay safe from that state.
+1. The provider authoritatively confirms the original operation of that type does not exist / was not accepted (`NOT_FOUND_CONFIRMED`); AND
+2. The approved PAC contract explicitly declares replay safe from that state (`supportsSafeStampReplayAfterConfirmedNotFound == true` for `STAMP`, or `supportsSafeCancellationReplayAfterConfirmedNotFound == true` for `CANCEL`).
 
-If neither Rule A nor Rule B is proven:
+### 8.3 Invariant: No Cross-Operation Replay Inference
+
+- A stamp replay guarantee MUST NOT authorize cancellation replay.
+- A cancellation replay guarantee MUST NOT authorize stamp replay.
+- If neither Rule A nor Rule B is proven for the specific operation type:
 
 `AUTO_REDISPATCH = FORBIDDEN`
 
-and the operation remains blocked for authorized operational reconciliation.
+and the operation remains blocked in `RECONCILIATION_REQUIRED` for authorized operational/human reconciliation.
 
 ---
 
 ## 9. Crash/Restart Recovery
 
-The implementation must be safe across process restart.
+The implementation must be safe across process restart for all fiscal operations.
 
-Critical scenario:
+Critical stamping scenario:
 
 ```text
 TRIDENTPOS sends stamp
@@ -290,7 +334,7 @@ Restart MUST NOT erase operation history or reset semantic idempotency identity.
 
 ## 10. Concurrency and Single-Dispatch Safety
 
-Concurrent callers must not create parallel fiscal dispatches for the same logical operation.
+Concurrent callers must not create parallel fiscal dispatches for the same logical operation (stamping or cancellation).
 
 At most one dispatcher may own an operation attempt at a time.
 
@@ -303,7 +347,7 @@ Implementation may use:
 
 Required invariant:
 
-**one semantic fiscal operation cannot produce two simultaneous uncontrolled outbound PAC stamp requests.**
+**one semantic fiscal operation cannot produce two simultaneous uncontrolled outbound PAC requests.**
 
 Local uniqueness alone is insufficient if multiple processes can both dispatch after reading the same state.
 
@@ -409,34 +453,126 @@ If this DB transaction fails after external PAC success:
 
 ---
 
-## 15. Cancellation Contract
+## 15. Cancellation Contract & Reconciliation Lifecycle
 
-Cancellation is also an external fiscal effect and follows equivalent ambiguity rules.
+Cancellation is an external fiscal effect with legal and accounting consequences; it follows strict ambiguity discipline equivalent to stamping (`ACR020-R1-INT-BLK-02`).
 
-A cancellation command must have:
+### 15.1 Cancellation Operation Identity & Durability
 
-- durable semantic idempotency;
-- immutable request identity;
-- provider reference where available;
-- durable operation state;
-- authoritative result validation.
+Every cancellation command MUST have a durable local operation identity (§5):
 
-Transport timeout does not prove cancellation failure.
+- `operationId`;
+- `organizationId`;
+- `branchId`;
+- `invoiceId`;
+- target fiscal UUID being cancelled;
+- `operationType = CANCEL`;
+- `semanticIdempotencyKey`;
+- immutable `requestHash`;
+- `providerName`;
+- provider/client reference when available;
+- attempt count;
+- current state;
+- last deterministic provider outcome;
+- timestamps.
 
-After ambiguous cancellation:
+Recovery MUST continue the original semantic cancellation operation. Creating a new operation identity to bypass an unresolved or ambiguous cancellation is strictly FORBIDDEN.
 
-- do not mark invoice `CANCELLED`;
-- do not emit authoritative cancellation event;
-- reconcile first;
-- redispatch only under provider-proven safe replay rules.
+### 15.2 Normalized Cancellation Reconciliation Outcomes
 
-A `PENDING_APPROVAL` or equivalent SAT/PAC state must remain distinct from final `CANCELLED`.
+When a cancellation attempt is interrupted, times out, or returns an ambiguous response:
+
+1. persist `RECONCILIATION_REQUIRED`;
+2. preserve original immutable request hash and provider/idempotency reference;
+3. do NOT mark invoice `CANCELLED`;
+4. do NOT emit authoritative `FacturaFiscalCancelada` event;
+5. on retry/restart, perform authoritative cancellation reconciliation before any new cancellation dispatch unless provider-guaranteed idempotent cancellation replay applies (§8).
+
+Authoritative cancellation reconciliation maps provider-specific responses into one of five normalized logical outcomes:
+
+```text
+CANCELLATION_CONFIRMED
+PENDING_APPROVAL
+REJECTED_CONFIRMED
+NOT_FOUND_CONFIRMED
+UNKNOWN
+```
+
+Provider-specific PAC/SAT status strings MUST NOT be invented in TRIDENTPOS; the PAC adapter maps provider responses to these logical outcomes strictly according to the approved provider contract.
+
+#### CANCELLATION_CONFIRMED
+
+Finalize the existing local cancellation operation without redispatch. Transition local invoice to `CANCELLED` and emit durable `FacturaFiscalCancelada` event ONLY after validating authoritative cancellation success evidence (§15.3).
+
+#### PENDING_APPROVAL
+
+Non-final state (e.g. awaiting receptor acceptance).  
+**Mandatory Invariant:** `PENDING_APPROVAL != CANCELLED`.  
+The operation remains in a non-final pending state. TRIDENTPOS MUST NOT mark the invoice `CANCELLED` or emit final cancellation outbox events while in `PENDING_APPROVAL`.
+
+#### REJECTED_CONFIRMED
+
+Persist terminal failure (`FAILED_TERMINAL`) only when the approved provider contract establishes definitive rejection (e.g., rejection by receptor or SAT cancellation rules).
+
+#### NOT_FOUND_CONFIRMED
+
+Indicates the cancellation request was not found by the provider. `NOT_FOUND_CONFIRMED` does NOT itself authorize redispatch. Redispatch is permitted ONLY if `supportsSafeCancellationReplayAfterConfirmedNotFound == true` under the approved contract (§8.2). Otherwise:
+
+`AUTO_REDISPATCH = FORBIDDEN`
+
+#### UNKNOWN
+
+Ambiguity persists (e.g. timeout during lookup). Remain `RECONCILIATION_REQUIRED`. No blind redispatch.
+
+### 15.3 Authoritative Cancellation Success Evidence
+
+Before local transition to final `CANCELLED`, TRIDENTPOS MUST validate the authoritative cancellation result.
+
+Minimum required evidence:
+
+- authoritative outcome equivalent to `CANCELLATION_CONFIRMED`;
+- correlation to the original cancellation `operationId`;
+- correlation to the correct fiscal `invoiceId` and target fiscal `UUID`;
+- known provider identity from the configured adapter;
+- same immutable semantic idempotency key and request hash;
+- provider transaction/acknowledgment reference where required by the approved contract;
+- internal consistency of the provider cancellation response.
+
+If evidence is incomplete, mismatched, or ambiguous:
+
+`CANCELLED = FORBIDDEN`
+
+The operation remains `RECONCILIATION_REQUIRED` (or `FAILED_TERMINAL` if definitively rejected).
+
+### 15.4 Cancellation Crash Recovery & Atomic Finalization
+
+Process crash scenario:
+
+```text
+TRIDENTPOS dispatches cancellation
+PAC/SAT completes cancellation
+response or local DB transaction fails
+process restarts
+```
+
+Required recovery:
+
+```text
+load same cancellation operation
+→ preserve original identity and request hash
+→ perform authoritative cancellation reconciliation
+→ validate authoritative cancellation evidence
+→ atomically finalize existing operation (SUCCEEDED) + invoice (CANCELLED) + outbox (FacturaFiscalCancelada)
+→ NO second blind cancellation request
+```
+
+Local DB transaction failure after external PAC success does NOT prove the PAC did not cancel the invoice. Authoritative reconciliation is mandatory.
 
 ---
 
 ## 16. Retry and Reconciliation Worker vs OQ-ARCH-02
 
-This ACR permits a technical recovery worker for already-created explicit fiscal operations.
+This ACR permits a technical recovery worker for already-created explicit fiscal operations (stamping and cancellation).
 
 It does NOT authorize:
 
@@ -455,11 +591,14 @@ Technical retry/reconciliation of an already-requested operation is not the same
 
 ## 17. Provider Contract Pending Behavior
 
-Until an approved real PAC contract establishes the capabilities required in §§4, 7 and 8:
+Until an approved real PAC contract establishes the capabilities required in §§4, 7, 8 and 15:
 
 - production `UnavailablePacConnector` remains fail-closed;
 - mocks remain test-only;
-- no mock idempotency behavior may be treated as production evidence;
+- authoritative stamp and cancellation lookups cannot be claimed;
+- stamp and cancellation replay safety cannot be claimed;
+- provider idempotency (stamping or cancellation) cannot be claimed;
+- provider-specific cancellation status semantics cannot be claimed;
 - no provider-specific URL, credentials, status values, retry policy, or SLA may be invented.
 
 If implementation reaches a point where provider semantics are required and unavailable:
@@ -514,7 +653,8 @@ At minimum record/audit:
 - organization/branch;
 - invoice ID;
 - provider name;
-- operation type;
+- operation type (`STAMP` or `CANCEL`);
+- contract provenance references/identifiers (§4);
 - state transitions;
 - attempt number;
 - reconciliation outcome category;
@@ -533,7 +673,7 @@ Never log:
 
 ## 20. Required R3 Tests
 
-R3 implementation evidence must include at minimum:
+R3 implementation evidence must include at minimum the following **42 tests**:
 
 1. default PAC unavailable → fail closed.
 2. missing vault reference → fail closed before PAC call.
@@ -549,24 +689,34 @@ R3 implementation evidence must include at minimum:
 12. timeout/connection loss after possible dispatch → `RECONCILIATION_REQUIRED`.
 13. restart from `RECONCILIATION_REQUIRED` performs reconciliation before redispatch.
 14. authoritative reconciliation `STAMPED_CONFIRMED` finalizes locally without second stamp request.
-15. reconciliation `PENDING/UNKNOWN` does not redispatch.
-16. `NOT_FOUND_CONFIRMED` without provider safe-replay capability does not redispatch.
-17. `NOT_FOUND_CONFIRMED` with explicit safe-replay capability can redispatch exactly once under controlled ownership.
-18. provider-idempotent replay path preserves same semantic key and request hash.
-19. conflicting idempotency-key reuse fails closed.
-20. retry after local success returns prior result without PAC call.
-21. crash after provider success but before local commit is recoverable without duplicate fiscal effect.
-22. concurrent callers cannot produce uncontrolled duplicate outbound requests.
-23. operation/invoice/outbox local finalization is atomic.
+15. stamp reconciliation `PENDING/UNKNOWN` does not redispatch.
+16. stamp `NOT_FOUND_CONFIRMED` without provider safe-replay capability does not redispatch.
+17. stamp `NOT_FOUND_CONFIRMED` with explicit safe-replay capability can redispatch exactly once under controlled ownership.
+18. provider-idempotent stamp replay path preserves same semantic key and request hash.
+19. conflicting stamp idempotency-key reuse fails closed.
+20. retry after local stamp success returns prior result without PAC call.
+21. crash after provider stamp success but before local commit is recoverable without duplicate fiscal effect.
+22. concurrent callers cannot produce uncontrolled duplicate outbound stamp requests.
+23. stamp operation/invoice/outbox local finalization is atomic.
 24. private key absent from DB, DTOs, outbox and logs under test observability.
-25. cancellation ambiguity remains non-final until authoritative resolution.
-26. cancellation `PENDING_APPROVAL` is not treated as final `CANCELLED`.
-27. no automatic factura-global scheduler exists.
-28. `OQ-ARCH-02` remains OPEN.
-29. RLS/FORCE RLS tenant isolation remains PASS.
-30. cross-context physical FK count remains zero.
-31. forward migration and authorized non-production down migration preserve predecessor WPs.
-32. full regression, graph, format, lint, typecheck and build pass.
+25. cancellation idempotency unsupported → no automatic redispatch.
+26. cancellation `NOT_FOUND_CONFIRMED` without safe-replay capability → no redispatch.
+27. cancellation `NOT_FOUND_CONFIRMED` with explicitly proven applicable safe-replay capability → controlled replay allowed.
+28. cancellation `PENDING_APPROVAL` is not treated as final `CANCELLED` (`PENDING_APPROVAL != CANCELLED`).
+29. cancellation `UNKNOWN` remains unresolved / no blind redispatch.
+30. authoritative cancellation confirmation finalizes the same operation locally.
+31. cancellation result correlated to wrong invoice/UUID/operation is rejected.
+32. conflicting cancellation idempotency-key reuse fails closed.
+33. retry after local cancellation success returns prior result without PAC call.
+34. crash after provider cancellation success but before local commit is recoverable without duplicate cancellation.
+35. mock cancellation idempotency/replay behavior does not establish production replay capability.
+36. capability declared true without required approved contractual provenance fails validation / is rejected fail-closed.
+37. no automatic factura-global scheduler exists.
+38. `OQ-ARCH-02` remains OPEN.
+39. RLS/FORCE RLS tenant isolation remains PASS.
+40. cross-context physical FK count remains zero.
+41. forward migration and authorized non-production down migration preserve predecessor WPs.
+42. full regression, graph, format, lint, typecheck and build pass.
 
 Tests using mocks must explicitly distinguish:
 
@@ -684,12 +834,12 @@ Primary R3 objectives:
 
 1. remove remaining synthetic CSD certificate metadata fallbacks;
 2. enforce complete/validated CSD readiness;
-3. implement provider-capability-aware reconciliation;
+3. implement provider-capability-aware reconciliation for both stamping and cancellation;
 4. prevent blind redispatch after ambiguous PAC outcome;
-5. validate authoritative fiscal success before local `STAMPED`;
+5. validate authoritative fiscal success before local `STAMPED` and authoritative cancellation evidence before local `CANCELLED`;
 6. make restart/crash recovery real rather than mock-dependent;
 7. harden concurrent single-dispatch semantics;
-8. apply equivalent ambiguity safety to cancellation where required;
+8. enforce `PENDING_APPROVAL != CANCELLED`;
 9. preserve `OQ-ARCH-02`;
 10. preserve module/data/security boundaries.
 
@@ -699,7 +849,7 @@ No architecture-by-implementation.
 
 ## 26. Governance Effect
 
-This document is now a FROZEN CANDIDATE R1 on canonical base `0c46307e09fe77383320a86b6daff86d2983e9af` under EAAF v1.3.0 (`167cea36c09c1031c763971ff790db2e0d0f7362`), following the canonicalization of ACR-2026-019.
+This document is now a FROZEN CANDIDATE R2 on canonical base `0c46307e09fe77383320a86b6daff86d2983e9af` under EAAF v1.3.0 (`167cea36c09c1031c763971ff790db2e0d0f7362`), superseding Frozen Candidate R1 `2b71ed748c9ae542533b91b23be51159a6ab81c8` following Integration R1 HOLD remediation.
 
 Before WP-021 R3 implementation may be authorized, this ACR candidate must complete all independent review gates (§23), obtain Product Owner approval on the exact frozen subject, and merge canonically to `main`.
 
