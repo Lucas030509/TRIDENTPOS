@@ -1,15 +1,15 @@
 # ACR-2026-020 — WP-021 PAC RECONCILIATION & FISCAL SUCCESS CONTRACT
 
-**Status:** PROPOSED / FROZEN CANDIDATE R2 — PENDING INDEPENDENT REVIEW  
+**Status:** PROPOSED / FROZEN CANDIDATE R3 — PENDING INDEPENDENT REVIEW  
 **Date:** 2026-09-22  
 **Scope:** WP-021 — Fiscal Invoicing Engine  
 **Canonical Governance Base:** `0c46307e09fe77383320a86b6daff86d2983e9af`  
 **Governing Framework:** EAAF v1.3.0 @ `167cea36c09c1031c763971ff790db2e0d0f7362`  
 **Parent Governance:** ACR-2026-019 — DONE / CANONICAL  
-**Superseded Frozen Candidate R1:** `2b71ed748c9ae542533b91b23be51159a6ab81c8`  
-**Integration R1 Gate:** HOLD  
-**Integration R1 Evidence:** `dea99835a04ea3e4f44b3f78909b52983c418f1d`  
-**R2 Remediation Purpose:** Remediation of `ACR020-R1-INT-BLK-01` (Operation-specific idempotency / safe-replay capabilities) and `ACR020-R1-INT-BLK-02` (Authoritative cancellation reconciliation / final-success contract), incorporating `ACR020-R1-INT-ADV-01` (Contractual capability provenance).  
+**Superseded Frozen Candidate R2:** `b015c61da8f0ff26c40268a7e4d406888346b9f9`  
+**Data R2 Gate:** HOLD  
+**Data R2 Evidence:** `7358b0b680eca7118aa9c4760a7cd6437c881dce`  
+**R3 Remediation Purpose:** Remediation of `ACR020-R2-DATA-BLK-01` (Fiscal backup / PITR / restore recovery contract) and `ACR020-R2-DATA-BLK-02` (Migration preservation invariants for fiscal operation history and outbox state), incorporating `ACR020-R2-DATA-ADV-01` (Retention and purge policy authority binding) and `ACR020-R2-DATA-ADV-02` (Tenant-scoped recovery lookups in evidence requirements).  
 **Observed WP-021 R2 Subject:** `2d9cd149120c60b4d30778d0583344196bd210b7`  
 **Risk Class:** RC4 — CRITICAL  
 **Primary Review Domains:** Solution Architecture, Integration, Data, Security, QA, Code Review  
@@ -28,11 +28,13 @@ It defines the minimum architecture and safety invariants that any future PAC ad
 - safe fiscal stamping;
 - safe cancellation;
 - durable retry;
-- restart recovery;
+- process restart recovery;
+- Cloud backup and PITR disaster recovery without duplicate fiscal dispatch;
+- lossless schema migration and tenant isolation preservation;
 - duplicate-stamp and duplicate-cancellation prevention;
 - authoritative reconciliation for all fiscal operations;
 - valid fiscal success and cancellation confirmation;
-- safe crash recovery.
+- safe crash and restore recovery.
 
 ---
 
@@ -46,6 +48,8 @@ WP-021 R2 materially improves fiscal safety, but independent inspection identifi
 4. The current mock provides deterministic replay behavior that is not yet guaranteed by any real PAC provider contract.
 5. Cancellation is also an external fiscal effect with legal consequences and requires equivalent operation-specific idempotency, reconciliation, and ambiguity discipline (`ACR020-R1-INT-BLK-01`, `ACR020-R1-INT-BLK-02`).
 6. Provider capability declarations must have immutable contractual provenance to prevent unfounded claims of replay or idempotency support (`ACR020-R1-INT-ADV-01`).
+7. Fiscal recovery contracts must explicitly govern Cloud backup / PITR / disaster recovery where external PAC success predates the restored local database state (`ACR020-R2-DATA-BLK-01`).
+8. Schema migrations affecting fiscal operation tables must enforce strict preservation invariants across forward migrations and non-production rollbacks to prevent loss or resetting of ambiguous operations, request hashes, or outbox correlations (`ACR020-R2-DATA-BLK-02`).
 
 The canonical Implementation Plan already states:
 
@@ -86,9 +90,9 @@ The external PAC/provider is authoritative for:
 
 ### 3.3 No dual authority
 
-A local timeout, socket close, process crash, or missing HTTP response does not prove that the PAC did not perform the fiscal operation (stamping or cancellation).
+A local timeout, socket close, process crash, database restore, or missing HTTP response does not prove that the PAC did not perform the fiscal operation (stamping or cancellation).
 
-TRIDENTPOS MUST NOT convert transport uncertainty into a fiscal conclusion.
+TRIDENTPOS MUST NOT convert transport or persistence uncertainty into a fiscal conclusion.
 
 ---
 
@@ -209,6 +213,7 @@ Examples:
 - timeout after possible dispatch;
 - socket drop after request transmission;
 - process crash after outbound call but before durable local commit;
+- database restored from backup/PITR where external dispatch occurred after the restored snapshot;
 - response cannot be authenticated/validated;
 - provider returned a transient/unknown status;
 - provider success or cancellation response was incomplete.
@@ -225,7 +230,7 @@ When a stamp attempt becomes ambiguous:
 2. preserve the original immutable request hash and provider reference/idempotency key;
 3. do not mark invoice `STAMPED`;
 4. do not emit `FacturaFiscalEmitida`;
-5. on retry/restart, perform authoritative reconciliation before any new `timbrar()` call unless provider-guaranteed idempotent stamp replay applies.
+5. on retry/restart/restore, perform authoritative reconciliation before any new `timbrar()` call unless provider-guaranteed idempotent stamp replay applies.
 
 Authoritative stamp reconciliation returns one of the logical outcomes:
 
@@ -304,9 +309,11 @@ and the operation remains blocked in `RECONCILIATION_REQUIRED` for authorized op
 
 ---
 
-## 9. Crash/Restart Recovery
+## 9. Crash, Process Restart, and Backup/PITR Disaster Recovery Contracts
 
-The implementation must be safe across process restart for all fiscal operations.
+The implementation must be safe across process restarts, node crashes, and database restoration (Cloud PITR / backup restore) for all fiscal operations (`ACR020-R2-DATA-BLK-01`).
+
+### 9.1 Process Restart / Crash Recovery
 
 Critical stamping scenario:
 
@@ -329,6 +336,32 @@ load durable operation
 ```
 
 Restart MUST NOT erase operation history or reset semantic idempotency identity.
+
+### 9.2 Fiscal Backup / PITR / Restore Recovery Contract (`ACR020-R2-DATA-BLK-01`)
+
+Disaster recovery and tenant restoration introduce the hazard where an external PAC effect occurred after the database snapshot point represented in the restored database.
+
+Governed scenario:
+
+```text
+T0: fiscal operation persisted in local database (e.g. IN_FLIGHT or RECONCILIATION_REQUIRED)
+T1: TRIDENTPOS dispatches STAMP or CANCEL request to PAC
+T2: PAC successfully completes the external fiscal effect (e.g. certifies CFDI or registers cancellation)
+T3: local finalization transaction is not durably available in the restored snapshot
+T4: Cloud database is restored using backup / Point-in-Time Recovery (PITR) or tenant restoration
+T5: restored TRIDENTPOS wakes up and encounters the unfinalized/ambiguous fiscal operation
+```
+
+Required recovery invariants after database restore:
+
+1. **Identity & Scope Preservation:** Restoration MUST preserve durable fiscal operation identity (`operationId`, `organizationId`, `branchId`, `invoiceId`, target fiscal `UUID`, `operationType`, `semanticIdempotencyKey`, `requestHash`, `providerName`, and provider references).
+2. **Ambiguity Preservation:** A restored operation that was in-flight or ambiguous MUST remain `RECONCILIATION_REQUIRED`. Restoration MUST NOT transform `RECONCILIATION_REQUIRED` into `PENDING`, `READY`, or any state that permits an unproven fresh external dispatch.
+3. **No Inference from Restored Absences:** Local absence of `STAMPED`, `CANCELLED`, fiscal UUID, stamped XML, or outbox records in the restored database point MUST NOT be interpreted as proof that the PAC did not execute the operation.
+4. **Authoritative Reconciliation First:** Before any local state transition or redispatch, TRIDENTPOS MUST perform authoritative reconciliation with the provider.
+5. **Atomic Event & State Consistency:** If the PAC authoritatively confirms success (`STAMPED_CONFIRMED` or `CANCELLATION_CONFIRMED`), TRIDENTPOS MUST atomically finalize the existing restored operation, transition invoice state, and emit the durable outbox event.
+6. **No Duplicate Events:** A restored system MUST NOT publish duplicate semantic events (`FacturaFiscalEmitida` / `FacturaFiscalCancelada`) for operations already finalized prior to restore. Outbox publication must check durable deduplication.
+7. **Tenant-Scoped Recovery (`ACR020-R2-DATA-ADV-02`):** Restore and recovery workflows remain strictly tenant-isolated under RLS + `FORCE RLS`. An operation ID, provider reference, fiscal UUID, or invoice ID from one tenant MUST NOT allow another tenant to read, reconcile, claim, or finalize that operation.
+8. **Mock Limitation:** Mock tests may validate the restore/reconciliation state machine logic but cannot prove real PAC provider capabilities (`BLOCKED BY CONTRACT`).
 
 ---
 
@@ -486,7 +519,7 @@ When a cancellation attempt is interrupted, times out, or returns an ambiguous r
 2. preserve original immutable request hash and provider/idempotency reference;
 3. do NOT mark invoice `CANCELLED`;
 4. do NOT emit authoritative `FacturaFiscalCancelada` event;
-5. on retry/restart, perform authoritative cancellation reconciliation before any new cancellation dispatch unless provider-guaranteed idempotent cancellation replay applies (§8).
+5. on retry/restart/restore, perform authoritative cancellation reconciliation before any new cancellation dispatch unless provider-guaranteed idempotent cancellation replay applies (§8).
 
 Authoritative cancellation reconciliation maps provider-specific responses into one of five normalized logical outcomes:
 
@@ -609,37 +642,75 @@ not guessed behavior.
 
 ---
 
-## 18. Data Requirements
+## 18. Data Requirements, Retention Governance & Migration Preservation Contract
 
-The durable fiscal operation store must support the governed state model.
+The durable fiscal operation store must support the governed state model across all schema migrations, disaster recovery, and operational lifecycles (`ACR020-R2-DATA-BLK-02`).
 
-The existing R2 `fiscal_stamping_operations` may be retained and extended if it can satisfy the contract without semantic contradiction.
+The existing R2 `fiscal_stamping_operations` may be retained and extended, generalized into a provider-operation store, or partitioned into dedicated stamping and cancellation stores through a governed migration, provided that all semantic preservation invariants are strictly satisfied.
 
-If cancellation requires the same durability model, implementation may:
+Any schema change is RC4 because tenant isolation, accounting compliance, and fiscal records are affected.
 
-- generalize the table into a provider-operation abstraction through a governed migration; or
-- introduce a cancellation-specific durable operation table.
+### 18.1 Required Data Attributes & Constraints
 
-The Builder may not choose a broader data redesign merely for convenience.
-
-Any schema change is RC4 because tenant isolation and fiscal records are affected.
-
-Required:
+Every persisted fiscal operation record MUST maintain:
 
 - `organization_id`;
 - `branch_id`;
-- tenant-safe relationships;
-- RLS + FORCE RLS;
-- semantic idempotency uniqueness;
-- request hash;
-- durable state;
-- attempt count;
-- provider identity/reference where supported;
-- reconciliation timestamps/status;
-- authoritative external UUID/result reference after success;
-- created/updated timestamps.
+- `invoice_id`;
+- target fiscal `uuid` where applicable (mandatory for cancellation);
+- `operation_type` (`STAMP` or `CANCEL`);
+- `semantic_idempotency_key` (unique within tenant scope);
+- `request_hash` (immutable hash of signed payload/command);
+- `provider_name`;
+- `provider_reference` / external transaction reference where supported;
+- `state` (governed enum: `PENDING`, `READY`, `IN_FLIGHT`, `SUCCEEDED`, `FAILED_TERMINAL`, `RETRYABLE_CONFIRMED`, `RECONCILIATION_REQUIRED`);
+- `attempt_count`;
+- `reconciliation_status` / outcome category;
+- authoritative external `fiscal_uuid` and certified `stamped_xml` (for stamp success);
+- authoritative cancellation outcome metadata (for cancellation success);
+- `contract_provenance_ref` (§4);
+- timestamps (`created_at`, `updated_at`, `last_attempted_at`, `reconciled_at`).
 
-No cross-context physical FK may be introduced.
+Mandatory database invariants:
+- Strict multi-tenant isolation with RLS + `FORCE RLS`;
+- Zero cross-context physical foreign keys (`FK count = 0`).
+
+### 18.2 Forward Migration Preservation Invariants (`ACR020-R2-DATA-BLK-02`)
+
+For every populated predecessor fiscal operation record, forward migrations MUST preserve or losslessly transform all operational, identity, and outbox correlation fields:
+
+1. **Identity & Hash Invariance:** Migration MUST NOT reset, regenerate, or alter `operation_id`, `semantic_idempotency_key`, `request_hash`, `organization_id`, `branch_id`, or `invoice_id`.
+2. **Ambiguity Protection:** Unresolved operations (`IN_FLIGHT`, `RECONCILIATION_REQUIRED`) MUST retain their exact ambiguity status. Migration MUST NOT reset attempt counts, erase provider references, or convert `RECONCILIATION_REQUIRED` into `PENDING`, `READY`, or a retryable state that would permit automatic redispatch.
+3. **Authoritative Truth Protection:** Finalized records (`SUCCEEDED`, `FAILED_TERMINAL`) MUST retain their authoritative evidence. Certified `stamped_xml` MUST NEVER be replaced with pre-stamp XML. `PENDING_APPROVAL` MUST NEVER be converted into `CANCELLED`.
+4. **Outbox History Correlation:** Migration MUST preserve the 1:1 relationship between finalized operations and published outbox events (`FacturaFiscalEmitida`, `FacturaFiscalCancelada`). No pending operation may gain a false event, and no schema split may produce duplicate events.
+5. **Fail-Closed on Lossy Migration:** If lossless transformation of any existing fiscal record cannot be mathematically or structurally proven, the migration MUST fail closed and block execution.
+
+### 18.3 Non-Production Rollback / Down Migration Contract
+
+Authorized non-production down migrations MUST refuse destructive loss of fiscal truth:
+- If a predecessor schema cannot represent a newer fiscal state, field, or cancellation record losslessly, the down migration MUST fail closed and refuse execution.
+- Destructive production rollback is strictly FORBIDDEN; recovery must proceed forward via governed remediation.
+
+### 18.4 Populated Predecessor Migration Evidence Requirement
+
+Migration validation MUST be executed and proven against **populated predecessor test fixtures**, not empty tables. Test datasets must contain representative records for:
+- Unresolved STAMP (`IN_FLIGHT`, `RECONCILIATION_REQUIRED`);
+- Succeeded STAMP with certified XML and outbox correlation;
+- Unresolved CANCEL;
+- Cancellation in `PENDING_APPROVAL`;
+- Succeeded CANCEL with outbox correlation;
+- Terminal failure (`FAILED_TERMINAL`);
+- Multi-tenant and multi-branch configurations.
+
+### 18.5 Retention and Purge Policy Authority Binding (`ACR020-R2-DATA-ADV-01`)
+
+Fiscal operation records, reconciliation logs, and cryptographic audit trails MUST remain durable according to an approved retention authority:
+- Exact statutory retention periods and purge schedules are NOT decided in this ACR and MUST NOT be invented by the Builder.
+- Production deletion/purge behaviors MUST be governed by explicit future Product Owner / Legal authority (e.g. `HDG-DATA`), while preserving all ongoing reconciliation, dispute, and tax compliance obligations.
+
+### 18.6 Multi-Tenant Recovery Lookups Evidence Requirement (`ACR020-R2-DATA-ADV-02`)
+
+Implementation evidence must include explicit negative tests proving that recovery and reconciliation lookups (`operation_id`, `semantic_idempotency_key`, `provider_reference`, fiscal `uuid`) are strictly tenant-scoped under RLS and cannot read, claim, reconcile, or finalize records belonging to another tenant.
 
 ---
 
@@ -658,6 +729,7 @@ At minimum record/audit:
 - state transitions;
 - attempt number;
 - reconciliation outcome category;
+- disaster recovery / PITR restore correlation where applicable;
 - external non-secret reference where permitted;
 - error classification;
 - timestamps.
@@ -673,8 +745,9 @@ Never log:
 
 ## 20. Required R3 Tests
 
-R3 implementation evidence must include at minimum the following **42 tests**:
+R3 implementation evidence must include at minimum the following **57 tests**:
 
+### Core Stamping, Signing & Security Tests (1–24)
 1. default PAC unavailable → fail closed.
 2. missing vault reference → fail closed before PAC call.
 3. missing private key → fail closed before PAC call.
@@ -699,6 +772,8 @@ R3 implementation evidence must include at minimum the following **42 tests**:
 22. concurrent callers cannot produce uncontrolled duplicate outbound stamp requests.
 23. stamp operation/invoice/outbox local finalization is atomic.
 24. private key absent from DB, DTOs, outbox and logs under test observability.
+
+### Cancellation, Capability & Provenance Tests (25–36)
 25. cancellation idempotency unsupported → no automatic redispatch.
 26. cancellation `NOT_FOUND_CONFIRMED` without safe-replay capability → no redispatch.
 27. cancellation `NOT_FOUND_CONFIRMED` with explicitly proven applicable safe-replay capability → controlled replay allowed.
@@ -711,12 +786,33 @@ R3 implementation evidence must include at minimum the following **42 tests**:
 34. crash after provider cancellation success but before local commit is recoverable without duplicate cancellation.
 35. mock cancellation idempotency/replay behavior does not establish production replay capability.
 36. capability declared true without required approved contractual provenance fails validation / is rejected fail-closed.
-37. no automatic factura-global scheduler exists.
-38. `OQ-ARCH-02` remains OPEN.
-39. RLS/FORCE RLS tenant isolation remains PASS.
-40. cross-context physical FK count remains zero.
-41. forward migration and authorized non-production down migration preserve predecessor WPs.
-42. full regression, graph, format, lint, typecheck and build pass.
+
+### Backup / PITR / Disaster Recovery Tests (37–42) (`ACR020-R2-DATA-BLK-01`)
+37. Cloud PITR/restore before local finalization after possible provider STAMP success → authoritative reconciliation before redispatch.
+38. Cloud PITR/restore before local finalization after possible provider CANCEL success → authoritative reconciliation before redispatch.
+39. Restored ambiguous operation preserves operation identity, request hash, provider correlation, and tenant scope without state reset.
+40. Restore cannot duplicate final fiscal outbox events or publish events from unfinalized/ambiguous states.
+41. Restore cannot transform unresolved `RECONCILIATION_REQUIRED` into fresh `PENDING`/`READY` retry state.
+42. Cross-tenant restore and recovery lookups fail closed under RLS (tenant A cannot read, reconcile, claim, or finalize tenant B's fiscal records).
+
+### Populated Schema Migration Preservation Tests (43–51) (`ACR020-R2-DATA-BLK-02`)
+43. Populated unresolved STAMP survives forward migration semantically unchanged (preserves idempotency key, request hash, state).
+44. Populated successful STAMP preserves UUID, stamped XML, metadata, and outbox correlation without XML degradation.
+45. Populated unresolved CANCEL survives forward migration semantically unchanged.
+46. Populated `PENDING_APPROVAL` remains non-final through forward migration (`PENDING_APPROVAL != CANCELLED`).
+47. Populated successful CANCEL preserves authoritative result, UUID, and outbox correlation.
+48. Conflicting or lossy migration mapping fails closed / blocks migration.
+49. Migration preserves tenant and branch isolation with RLS / FORCE RLS intact.
+50. Authorized non-production down migration refuses destructive loss of fiscal truth / fails closed on lossy data.
+51. Migration against populated multi-tenant predecessor records preserves provider references, attempt counts, and audit trails across multiple tenants.
+
+### Governance, Boundaries & Multi-Tenant Lookup Tests (52–57)
+52. no automatic factura-global scheduler exists.
+53. `OQ-ARCH-02` remains OPEN.
+54. RLS/FORCE RLS tenant isolation remains PASS.
+55. cross-context physical FK count remains zero.
+56. multi-tenant recovery lookups (`operation_id`, `semantic_idempotency_key`, `provider_reference`, invoice `uuid`) strictly isolate tenant boundaries (`ACR020-R2-DATA-ADV-02`).
+57. full regression, graph, format, lint, typecheck and build pass.
 
 Tests using mocks must explicitly distinguish:
 
@@ -734,7 +830,7 @@ For R3:
 - source/static claims: minimum E1;
 - domain/unit behavior: minimum E2;
 - DB + adapter integration: minimum E3;
-- crash/restart/concurrency behavior: minimum E4 where the claim depends on runtime behavior;
+- crash/restart/restore/concurrency behavior: minimum E4 where the claim depends on runtime behavior;
 - real provider/PAC certification is not claimable until provider integration evidence exists.
 
 No PASS may rely only on Builder prose.
@@ -820,6 +916,7 @@ This ACR does NOT decide:
 - fiscal stamping timing;
 - automatic factura-global scheduling;
 - cancellation business policy beyond technical outcome safety;
+- statutory data retention periods or automated purge intervals;
 - tax policy;
 - customer self-invoicing UX;
 - Product Owner open questions.
@@ -837,11 +934,12 @@ Primary R3 objectives:
 3. implement provider-capability-aware reconciliation for both stamping and cancellation;
 4. prevent blind redispatch after ambiguous PAC outcome;
 5. validate authoritative fiscal success before local `STAMPED` and authoritative cancellation evidence before local `CANCELLED`;
-6. make restart/crash recovery real rather than mock-dependent;
-7. harden concurrent single-dispatch semantics;
-8. enforce `PENDING_APPROVAL != CANCELLED`;
-9. preserve `OQ-ARCH-02`;
-10. preserve module/data/security boundaries.
+6. make restart/crash recovery and Cloud backup/PITR recovery real rather than mock-dependent;
+7. implement populated predecessor schema migration preservation and lossless data mapping;
+8. harden concurrent single-dispatch semantics;
+9. enforce `PENDING_APPROVAL != CANCELLED`;
+10. preserve `OQ-ARCH-02`;
+11. preserve module/data/security boundaries.
 
 No architecture-by-implementation.
 
@@ -849,7 +947,7 @@ No architecture-by-implementation.
 
 ## 26. Governance Effect
 
-This document is now a FROZEN CANDIDATE R2 on canonical base `0c46307e09fe77383320a86b6daff86d2983e9af` under EAAF v1.3.0 (`167cea36c09c1031c763971ff790db2e0d0f7362`), superseding Frozen Candidate R1 `2b71ed748c9ae542533b91b23be51159a6ab81c8` following Integration R1 HOLD remediation.
+This document is now a FROZEN CANDIDATE R3 on canonical base `0c46307e09fe77383320a86b6daff86d2983e9af` under EAAF v1.3.0 (`167cea36c09c1031c763971ff790db2e0d0f7362`), superseding Frozen Candidate R2 `b015c61da8f0ff26c40268a7e4d406888346b9f9` following Data R2 HOLD remediation.
 
 Before WP-021 R3 implementation may be authorized, this ACR candidate must complete all independent review gates (§23), obtain Product Owner approval on the exact frozen subject, and merge canonically to `main`.
 
