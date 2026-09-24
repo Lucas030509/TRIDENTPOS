@@ -1,23 +1,22 @@
 # ACR-2026-020 — WP-021 PAC RECONCILIATION & FISCAL SUCCESS CONTRACT
 
-**Status:** PROPOSED / FROZEN CANDIDATE R4 — PENDING INDEPENDENT REVIEW  
-**Date:** 2026-09-22  
+**Status:** FROZEN CANDIDATE R5 — PENDING INDEPENDENT REVIEW  
+**Date:** 2026-09-24  
 **Scope:** WP-021 — Fiscal Invoicing Engine  
-**Canonical Governance Base:** `0c46307e09fe77383320a86b6daff86d2983e9af`  
-**Governing Framework:** EAAF v1.3.0 @ `167cea36c09c1031c763971ff790db2e0d0f7362`  
+**Canonical Governance Base:** 0c46307e09fe77383320a86b6daff86d2983e9af  
+**Governing Framework:** EAAF v1.3.0 @ 167cea36c09c1031c763971ff790db2e0d0f7362  
 **Parent Governance:** ACR-2026-019 — DONE / CANONICAL  
-**Superseded Frozen Candidate R3:** `3be54b042044ea5f5ee483afffbe27588e965bd3`  
-**Solution Architecture R3 Gate:** HOLD  
-**Solution Architecture R3 Evidence:** `d6ae04c140044a3dd1b9e1d7dd377024d5e9cb5a`  
-**Review Cycle Reset Authority:** `5b7e7f2d0fb09268a6ef5c0509d158c4877ab7a0` (`RESET_AUTHORIZED — ACR-2026-020 R4 ONLY`)  
-**R4 Remediation Purpose:** Remediation of `ACR020-R3-SA-BLK-01` (Harmonization of PITR restore recovery with §8 Rule A idempotent replay) and `ACR020-R3-SA-BLK-02` (At-least-once outbox delivery with stable semantic event identity and consumer idempotency/inbox contract), incorporating `ACR020-R3-SA-ADV-01` (Pairwise capability non-inference tests) and `ACR020-R3-SA-ADV-02` (Populated `RETRYABLE_CONFIRMED` migration fixture).  
-**Observed WP-021 R2 Subject:** `2d9cd149120c60b4d30778d0583344196bd210b7`  
+**Superseded Frozen Candidate R4:** 2b6ac104554bcd585f96bc0606528c1d7142b218  
+**R4 Quick Integrity Evidence:** 8d5d588ff5d05b3ca753a884d80c5918523e5db7 — PASS (mechanical preflight only)  
+**R4 Solution Architecture Evidence:** 871453289b67c0240c57f79f6659151d7f5aadcf — PASS with advisory; historical exact-subject review  
+**R4 Integration Evidence:** 098c59d842c310180e2ad99974a41a6dd458a981 — HOLD; blockers ACR020-R4-INT-BLK-01 and ACR020-R4-INT-BLK-02  
+**R4 Review Cycle Reset Authority:** 5b7e7f2d0fb09268a6ef5c0509d158c4877ab7a0  
+**R5 Scoped Review Cycle Authority:** db6e2992ed6aadc2242d870046a656c2d178a25e (evidence/ACR-2026-020_R5_REVIEW_CYCLE_RESET.md)  
+**R5 Remediation Purpose:** Resolve ACR020-R4-INT-BLK-01 (fiscal event contract versioning and compatibility) and ACR020-R4-INT-BLK-02 (use-time capability provenance scope and validity enforcement), and specify consumer effect/inbox restore-domain acceptance required to close the R4 advisory without selecting a provider or changing global budgets.  
+**Observed WP-021 R2 Subject:** 2d9cd149120c60b4d30778d0583344196bd210b7  
 **Risk Class:** RC4 — CRITICAL  
 **Primary Review Domains:** Solution Architecture, Integration, Data, Security, QA, Code Review  
-**Protected Product Owner Question:** `OQ-ARCH-02` remains OPEN
-
----
-
+**Protected Product Owner Question:** OQ-ARCH-02 remains OPEN
 ## 1. Purpose
 
 WP-021 requires a provider-neutral fiscal integration contract that prevents duplicate or false fiscal state when a PAC request has an ambiguous outcome.
@@ -45,24 +44,25 @@ It defines the minimum architecture and safety invariants that any future PAC ad
 WP-021 R2 materially improves fiscal safety, but independent inspection identified unresolved RC4 hazards:
 
 1. CSD metadata can still fall back to synthetic certificate values when the configured fiscal certificate is incomplete.
-2. `RECONCILIATION_REQUIRED` currently returns to `IN_FLIGHT` and may call `timbrar()` again without first obtaining an authoritative provider result.
-3. A PAC response labeled `STAMPED` can be accepted even when required fiscal evidence is missing.
+2. RECONCILIATION_REQUIRED currently returns to IN_FLIGHT and may call timbrar() again without first obtaining an authoritative provider result.
+3. A PAC response labeled STAMPED can be accepted even when required fiscal evidence is missing.
 4. The current mock provides deterministic replay behavior that is not yet guaranteed by any real PAC provider contract.
-5. Cancellation is also an external fiscal effect with legal consequences and requires equivalent operation-specific idempotency, reconciliation, and ambiguity discipline (`ACR020-R1-INT-BLK-01`, `ACR020-R1-INT-BLK-02`).
-6. Provider capability declarations must have immutable contractual provenance to prevent unfounded claims of replay or idempotency support (`ACR020-R1-INT-ADV-01`).
-7. Fiscal recovery contracts must explicitly govern Cloud backup / PITR disaster recovery, harmonizing authoritative reconciliation with proven Rule A idempotent replay (`ACR020-R2-DATA-BLK-01`, `ACR020-R3-SA-BLK-01`).
-8. Outbox delivery across disaster recovery must not assume producer-only deduplication; it requires at-least-once transport delivery, stable semantic event identity, and transactionally coupled consumer idempotency ledgers (`ACR020-R3-SA-BLK-02`).
-9. Schema migrations affecting fiscal operation tables must enforce strict preservation invariants across forward migrations and non-production rollbacks to prevent loss or resetting of ambiguous operations, request hashes, or outbox correlations (`ACR020-R2-DATA-BLK-02`, `ACR020-R3-SA-ADV-02`).
+5. Cancellation is also an external fiscal effect with legal consequences and requires equivalent operation-specific idempotency, reconciliation, and ambiguity discipline (ACR020-R1-INT-BLK-01, ACR020-R1-INT-BLK-02).
+6. Provider capability declarations must have immutable contractual provenance to prevent unfounded claims of replay or idempotency support (ACR020-R1-INT-ADV-01).
+7. Fiscal recovery contracts must explicitly govern Cloud backup / PITR disaster recovery, harmonizing authoritative reconciliation with proven Rule A idempotent replay (ACR020-R2-DATA-BLK-01, ACR020-R3-SA-BLK-01).
+8. Outbox delivery across disaster recovery must not assume producer-only deduplication; it requires at-least-once transport delivery, stable semantic event identity, and transactionally coupled consumer idempotency ledgers (ACR020-R3-SA-BLK-02).
+9. Schema migrations affecting fiscal operation tables must enforce strict preservation invariants across forward migrations and non-production rollbacks to prevent loss or resetting of ambiguous operations, request hashes, or outbox correlations (ACR020-R2-DATA-BLK-02, ACR020-R3-SA-ADV-02).
+10. Fiscal event payloads need an explicit version and compatibility contract so producer and consumer changes cannot silently reinterpret or drop required fiscal facts (ACR020-R4-INT-BLK-01).
+11. A capability's contractual provenance must be current, integrity-valid, and scoped to the exact provider, operation, and recovery condition at the time of use; missing, stale, revoked, ambiguous, or unverifiable evidence must make that capability unavailable (ACR020-R4-INT-BLK-02).
+12. Consumer inbox deduplication must remain consistent with consumer business effects across local recovery and producer PITR replay; retention or restore boundaries that cannot prove that consistency remain blocked.
 
 The canonical Implementation Plan already states:
 
-- `PAC Web Services (PROVIDER CONTRACT PENDING)`;
+- PAC Web Services (PROVIDER CONTRACT PENDING);
 - PAC timeout handling must avoid duplicate stamp requests;
-- `SEC-VAL-10` requires PAC contract validation.
+- SEC-VAL-10 requires PAC contract validation.
 
 Therefore provider behavior cannot be inferred from tests or mocks.
-
----
 
 ## 3. Authority Boundaries
 
@@ -136,12 +136,12 @@ Names are conceptual; implementation naming may vary as long as semantics remain
 
 ### 4.1 Strict Fail-Closed & Provenance Rules
 
-1. **Operation Independence (`ACR020-R1-INT-BLK-01`, `ACR020-R3-SA-ADV-01`):** `supportsStampIdempotencyKey` and `supportsCancellationIdempotencyKey` are distinct declarations. Likewise, lookup capabilities (`supportsAuthoritativeStampLookup`, `supportsAuthoritativeCancellationLookup`) and safe-replay capabilities (`supportsSafeStampReplayAfterConfirmedNotFound`, `supportsSafeCancellationReplayAfterConfirmedNotFound`) are independently evaluated per operation type.
-2. **Contractual Provenance (`ACR020-R1-INT-ADV-01`):** Every capability declared `true` in a production adapter MUST be bound to identifiable contractual evidence recorded in `contractProvenance` (e.g., contract identifier, version, evidence reference/URI, digest/hash, validity window, semantic limitations). A capability declared without approved contractual evidence MUST fail closed / be rejected during adapter initialization/validation.
-3. **No Inference or Defaults:** Any capability not explicitly established by an approved provider contract MUST strictly default to `false / unavailable`.
-4. **Mocks Excluded:** The adapter MUST NOT declare a capability merely because a test mock supports it. Mocks cannot establish production provider capabilities.
-
----
+1. **Operation Independence (ACR020-R1-INT-BLK-01, ACR020-R3-SA-ADV-01):** supportsStampIdempotencyKey and supportsCancellationIdempotencyKey are distinct declarations. Likewise, lookup capabilities (supportsAuthoritativeStampLookup, supportsAuthoritativeCancellationLookup) and safe-replay capabilities (supportsSafeStampReplayAfterConfirmedNotFound, supportsSafeCancellationReplayAfterConfirmedNotFound) are independently evaluated per operation type.
+2. **Contractual Provenance (ACR020-R1-INT-ADV-01, ACR020-R4-INT-BLK-02):** Every capability declared true in a production adapter MUST be supported by approved, integrity-valid evidence in contractProvenance. The evidence record MUST identify the provider and contract, contract version, evidence reference, content digest, approval authority/status, effective-from and effective-until bounds, any revocation or supersession state, exact operation scope, exact capability, applicable recovery condition, and semantic limitations.
+3. **Use-Time Validation:** Before a capability is used for lookup, replay, or dispatch, the adapter MUST validate the evidence against the current time and requested context. Provider, contract/version, operation, capability, recovery-condition, or scope mismatch; not-yet-effective, expired, revoked, superseded, contradictory, ambiguous, digest-invalid, missing, or unverifiable evidence MUST resolve to false / unavailable. Validation MUST fail closed before the dependent lookup, replay, or dispatch.
+4. **No Stale Positive Cache:** A previously validated true value MUST NOT remain usable after expiry, revocation, supersession, or a change of operation/recovery scope. Cached evidence may improve performance only if its validity is rechecked at use and its invalidation state is authoritative.
+5. **No Inference or Defaults:** Any capability not explicitly established by currently applicable approved provider-contract evidence MUST strictly default to false / unavailable.
+6. **Mocks Excluded:** The adapter MUST NOT declare a capability merely because a test mock supports it. Mocks cannot establish production provider capabilities.
 
 ## 5. Fiscal Operation Identity
 
@@ -551,30 +551,40 @@ Properties of `semanticEventId`:
 - **Kind-Differentiated:** Stamping and cancellation for the same invoice cannot collide.
 - **Durable:** Stable across retries, node restarts, PITR recovery, outbox recreation, and schema migrations.
 
-### 14.2 Consumer Idempotency / Inbox Contract (`ACR020-R3-SA-BLK-02`)
+### 14.2 Consumer Idempotency / Inbox Contract (ACR020-R3-SA-BLK-02)
 
 Any TRIDENTPOS bounded context or conforming subscriber consuming fiscal events MUST implement transactional idempotent processing:
 
-```text
-receive event
-→ verify tenant + semanticEventId + eventKind
-→ begin local consumer transaction
-→ check durable consumer inbox / idempotency ledger
-→ if semanticEventId already recorded:
-    acknowledge event and exit (NO-OP / duplicate absorbed)
-→ else:
-    apply business mutation (e.g. update accounting ledger / order status)
-    insert semanticEventId into consumer inbox ledger
-    commit consumer transaction
-```
+receive event  
+→ verify tenant + semanticEventId + eventKind + eventContractVersion  
+→ begin local consumer transaction  
+→ check durable consumer inbox / idempotency ledger  
+→ if semanticEventId already recorded: acknowledge and exit as a no-op  
+→ otherwise apply the business mutation, insert semanticEventId into the local inbox, and commit both atomically
 
-#### Consumer Architecture Invariants:
-1. **Transactional Coupling:** The consumer's business effect and inbox deduplication record MUST commit in the same local transaction. This eliminates the hazard of an effect committing without an inbox record or vice versa.
-2. **Modular Boundaries:** Consumers own their local inbox tables. No shared database state, no cross-context foreign keys, and no consumer queries to Billing private tables are permitted.
-3. **PITR Recovery Across Consumers:** If producer Cloud database restores via PITR to before the outbox commit, recovery will re-emit an outbox event with the **same `semanticEventId`**. Conforming consumers that already processed the event prior to producer PITR will detect the `semanticEventId` in their inbox ledger and absorb the duplicate safely.
-4. **Non-Conforming / External Consumers:** Protection against duplicate semantic application for third-party systems that do not satisfy the inbox/idempotency contract is `BLOCKED BY CONTRACT` until an explicit integration adapter with deduplication guarantees is approved.
+#### Consumer Architecture Invariants
 
----
+1. **Transactional Coupling:** The consumer's business effect and inbox deduplication record MUST commit in the same consumer-local transaction.
+2. **Modular Boundaries:** Consumers own their local inbox tables. No shared database state, cross-context foreign keys, or consumer queries to Billing private tables are permitted. Logical isolation is required; separate physical databases are not.
+3. **Same Restore Domain:** When a consumer's business effect and inbox are within the same restore domain, recovery MUST restore or reconcile them together. A replay after a coordinated restore may reapply the effect once when both the effect and inbox record were rolled back together. Tenant restore MUST include or explicitly reconcile every affected effect and inbox record; if that boundary cannot be proven, replay remains blocked.
+4. **Separate Producer and Consumer Restore Domains:** If producer PITR can re-emit an event while the consumer database remains outside that restore, the consumer inbox record MUST be retained for at least the maximum approved producer PITR and tenant-restore replay horizon. If that horizon or inbox retention cannot be established and verified, duplicate-safe replay is BLOCKED BY CONTRACT.
+5. **Non-Transactional External Effects:** If consumer processing invokes an external system whose effect cannot share the consumer-local transaction, that sink MUST provide durable idempotency keyed by the same semanticEventId or an equivalent deterministic identity. Otherwise the integration is BLOCKED BY CONTRACT.
+6. **PITR Replay:** Producer Cloud PITR recovery may re-emit an outbox event with the same semanticEventId. Consumers MUST apply the restore-domain and inbox-retention rules above before acknowledging that deduplication is safe.
+7. **Non-Conforming / External Consumers:** Protection against duplicate semantic application for third-party systems that do not satisfy this contract is BLOCKED BY CONTRACT until an explicit integration adapter with deduplication guarantees is approved.
+
+### 14.3 Fiscal Event Contract Versioning and Compatibility (ACR020-R4-INT-BLK-01)
+
+Billing owns the fiscal event contract. Every published fiscal event MUST carry an eventContractVersion in major.minor form, separately from semanticEventId. For example, the first contract may be version 1.0.
+
+Contract rules:
+
+1. **Minor version:** Additive changes that preserve the meaning of existing fields and add only optional fields increment the minor version. Consumers that support the same major version MUST tolerate and ignore unknown optional fields.
+2. **Major version:** A breaking change, changed field meaning, changed event semantics, or newly required field increments the major version. Consumers declare the major versions and required fields they support.
+3. **Compatibility before publication:** Before publishing to a required subscriber, the producer MUST establish that the subscriber supports the event's major version and every required field. If support is unknown or incompatible, publication to that required subscriber is blocked and surfaced for governed remediation; no incompatible payload is silently sent as supported.
+4. **Consumer validation:** A consumer MUST validate the version and required fields before any business mutation. An unknown major version, unsupported required field, or invalid version is rejected or quarantined with no business mutation.
+5. **Durable retry identity:** The outbox MUST persist the version and payload as immutable event data. Retry, outbox recreation, schema migration, and PITR recovery MUST preserve the original semantic meaning and compatible version for the same logical event.
+6. **Identity separation:** eventContractVersion MUST NOT participate in semanticEventId; a contract upgrade cannot turn a replay of the same fiscal event into a new semantic effect.
+7. **Provider neutrality:** This contract does not select a broker, PAC vendor, subscriber product, or provider-specific schema.
 
 ## 15. Cancellation Contract & Reconciliation Lifecycle
 
@@ -835,9 +845,9 @@ Never log:
 
 ---
 
-## 20. Required R3 Tests
+## 20. Required R5 Tests
 
-R3 implementation evidence must include at minimum the following **74 tests**:
+WP-021 implementation evidence must include at minimum the following **90 tests**. These are requirements for a future implementation and are not claims that the tests or implementation have passed.
 
 ### Core Stamping, Signing & Security Tests (1–24)
 1. default PAC unavailable → fail closed.
@@ -927,6 +937,28 @@ R3 implementation evidence must include at minimum the following **74 tests**:
 73. multi-tenant recovery lookups (`operation_id`, `semantic_idempotency_key`, `provider_reference`, invoice `uuid`) strictly isolate tenant boundaries under RLS + `FORCE RLS` (`ACR020-R2-DATA-ADV-02`).
 74. full regression, graph, format, lint, typecheck and build pass.
 
+### R5 Event Contract Versioning Tests (75–80)
+75. every fiscal event carries a valid major.minor eventContractVersion, distinct from semanticEventId.
+76. additive optional field under the same major version increments minor version and remains consumable by a supported consumer that ignores unknown optional fields.
+77. changed field meaning, breaking semantics, or a newly required field increments the major version.
+78. consumer with unknown major version, unsupported required field, or invalid version rejects or quarantines before business mutation.
+79. required subscriber with unknown or incompatible supported-version declaration blocks publication to that subscriber.
+80. retries, outbox recreation, migration, and PITR preserve the persisted event version and semantic payload for the same logical event.
+
+### R5 Capability Provenance Validity Tests (81–86)
+81. currently effective, approved, digest-valid evidence with exact provider, operation, capability, and recovery-condition scope permits only the evidenced capability.
+82. missing, unapproved, ambiguous, contradictory, or unverifiable provenance makes the capability unavailable before lookup, replay, or dispatch.
+83. expired, revoked, or superseded evidence fails closed at use time, including after a previously positive cache entry.
+84. provider, contract-version, operation, capability, or recovery-condition mismatch makes the requested capability unavailable.
+85. evidence outside its effective window, with an invalid digest, or with a required validity field missing makes the capability unavailable.
+86. a scope change or evidence invalidation forces revalidation before dependent recovery work; stale positive capability state is never used.
+
+### R5 Consumer Restore-Domain Consistency Tests (87–90)
+87. effect and inbox in one consumer restore domain recover together; replay applies the business effect no more than once.
+88. tenant restore omitting or inconsistently restoring any affected effect/inbox state is blocked pending explicit reconciliation.
+89. when consumer state is outside producer PITR, inbox retention covers the maximum approved producer replay horizon; unknown or insufficient retention blocks duplicate-safe replay.
+90. a non-transactional downstream effect uses durable idempotency keyed by semanticEventId, or the integration is classified BLOCKED BY CONTRACT.
+
 Tests using mocks must explicitly distinguish:
 
 - test simulation evidence;
@@ -938,7 +970,7 @@ A mock cannot prove production provider replay semantics.
 
 ## 21. Evidence Levels
 
-For R3/R4:
+For a future WP-021 implementation authorized after R5:
 
 - source/static claims: minimum E1;
 - domain/unit behavior: minimum E2;
@@ -948,34 +980,37 @@ For R3/R4:
 
 No PASS may rely only on Builder prose.
 
----
-
 ## 22. Circuit Breaker Budget & Review Reset Governance
 
-Under canonical EAAF v1.3 governance (`project-manifest.json`), the standard review budget is `max_review_cycles = 3`.
+Canonical EAAF v1.3 budgets in project-manifest.json remain unchanged: max_review_cycles = 3, max_builder_iterations = 3, max_same_blocker_recurrence = 1, and max_architecture_reopens = 1.
 
-### 22.1 Review Cycle Reset Record (`ACR-2026-020 R4`)
+### 22.1 Historical R4 Review Cycle Reset
+
 - **Review History Consumed:** R1 (Integration HOLD), R2 (Data HOLD), R3 (Solution HOLD).
-- **Reset Authority:** Authorized Human explicit decision recorded in sidecar `5b7e7f2d0fb09268a6ef5c0509d158c4877ab7a0` (`evidence/ACR-2026-020_R4_REVIEW_CYCLE_RESET.md`).
-- **Scoped Review Budget:** `RESET_AUTHORIZED — ACR-2026-020 R4 ONLY`.
-- **Invariants:** Exactly one additional review cycle (R4) is authorized for this ACR only. Automatic R5 is NOT authorized. Global project manifest budgets are not modified.
+- **Reset Authority:** Human decision recorded in 5b7e7f2d0fb09268a6ef5c0509d158c4877ab7a0 (evidence/ACR-2026-020_R4_REVIEW_CYCLE_RESET.md).
+- **Scope:** One R4 review cycle only. R4 evidence remains historical and exact-subject.
 
-### 22.2 WP-021 Builder Budget (Independent Governance)
+### 22.2 Scoped R5 Review Cycle and Architecture-Reopen Exception
+
+- **Authority:** Human decision recorded in db6e2992ed6aadc2242d870046a656c2d178a25e (evidence/ACR-2026-020_R5_REVIEW_CYCLE_RESET.md).
+- **Review scope:** Exactly one R5 review cycle is authorized to resolve only ACR020-R4-INT-BLK-01 and ACR020-R4-INT-BLK-02, with the consumer restore-domain clarification in §§14.2 and 20.87–90.
+- **Architecture scope:** The same authorization grants one exception scoped to this R5 review for the minimum architecture reopen needed to adjudicate these exact remediations, if required. This does not rewrite or raise max_architecture_reopens, reset any global counter, or authorize another architecture reopen after this R5.
+- **Boundary:** No automatic R6, no new reset, and no claim that this candidate has passed any gate. The R5 authority does not authorize WP-021 Builder R3, PAC selection or capability accreditation, closure of OQ-ARCH-02, or changes to builder or recurrence counters.
+
+### 22.3 WP-021 Builder Budget (Independent Governance)
+
 - Builder iteration R1: consumed;
 - Builder iteration R2: consumed;
-- Future proposed R3: third and final default Builder iteration (`max_builder_iterations = 3`).
-- Blocker recurrence: `same_blocker_recurrence = 1` of maximum `1`.
-- State: `CIRCUIT BREAKER = NORMAL — AT LIMIT`.
-- If future WP-021 Builder R3 reproduces the same semantic blocker: `same_blocker_recurrence = 2 > 1 → CIRCUIT_BREAKER_OPEN` (no autonomous R4).
-- The ACR authoring/remediation cycles (R1–R4) are governance activities and are NOT counted against WP-021 Builder iterations.
-
----
+- Future proposed R3: third and final default Builder iteration (max_builder_iterations = 3).
+- Blocker recurrence: same_blocker_recurrence = 1 of maximum 1; it remains at limit and is not reset here.
+- If future WP-021 Builder R3 reproduces the same semantic blocker: same_blocker_recurrence = 2 > 1 → CIRCUIT_BREAKER_OPEN (no autonomous R4).
+- ACR authoring and remediation cycles (R1–R5) are governance activities and are NOT counted against WP-021 Builder iterations.
 
 ## 23. Independent Review Gates
 
-Before R3/R4 Builder authorization, this ACR requires:
+Before any WP-021 Builder R3 authorization, this R5 candidate requires fresh independent evidence against its exact frozen subject:
 
-1. Quick Integrity on exact frozen subject.
+1. Quick Integrity on the exact frozen subject.
 2. Agent 01 — Solution Architect review.
 3. Agent 07 — Integration Architect review.
 4. Agent 03 — Data Architect review.
@@ -983,17 +1018,15 @@ Before R3/R4 Builder authorization, this ACR requires:
 6. Agent 09 — QA Test Architect review of required evidence.
 7. Agent 11 — Code/Repository consistency review.
 8. Coordinator synthesis.
-9. Product Owner approval of exact frozen subject.
+9. Product Owner approval of the exact frozen subject.
 10. PR Gate.
 11. exact-head CI/security.
 12. merge authorization.
 13. merge.
 14. post-merge validation.
-15. `DONE / CANONICAL`.
+15. DONE / CANONICAL.
 
-Only then may WP-021 Builder start.
-
----
+R4 reviews and Quick Integrity are historical evidence on the R4 subject and do not satisfy R5 gates. Passing this review cycle would still require separate authorization before WP-021 Builder R3 starts.
 
 ## 24. Explicit Non-Decisions
 
@@ -1014,34 +1047,36 @@ This ACR does NOT decide:
 
 ---
 
-## 25. R3/R4 Authorized Scope After Canonicalization
+## 25. WP-021 Implementation Scope After Canonicalization
 
-When this ACR becomes canonical, WP-021 implementation may remediate only the governed blockers and necessary supporting tests/migration changes.
+This section defines the implementation scope if the R5 candidate later becomes canonical and WP-021 Builder R3 is separately authorized. This candidate alone does not authorize implementation.
 
 Primary implementation objectives:
 
 1. remove remaining synthetic CSD certificate metadata fallbacks;
 2. enforce complete/validated CSD readiness;
 3. implement provider-capability-aware reconciliation for both stamping and cancellation;
-4. prevent blind redispatch after ambiguous PAC outcome;
-5. validate authoritative fiscal success before local `STAMPED` and authoritative cancellation evidence before local `CANCELLED`;
-6. make restart/crash recovery and Cloud backup/PITR recovery real rather than mock-dependent, harmonizing with Rule A safe replay;
-7. implement at-least-once outbox delivery with deterministic `semanticEventId` and transactional consumer inbox deduplication;
-8. implement populated predecessor schema migration preservation and lossless data mapping;
-9. harden concurrent single-dispatch semantics;
-10. enforce `PENDING_APPROVAL != CANCELLED`;
-11. preserve `OQ-ARCH-02`;
-12. preserve module/data/security boundaries.
+4. validate current, approved, integrity-valid, exact-scope capability provenance before use;
+5. prevent blind redispatch after ambiguous PAC outcome;
+6. validate authoritative fiscal success before local STAMPED and authoritative cancellation evidence before local CANCELLED;
+7. make restart/crash recovery and Cloud backup/PITR recovery real rather than mock-dependent, harmonizing with Rule A safe replay;
+8. implement at-least-once outbox delivery with deterministic semanticEventId, versioned fiscal event contracts, and compatible consumer validation;
+9. implement consumer-local transactional inbox idempotency and restore-domain / replay-horizon consistency;
+10. implement populated predecessor schema migration preservation and lossless data mapping;
+11. harden concurrent single-dispatch semantics;
+12. enforce PENDING_APPROVAL != CANCELLED;
+13. preserve OQ-ARCH-02;
+14. preserve module/data/security boundaries.
 
 No architecture-by-implementation.
 
----
-
 ## 26. Governance Effect
 
-This document is now a FROZEN CANDIDATE R4 on canonical base `0c46307e09fe77383320a86b6daff86d2983e9af` under EAAF v1.3.0 (`167cea36c09c1031c763971ff790db2e0d0f7362`), superseding Frozen Candidate R3 `3be54b042044ea5f5ee483afffbe27588e965bd3` under Authorized Human Review Cycle Reset `5b7e7f2d0fb09268a6ef5c0509d158c4877ab7a0`.
+This document is a FROZEN CANDIDATE R5 on branch governance/acr-2026-020-wp021-pac-reconciliation-r5, based on Frozen Candidate R4 2b6ac104554bcd585f96bc0606528c1d7142b218 and the canonical governance base 0c46307e09fe77383320a86b6daff86d2983e9af, under EAAF v1.3.0 (167cea36c09c1031c763971ff790db2e0d0f7362). It supersedes Frozen Candidate R4 only for future review; R3 and R4 artifacts and their exact-subject decisions remain unchanged.
 
-Before WP-021 implementation may be authorized, this ACR candidate must complete all independent review gates (§23), obtain Product Owner approval on the exact frozen subject, and merge canonically to `main`.
+The candidate remediates the two R4 Integration blockers and specifies consumer effect/inbox restore-domain acceptance. It changes no runtime code, migration, dependency, lockfile, project manifest, or OPEN_QUESTIONS content. The R5 reset authority is limited to the review scope and architecture-reopen exception defined in §22.
+
+Before WP-021 implementation may be authorized, this exact R5 candidate must complete all independent review gates (§23), obtain Product Owner approval on the exact frozen subject, and merge canonically to main. A separate authorization is required before Builder R3 begins.
 
 WP-021 remains:
 
