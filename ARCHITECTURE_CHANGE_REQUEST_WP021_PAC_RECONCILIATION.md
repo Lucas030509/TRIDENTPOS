@@ -17,6 +17,7 @@
 **Risk Class:** RC4 — CRITICAL  
 **Primary Review Domains:** Solution Architecture, Integration, Data, Security, QA, Code Review  
 **Protected Product Owner Question:** OQ-ARCH-02 remains OPEN
+
 ## 1. Purpose
 
 WP-021 requires a provider-neutral fiscal integration contract that prevents duplicate or false fiscal state when a PAC request has an ambiguous outcome.
