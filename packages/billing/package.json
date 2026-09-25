@@ -1,0 +1,25 @@
+{
+  "name": "@trident/billing",
+  "version": "0.1.0",
+  "description": "TRIDENTPOS Billing Bounded Context (Taxes, CFDI 4.0, CSD Digital Signatures & Fiscal Invoicing)",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "dependencies": {
+    "@trident/core": "*"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src/",
+    "test": "node --test dist/index.test.js",
+    "clean": "rm -rf dist"
+  }
+}

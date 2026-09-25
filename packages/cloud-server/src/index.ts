@@ -17,6 +17,7 @@
  */
 
 import type pg from 'pg';
+import nodeCrypto from 'node:crypto';
 import {
   RecipeEngine,
   type Recipe,
@@ -76,7 +77,69 @@ import {
   ReceiptOutboxIntegrityError,
   CreatePurchaseOrderItemInput,
 } from '@trident/procurement';
+import {
+  type TaxScheme,
+  type TaxType,
+  type CreateTaxSchemeCommand,
+  type EmisorFiscalConfig,
+  type ConfigureEmisorFiscalCommand,
+  type FiscalInvoice,
+  type FiscalInvoiceItem,
+  type CreateDraftInvoiceCommand,
+  type StampFiscalInvoiceCommand,
+  type CancelFiscalInvoiceCommand,
+  type BatchCandidateQueryCommand,
+  type BatchCandidateResult,
+  type CreateGlobalInvoiceBatchCommand,
+  type GlobalInvoiceBatch,
+  type IPacConnector,
+  type ICsdVault,
+  type FiscalStampingOperationStatus,
+  type FiscalOperationType,
+  UnavailablePacConnector,
+  UnavailableCsdVault,
+  calculateItemTaxes,
+  generateCfdi40Xml,
+  buildCadenaOriginal40,
+  signCadenaOriginal,
+  formatCertBase64SingleLine,
+  validateCsdKeyPairMatch,
+  extractCertificateNumber,
+  validatePacCapabilityProvenance,
+  generateFiscalSemanticEventId,
+  validateRfc,
+  validateRegimenFiscal,
+  validatePostalCode,
+  validateCanCancel,
+  validateCanStamp,
+  findUnclaimedFolios,
+  InvalidTaxSchemeError,
+  InvalidEmisorConfigError,
+  InvalidFiscalInvoiceError,
+  InvoiceIdempotencyConflictError,
+  CsdCredentialsMissingError,
+  FiscalSuccessValidationError,
+  ReconciliationRequiredError,
+  CancellationPendingApprovalError,
+  PacTimeoutError,
+} from '@trident/billing';
+
 import { getPool, withTenantTransaction, CloudIntegrationOutboxService } from '@trident/database';
+
+export interface CloudBillingCompositionService {
+  createTaxScheme(command: CreateTaxSchemeCommand): Promise<TaxScheme>;
+  getTaxSchemes(organizationId: string): Promise<TaxScheme[]>;
+  getTaxSchemeById(organizationId: string, id: string): Promise<TaxScheme | null>;
+  configureEmisorFiscal(command: ConfigureEmisorFiscalCommand): Promise<EmisorFiscalConfig>;
+  getEmisorFiscalConfig(organizationId: string): Promise<EmisorFiscalConfig | null>;
+  createDraftInvoice(command: CreateDraftInvoiceCommand): Promise<FiscalInvoice>;
+  stampFiscalInvoice(command: StampFiscalInvoiceCommand): Promise<FiscalInvoice>;
+  cancelFiscalInvoice(command: CancelFiscalInvoiceCommand): Promise<FiscalInvoice>;
+  getFiscalInvoiceById(organizationId: string, invoiceId: string): Promise<FiscalInvoice | null>;
+  getFiscalInvoiceByUuid(organizationId: string, uuid: string): Promise<FiscalInvoice | null>;
+  queryUnclaimedFiscalFolios(command: BatchCandidateQueryCommand): Promise<BatchCandidateResult>;
+  createGlobalInvoiceBatch(command: CreateGlobalInvoiceBatchCommand): Promise<GlobalInvoiceBatch>;
+}
 
 export interface CloudInventoryCompositionService {
   getRecipe(organizationId: string, recipeId: string): Promise<Recipe | null>;
@@ -4523,4 +4586,1781 @@ export class PostgresFinanceService implements CloudFinanceCompositionService {
   }
 }
 
+export class PostgresBillingService implements CloudBillingCompositionService {
+  private readonly outboxService: CloudIntegrationOutboxService;
+
+  constructor(
+    private readonly pool: pg.Pool = getPool(),
+    private readonly pacConnector: IPacConnector = new UnavailablePacConnector(),
+    private readonly csdVault: ICsdVault = new UnavailableCsdVault(),
+    outboxService?: CloudIntegrationOutboxService,
+  ) {
+    this.outboxService = outboxService ?? new CloudIntegrationOutboxService();
+  }
+
+  async createTaxScheme(command: CreateTaxSchemeCommand): Promise<TaxScheme> {
+    if (!command.code || command.code.trim().length === 0) {
+      throw new InvalidTaxSchemeError('Tax scheme code is required');
+    }
+    if (!command.name || command.name.trim().length === 0) {
+      throw new InvalidTaxSchemeError('Tax scheme name is required');
+    }
+    const rateNum = parseFloat(command.rate);
+    if (isNaN(rateNum) || rateNum < 0) {
+      throw new InvalidTaxSchemeError(`Invalid tax rate: ${command.rate}`);
+    }
+
+    return withTenantTransaction(this.pool, command.organizationId, async (client) => {
+      const res = await client.query<{
+        id: string;
+        organization_id: string;
+        code: string;
+        name: string;
+        rate: string;
+        is_inclusive: boolean;
+        tax_type: TaxType;
+        created_at: string | Date;
+      }>(
+        `INSERT INTO tax_schemes (
+          id, organization_id, code, name, rate, is_inclusive, tax_type
+        ) VALUES (
+          COALESCE($1, gen_random_uuid()), $2, $3, $4, $5, $6, $7
+        ) RETURNING id, organization_id, code, name, rate::text, is_inclusive, tax_type, created_at;`,
+        [
+          command.id ?? null,
+          command.organizationId,
+          command.code.trim().toUpperCase(),
+          command.name.trim(),
+          command.rate,
+          Boolean(command.isInclusive),
+          command.taxType,
+        ],
+      );
+      return this.mapTaxSchemeRow(res.rows[0]!);
+    });
+  }
+
+  async getTaxSchemes(organizationId: string): Promise<TaxScheme[]> {
+    return withTenantTransaction(this.pool, organizationId, async (client) => {
+      const res = await client.query<{
+        id: string;
+        organization_id: string;
+        code: string;
+        name: string;
+        rate: string;
+        is_inclusive: boolean;
+        tax_type: TaxType;
+        created_at: string | Date;
+      }>(
+        `SELECT id, organization_id, code, name, rate::text, is_inclusive, tax_type, created_at
+         FROM tax_schemes
+         WHERE organization_id = $1
+         ORDER BY code ASC;`,
+        [organizationId],
+      );
+      return res.rows.map((r) => this.mapTaxSchemeRow(r));
+    });
+  }
+
+  async getTaxSchemeById(organizationId: string, id: string): Promise<TaxScheme | null> {
+    return withTenantTransaction(this.pool, organizationId, async (client) => {
+      const res = await client.query<{
+        id: string;
+        organization_id: string;
+        code: string;
+        name: string;
+        rate: string;
+        is_inclusive: boolean;
+        tax_type: TaxType;
+        created_at: string | Date;
+      }>(
+        `SELECT id, organization_id, code, name, rate::text, is_inclusive, tax_type, created_at
+         FROM tax_schemes
+         WHERE organization_id = $1 AND id = $2;`,
+        [organizationId, id],
+      );
+      if (res.rows.length === 0) return null;
+      return this.mapTaxSchemeRow(res.rows[0]!);
+    });
+  }
+
+  async configureEmisorFiscal(command: ConfigureEmisorFiscalCommand): Promise<EmisorFiscalConfig> {
+    validateRfc(command.rfc);
+    validateRegimenFiscal(command.regimenFiscal);
+    validatePostalCode(command.codigoPostal);
+    if (!command.razonSocial || command.razonSocial.trim().length === 0) {
+      throw new InvalidEmisorConfigError('Razon social is required for emisor');
+    }
+
+    return withTenantTransaction(this.pool, command.organizationId, async (client) => {
+      const res = await client.query<{
+        id: string;
+        organization_id: string;
+        rfc: string;
+        razon_social: string;
+        regimen_fiscal: string;
+        codigo_postal: string;
+        certificate_number: string | null;
+        certificate_pem: string | null;
+        private_key_vault_id: string | null;
+        valid_from: string | Date | null;
+        valid_to: string | Date | null;
+        is_active: boolean;
+        created_at: string | Date;
+        updated_at: string | Date;
+      }>(
+        `INSERT INTO emisor_fiscal_config (
+          id, organization_id, rfc, razon_social, regimen_fiscal, codigo_postal,
+          certificate_number, certificate_pem, private_key_vault_id, valid_from, valid_to, is_active
+        ) VALUES (
+          gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
+        )
+        ON CONFLICT (organization_id) DO UPDATE SET
+          rfc = EXCLUDED.rfc,
+          razon_social = EXCLUDED.razon_social,
+          regimen_fiscal = EXCLUDED.regimen_fiscal,
+          codigo_postal = EXCLUDED.codigo_postal,
+          certificate_number = EXCLUDED.certificate_number,
+          certificate_pem = EXCLUDED.certificate_pem,
+          private_key_vault_id = EXCLUDED.private_key_vault_id,
+          valid_from = EXCLUDED.valid_from,
+          valid_to = EXCLUDED.valid_to,
+          is_active = EXCLUDED.is_active,
+          updated_at = NOW()
+        RETURNING *;`,
+        [
+          command.organizationId,
+          command.rfc.trim().toUpperCase(),
+          command.razonSocial.trim(),
+          command.regimenFiscal.trim(),
+          command.codigoPostal.trim(),
+          command.certificateNumber ?? command.certificadoSatNumber ?? null,
+          command.certificatePem ?? command.certificadoPem ?? null,
+          command.privateKeyVaultId ?? null,
+          null,
+          null,
+          command.isActive !== false,
+        ],
+      );
+      return this.mapEmisorRow(res.rows[0]!);
+    });
+  }
+
+  async getEmisorFiscalConfig(organizationId: string): Promise<EmisorFiscalConfig | null> {
+    return withTenantTransaction(this.pool, organizationId, async (client) => {
+      const res = await client.query(
+        `SELECT * FROM emisor_fiscal_config WHERE organization_id = $1;`,
+        [organizationId],
+      );
+      if (res.rows.length === 0) return null;
+      return this.mapEmisorRow(res.rows[0]!);
+    });
+  }
+
+  async createDraftInvoice(command: CreateDraftInvoiceCommand): Promise<FiscalInvoice> {
+    validateRfc(command.receptorRfc);
+    validateRegimenFiscal(command.receptorRegimenFiscal);
+    validatePostalCode(command.receptorCodigoPostal);
+    if (!command.items || command.items.length === 0) {
+      throw new InvalidFiscalInvoiceError('Invoice must contain at least one item');
+    }
+
+    return withTenantTransaction(this.pool, command.organizationId, async (client) => {
+      // 1. Get emisor config
+      const emisorRes = await client.query(
+        `SELECT * FROM emisor_fiscal_config WHERE organization_id = $1;`,
+        [command.organizationId],
+      );
+      if (emisorRes.rows.length === 0) {
+        throw new InvalidEmisorConfigError(
+          `Emisor fiscal configuration missing for organization '${command.organizationId}'`,
+        );
+      }
+      const emisor = this.mapEmisorRow(emisorRes.rows[0]!);
+
+      // 2. Fetch tax schemes
+      const taxSchemeMap = new Map<string, TaxScheme>();
+      const schemesRes = await client.query(
+        `SELECT id, organization_id, code, name, rate::text, is_inclusive, tax_type, created_at
+         FROM tax_schemes WHERE organization_id = $1;`,
+        [command.organizationId],
+      );
+      for (const row of schemesRes.rows) {
+        taxSchemeMap.set(row.id, this.mapTaxSchemeRow(row));
+      }
+
+      const invoiceId =
+        command.id ?? (await client.query(`SELECT gen_random_uuid() as id`)).rows[0].id;
+
+      // Calculate totals across items
+      const calculatedItems: Array<{
+        id: string;
+        lineNumber: number;
+        productCode: string;
+        description: string;
+        satProductCode: string;
+        satUnitCode: string;
+        quantity: string;
+        unitPrice: string;
+        subtotal: string;
+        taxAmount: string;
+        totalAmount: string;
+        taxRate: string;
+      }> = [];
+
+      let totalSubtotal = '0.0000';
+      let totalTax = '0.0000';
+      let grandTotal = '0.0000';
+
+      for (let i = 0; i < command.items.length; i++) {
+        const itemInput = command.items[i]!;
+        const itemId =
+          itemInput.id ?? (await client.query(`SELECT gen_random_uuid() as id`)).rows[0].id;
+        const scheme = itemInput.taxSchemeId ? taxSchemeMap.get(itemInput.taxSchemeId) : undefined;
+        const schemes = scheme ? [scheme] : [];
+
+        const calc = calculateItemTaxes(itemInput.unitPrice, itemInput.quantity, schemes);
+        const rate = scheme?.rate ?? '0.0000';
+
+        calculatedItems.push({
+          id: itemId,
+          lineNumber: itemInput.lineNumber ?? i + 1,
+          productCode: itemInput.sku ?? itemInput.productCode ?? 'ITEM',
+          description: itemInput.description,
+          satProductCode: itemInput.claveProdServ,
+          satUnitCode: itemInput.claveUnidad,
+          quantity: itemInput.quantity,
+          unitPrice: itemInput.unitPrice,
+          subtotal: calc.subtotal,
+          taxAmount: calc.taxAmount,
+          totalAmount: calc.totalAmount,
+          taxRate: rate,
+        });
+
+        totalSubtotal = (parseFloat(totalSubtotal) + parseFloat(calc.subtotal)).toFixed(4);
+        totalTax = (parseFloat(totalTax) + parseFloat(calc.taxAmount)).toFixed(4);
+        grandTotal = (parseFloat(grandTotal) + parseFloat(calc.totalAmount)).toFixed(4);
+      }
+
+      const series = command.serie ?? 'FAC';
+      const folio = command.folio ?? String(Date.now());
+
+      // Insert invoice
+      await client.query(
+        `INSERT INTO fiscal_invoices (
+          id, organization_id, branch_id, series, folio,
+          customer_tax_id, customer_name, customer_regimen_fiscal, customer_postal_code,
+          cfdi_use, payment_method, payment_way,
+          subtotal, tax_total, total_amount, status
+        ) VALUES (
+          $1, $2, $3, $4, $5,
+          $6, $7, $8, $9,
+          $10, $11, $12,
+          $13, $14, $15, 'DRAFT'
+        ) RETURNING *;`,
+        [
+          invoiceId,
+          command.organizationId,
+          command.branchId,
+          series,
+          folio,
+          command.receptorRfc.trim().toUpperCase(),
+          command.receptorNombre.trim(),
+          command.receptorRegimenFiscal.trim(),
+          command.receptorCodigoPostal.trim(),
+          command.receptorUsoCfdi.trim(),
+          command.metodoPago ?? 'PUE',
+          command.formaPago ?? '01',
+          totalSubtotal,
+          totalTax,
+          grandTotal,
+        ],
+      );
+
+      // Insert items
+      for (const item of calculatedItems) {
+        await client.query(
+          `INSERT INTO fiscal_invoice_items (
+            id, organization_id, invoice_id, line_number,
+            product_code, description, sat_product_code, sat_unit_code,
+            quantity, unit_price, subtotal, tax_amount, total_amount, tax_rate
+          ) VALUES (
+            $1, $2, $3, $4,
+            $5, $6, $7, $8,
+            $9, $10, $11, $12, $13, $14
+          );`,
+          [
+            item.id,
+            command.organizationId,
+            invoiceId,
+            item.lineNumber,
+            item.productCode,
+            item.description,
+            item.satProductCode,
+            item.satUnitCode,
+            item.quantity,
+            item.unitPrice,
+            item.subtotal,
+            item.taxAmount,
+            item.totalAmount,
+            item.taxRate,
+          ],
+        );
+      }
+
+      const fullInvoice = await this.getInvoiceInternal(client, command.organizationId, invoiceId);
+      if (!fullInvoice) {
+        throw new Error('Failed to retrieve created draft invoice');
+      }
+      return {
+        ...fullInvoice,
+        emisorRfc: emisor.rfc,
+        emisorNombre: emisor.razonSocial,
+      };
+    });
+  }
+
+  async stampFiscalInvoice(command: StampFiscalInvoiceCommand): Promise<FiscalInvoice> {
+    const idempotencyKey = command.idempotencyKey ?? command.invoiceId;
+
+    // Phase 1: Prepare Operation & Sign XML within tenant TX
+    const prepared = await withTenantTransaction(
+      this.pool,
+      command.organizationId,
+      async (client) => {
+        // 1. Lock invoice FOR UPDATE
+        const invoiceRes = await client.query(
+          `SELECT * FROM fiscal_invoices WHERE organization_id = $1 AND id = $2 FOR UPDATE;`,
+          [command.organizationId, command.invoiceId],
+        );
+
+        if (invoiceRes.rows.length === 0) {
+          throw new InvalidFiscalInvoiceError(`Fiscal invoice '${command.invoiceId}' not found`);
+        }
+
+        const currentInvoiceRow = invoiceRes.rows[0]!;
+
+        // Idempotency check: if already stamped, return existing without PAC call
+        if (currentInvoiceRow.status === 'STAMPED') {
+          const fullInvoice = await this.getInvoiceInternal(
+            client,
+            command.organizationId,
+            command.invoiceId,
+          );
+          return { alreadyCompleted: true as const, invoice: fullInvoice! };
+        }
+
+        validateCanStamp(currentInvoiceRow.status);
+
+        // 2. Compute request hash for idempotency integrity check
+        const requestHash = nodeCrypto
+          .createHash('sha256')
+          .update(
+            `${command.invoiceId}:${currentInvoiceRow.series}:${currentInvoiceRow.folio}:${currentInvoiceRow.total_amount}:${currentInvoiceRow.customer_tax_id}`,
+          )
+          .digest('hex');
+
+        // 3. Check / insert durable stamping operation record
+        const opRes = await client.query<{
+          id: string;
+          organization_id: string;
+          branch_id: string;
+          invoice_id: string;
+          operation_type: FiscalOperationType;
+          idempotency_key: string;
+          request_hash: string;
+          status: FiscalStampingOperationStatus;
+          attempt_count: number;
+          last_error: string | null;
+          external_reference: string | null;
+          external_uuid: string | null;
+          stamped_xml: string | null;
+        }>(
+          `SELECT * FROM fiscal_stamping_operations WHERE organization_id = $1 AND idempotency_key = $2 FOR UPDATE;`,
+          [command.organizationId, idempotencyKey],
+        );
+
+        let opId: string;
+
+        if (opRes.rows.length > 0) {
+          const existingOp = opRes.rows[0]!;
+          opId = existingOp.id;
+
+          if (existingOp.request_hash !== requestHash) {
+            throw new InvoiceIdempotencyConflictError(
+              `Idempotency key '${idempotencyKey}' reused with conflicting request semantics`,
+            );
+          }
+
+          if (existingOp.status === 'SUCCEEDED' && existingOp.external_uuid) {
+            // Reconcile local state if commit failed earlier
+            await client.query(
+              `UPDATE fiscal_invoices
+               SET status = 'STAMPED',
+                   invoice_uuid = $1,
+                   stamped_xml = COALESCE(stamped_xml, $2),
+                   stamped_at = COALESCE(stamped_at, NOW()),
+                   updated_at = NOW()
+               WHERE organization_id = $3 AND id = $4;`,
+              [
+                existingOp.external_uuid,
+                existingOp.stamped_xml,
+                command.organizationId,
+                command.invoiceId,
+              ],
+            );
+            const fullInvoice = await this.getInvoiceInternal(
+              client,
+              command.organizationId,
+              command.invoiceId,
+            );
+            return { alreadyCompleted: true as const, invoice: fullInvoice! };
+          }
+
+          if (existingOp.status === 'FAILED_TERMINAL') {
+            throw new InvalidFiscalInvoiceError(
+              existingOp.last_error ?? 'Fiscal stamping failed terminally',
+            );
+          }
+
+          // In RECONCILIATION_REQUIRED state: evaluate ACR-2026-020 Recovery Contract (§9.2)
+          if (existingOp.status === 'RECONCILIATION_REQUIRED') {
+            const caps = this.pacConnector.capabilities;
+
+            // Path A: Authoritative Stamp Lookup supported
+            if (caps.supportsAuthoritativeStampLookup && this.pacConnector.consultarTimbre) {
+              const reconciled = await this.pacConnector.consultarTimbre({
+                organizationId: command.organizationId,
+                invoiceId: command.invoiceId,
+                idempotencyKey,
+                uuid: existingOp.external_uuid ?? undefined,
+              });
+
+              if (reconciled.outcome === 'STAMPED_CONFIRMED' && reconciled.uuid) {
+                this.validateAuthoritativeStampResult({
+                  status: 'STAMPED',
+                  uuid: reconciled.uuid,
+                  stampedXml: reconciled.stampedXml,
+                  selloSat: reconciled.selloSat,
+                  fechaTimbrado: reconciled.fechaTimbrado,
+                  noCertificadoSat: reconciled.noCertificadoSat,
+                });
+
+                const semanticEventId = generateFiscalSemanticEventId(
+                  command.organizationId,
+                  existingOp.id,
+                  'FacturaFiscalEmitida',
+                );
+
+                await client.query(
+                  `UPDATE fiscal_stamping_operations
+                   SET status = 'SUCCEEDED',
+                       external_uuid = $1,
+                       stamped_xml = $2,
+                       semantic_event_id = $3,
+                       last_error = NULL,
+                       updated_at = NOW()
+                   WHERE organization_id = $4 AND id = $5;`,
+                  [
+                    reconciled.uuid,
+                    reconciled.stampedXml,
+                    semanticEventId,
+                    command.organizationId,
+                    existingOp.id,
+                  ],
+                );
+
+                await client.query(
+                  `UPDATE fiscal_invoices
+                   SET status = 'STAMPED',
+                       invoice_uuid = $1,
+                       sello_sat = $2,
+                       stamped_at = $3,
+                       stamped_xml = $4,
+                       updated_at = NOW()
+                   WHERE organization_id = $5 AND id = $6;`,
+                  [
+                    reconciled.uuid,
+                    reconciled.selloSat,
+                    reconciled.fechaTimbrado ?? new Date().toISOString(),
+                    reconciled.stampedXml,
+                    command.organizationId,
+                    command.invoiceId,
+                  ],
+                );
+
+                await this.outboxService.enqueue(client, {
+                  organizationId: command.organizationId,
+                  branchId: currentInvoiceRow.branch_id,
+                  eventType: 'FacturaFiscalEmitida',
+                  aggregateType: 'FiscalInvoice',
+                  aggregateId: command.invoiceId,
+                  payload: {
+                    invoiceId: command.invoiceId,
+                    uuid: reconciled.uuid,
+                    totalAmount: currentInvoiceRow.total_amount,
+                    series: currentInvoiceRow.series,
+                    folio: currentInvoiceRow.folio,
+                    fechaTimbrado: reconciled.fechaTimbrado,
+                    pacProvider: this.pacConnector.providerName,
+                    semanticEventId,
+                  },
+                });
+
+                const fullInvoice = await this.getInvoiceInternal(
+                  client,
+                  command.organizationId,
+                  command.invoiceId,
+                );
+                return { alreadyCompleted: true as const, invoice: fullInvoice! };
+              }
+
+              if (reconciled.outcome === 'REJECTED_CONFIRMED') {
+                await client.query(
+                  `UPDATE fiscal_stamping_operations
+                   SET status = 'FAILED_TERMINAL',
+                       last_error = $1,
+                       updated_at = NOW()
+                   WHERE organization_id = $2 AND id = $3;`,
+                  [
+                    reconciled.errorMessage ?? 'Authoritative stamp reconciliation rejected',
+                    command.organizationId,
+                    existingOp.id,
+                  ],
+                );
+                throw new InvalidFiscalInvoiceError(
+                  reconciled.errorMessage ?? 'Authoritative stamp reconciliation rejected',
+                );
+              }
+
+              if (reconciled.outcome === 'NOT_FOUND_CONFIRMED') {
+                if (!caps.supportsSafeStampReplayAfterConfirmedNotFound) {
+                  throw new ReconciliationRequiredError(
+                    'Stamp reconciliation confirmed NOT_FOUND, but safe replay after not-found is not supported under contract',
+                  );
+                }
+                // Controlled redispatch allowed under Rule B
+              } else if (reconciled.outcome === 'PENDING' || reconciled.outcome === 'UNKNOWN') {
+                throw new ReconciliationRequiredError(
+                  `Stamp reconciliation status is '${reconciled.outcome}'; redispatch forbidden`,
+                );
+              }
+            } else if (caps.supportsStampIdempotencyKey) {
+              // Path B: Rule A Idempotent Replay Proven
+              validatePacCapabilityProvenance(this.pacConnector, 'supportsStampIdempotencyKey');
+              // Controlled replay allowed under Rule A
+            } else {
+              // Path C: Neither capability proven
+              throw new ReconciliationRequiredError(
+                'Operation is in RECONCILIATION_REQUIRED: neither authoritative lookup nor idempotent replay is supported under provider contract',
+              );
+            }
+          }
+
+          // Transition to IN_FLIGHT and increment attempt
+          opId = existingOp.id;
+          await client.query(
+            `UPDATE fiscal_stamping_operations
+             SET status = 'IN_FLIGHT',
+                 attempt_count = attempt_count + 1,
+                 updated_at = NOW()
+             WHERE organization_id = $1 AND id = $2;`,
+            [command.organizationId, existingOp.id],
+          );
+        } else {
+          const insertRes = await client.query<{ id: string }>(
+            `INSERT INTO fiscal_stamping_operations (
+               id, organization_id, branch_id, invoice_id, operation_type, idempotency_key, semantic_idempotency_key, request_hash, status, attempt_count
+             ) VALUES (
+               gen_random_uuid(), $1, $2, $3, 'STAMP', $4, $4, $5, 'IN_FLIGHT', 1
+             ) RETURNING id;`,
+            [
+              command.organizationId,
+              currentInvoiceRow.branch_id,
+              command.invoiceId,
+              idempotencyKey,
+              requestHash,
+            ],
+          );
+          opId = insertRes.rows[0]!.id;
+        }
+
+        // 4. Fetch items
+        const itemsRes = await client.query(
+          `SELECT * FROM fiscal_invoice_items WHERE organization_id = $1 AND invoice_id = $2 ORDER BY line_number ASC;`,
+          [command.organizationId, command.invoiceId],
+        );
+        const items = itemsRes.rows.map((r) => this.mapItemRow(r));
+
+        // 5. Fetch emisor config
+        const emisorRes = await client.query(
+          `SELECT * FROM emisor_fiscal_config WHERE organization_id = $1;`,
+          [command.organizationId],
+        );
+        if (emisorRes.rows.length === 0) {
+          throw new InvalidEmisorConfigError(
+            `Emisor config missing for organization '${command.organizationId}'`,
+          );
+        }
+        const emisor = this.mapEmisorRow(emisorRes.rows[0]!);
+
+        // 6. Fail-Closed CSD Validation (ACR-2026-020 §§11, 12, Tests 1–7)
+        if (!emisor.privateKeyVaultId) {
+          throw new CsdCredentialsMissingError(
+            `Emisor private key vault reference (private_key_vault_id) is missing for organization '${command.organizationId}'`,
+          );
+        }
+
+        const privateKeyPem = await this.csdVault.getPrivateKeyPem(
+          command.organizationId,
+          emisor.privateKeyVaultId,
+        );
+
+        if (!privateKeyPem) {
+          throw new CsdCredentialsMissingError(
+            `CSD private key not found in vault for vault ID '${emisor.privateKeyVaultId}'`,
+          );
+        }
+
+        if (!emisor.certificatePem || emisor.certificatePem.trim().length === 0) {
+          throw new CsdCredentialsMissingError(
+            `CSD certificate PEM is missing for organization '${command.organizationId}'`,
+          );
+        }
+
+        // Derive/validate certificate number (Fail closed without synthetic dummy fallbacks)
+        let noCertificado = emisor.certificateNumber;
+        if (!noCertificado || noCertificado.trim().length === 0) {
+          noCertificado = extractCertificateNumber(emisor.certificatePem);
+        }
+
+        // Cryptographic keypair matching validation (Fail-closed before PAC invocation)
+        validateCsdKeyPairMatch(emisor.certificatePem, privateKeyPem);
+
+        const certificadoBase64 = formatCertBase64SingleLine(emisor.certificatePem);
+
+        // 7. Build Cadena Original & Sign
+        const invoiceToStamp: FiscalInvoice = {
+          ...this.mapInvoiceRow(currentInvoiceRow),
+          emisorRfc: emisor.rfc,
+          emisorNombre: emisor.razonSocial,
+          emisorRegimenFiscal: emisor.regimenFiscal,
+          emisorCodigoPostal: emisor.codigoPostal,
+          items,
+        };
+
+        const cadenaOriginal = buildCadenaOriginal40(invoiceToStamp, items, emisor);
+        const selloEmisor = signCadenaOriginal(cadenaOriginal, privateKeyPem);
+        // Ephemeral in-memory key handling: privateKeyPem is discarded immediately after signing
+
+        // 8. Generate CFDI 4.0 XML
+        const cfdiXml = generateCfdi40Xml({
+          invoice: invoiceToStamp,
+          items,
+          emisor,
+          sello: selloEmisor,
+          certificateNumber: noCertificado,
+          certificateBase64: certificadoBase64,
+        });
+
+        return {
+          alreadyCompleted: false as const,
+          opId: opId!,
+          invoiceToStamp,
+          cfdiXml,
+          selloEmisor,
+          cadenaOriginal,
+          emisor,
+        };
+      },
+    );
+
+    if (prepared.alreadyCompleted) {
+      return prepared.invoice!;
+    }
+
+    const { opId, invoiceToStamp, cfdiXml, selloEmisor, cadenaOriginal, emisor } = prepared;
+
+    // Phase 2: Call PAC Gateway outside DB transaction
+    let stampResult: any;
+    try {
+      stampResult = await this.pacConnector.timbrar({
+        organizationId: command.organizationId,
+        invoiceId: command.invoiceId,
+        referenceId: command.invoiceId,
+        idempotencyKey,
+        xmlPayload: cfdiXml,
+      });
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      await withTenantTransaction(this.pool, command.organizationId, async (client) => {
+        await client.query(
+          `UPDATE fiscal_stamping_operations
+           SET status = 'RECONCILIATION_REQUIRED',
+               last_error = $1,
+               next_retry_at = NOW() + interval '5 seconds',
+               updated_at = NOW()
+           WHERE organization_id = $2 AND id = $3;`,
+          [errMsg, command.organizationId, opId],
+        );
+      });
+      if (err instanceof PacTimeoutError) {
+        throw err;
+      }
+      throw new PacTimeoutError(`PAC gateway error: ${errMsg}`);
+    }
+
+    // Phase 3: Reconcile / Commit Outcome in DB transaction
+    if (stampResult.status === 'TIMEOUT') {
+      await withTenantTransaction(this.pool, command.organizationId, async (client) => {
+        await client.query(
+          `UPDATE fiscal_stamping_operations
+           SET status = 'RECONCILIATION_REQUIRED',
+               last_error = $1,
+               next_retry_at = NOW() + interval '5 seconds',
+               updated_at = NOW()
+           WHERE organization_id = $2 AND id = $3;`,
+          [stampResult.errorMessage ?? 'PAC gateway timed out', command.organizationId, opId],
+        );
+      });
+      throw new PacTimeoutError(stampResult.errorMessage ?? 'PAC service timed out');
+    }
+
+    if (stampResult.status === 'REJECTED') {
+      await withTenantTransaction(this.pool, command.organizationId, async (client) => {
+        await client.query(
+          `UPDATE fiscal_stamping_operations
+           SET status = 'FAILED_TERMINAL',
+               last_error = $1,
+               updated_at = NOW()
+           WHERE organization_id = $2 AND id = $3;`,
+          [stampResult.errorMessage ?? 'PAC rejected invoice', command.organizationId, opId],
+        );
+      });
+      throw new InvalidFiscalInvoiceError(stampResult.errorMessage ?? 'PAC rejected invoice');
+    }
+
+    // Authoritative Fiscal Success Validation (§13, Tests 8–11)
+    try {
+      this.validateAuthoritativeStampResult(stampResult);
+    } catch (valErr: unknown) {
+      const msg = valErr instanceof Error ? valErr.message : String(valErr);
+      await withTenantTransaction(this.pool, command.organizationId, async (client) => {
+        await client.query(
+          `UPDATE fiscal_stamping_operations
+           SET status = 'RECONCILIATION_REQUIRED',
+               last_error = $1,
+               updated_at = NOW()
+           WHERE organization_id = $2 AND id = $3;`,
+          [msg, command.organizationId, opId],
+        );
+      });
+      throw valErr;
+    }
+
+    return withTenantTransaction(this.pool, command.organizationId, async (client) => {
+      const cadenaHash = nodeCrypto.createHash('sha256').update(cadenaOriginal!).digest('hex');
+      const pacProviderName = stampResult.pacProvider ?? this.pacConnector.providerName;
+      const stampedXml = stampResult.stampedXml ?? stampResult.xmlTimbrado;
+
+      // Deterministic Stable Semantic Event ID (ACR §14.1)
+      const semanticEventId = generateFiscalSemanticEventId(
+        command.organizationId,
+        opId,
+        'FacturaFiscalEmitida',
+      );
+
+      // Update durable operation to SUCCEEDED
+      await client.query(
+        `UPDATE fiscal_stamping_operations
+         SET status = 'SUCCEEDED',
+             external_uuid = $1,
+             stamped_xml = $2,
+             provider_name = $3,
+             semantic_event_id = $4,
+             last_error = NULL,
+             updated_at = NOW()
+         WHERE organization_id = $5 AND id = $6;`,
+        [
+          stampResult.uuid,
+          stampedXml,
+          pacProviderName,
+          semanticEventId,
+          command.organizationId,
+          opId,
+        ],
+      );
+
+      // Update invoice to STAMPED
+      await client.query(
+        `UPDATE fiscal_invoices
+         SET status = 'STAMPED',
+             invoice_uuid = $1,
+             sello_sat = $2,
+             stamped_at = $3,
+             xml_payload = $4,
+             stamped_xml = $5,
+             sello_emisor = $6,
+             cadena_original_hash = $7,
+             pac_request_reference_id = $8,
+             updated_at = NOW()
+         WHERE organization_id = $9 AND id = $10;`,
+        [
+          stampResult.uuid,
+          stampResult.selloSat,
+          stampResult.fechaTimbrado ?? new Date().toISOString(),
+          cfdiXml,
+          stampedXml,
+          selloEmisor,
+          cadenaHash,
+          command.invoiceId,
+          command.organizationId,
+          command.invoiceId,
+        ],
+      );
+
+      // Enqueue Outbox Event with deterministic semanticEventId
+      await this.outboxService.enqueue(client, {
+        organizationId: command.organizationId,
+        branchId: invoiceToStamp!.branchId,
+        eventType: 'FacturaFiscalEmitida',
+        aggregateType: 'FiscalInvoice',
+        aggregateId: command.invoiceId,
+        payload: {
+          invoiceId: command.invoiceId,
+          uuid: stampResult.uuid,
+          rfcEmisor: emisor!.rfc,
+          rfcReceptor: invoiceToStamp!.customerTaxId ?? invoiceToStamp!.receptorRfc,
+          totalAmount: invoiceToStamp!.totalAmount,
+          series: invoiceToStamp!.series,
+          folio: invoiceToStamp!.folio,
+          fechaTimbrado: stampResult.fechaTimbrado,
+          pacProvider: pacProviderName,
+          semanticEventId,
+        },
+      });
+
+      const updated = await this.getInvoiceInternal(
+        client,
+        command.organizationId,
+        command.invoiceId,
+      );
+      return updated!;
+    });
+  }
+
+  async cancelFiscalInvoice(command: CancelFiscalInvoiceCommand): Promise<FiscalInvoice> {
+    if (!command.motivo) {
+      throw new InvalidFiscalInvoiceError('Cancellation reason code (motivo) is required');
+    }
+    if (command.motivo === '01' && !command.uuidSustitucion) {
+      throw new InvalidFiscalInvoiceError(
+        'Cancellation reason 01 requires substitution UUID (uuidSustitucion)',
+      );
+    }
+
+    const cancellationIdempotencyKey = command.idempotencyKey ?? `${command.invoiceId}:cancel`;
+
+    // Phase 1: Prepare Cancellation & Check Operation under tenant TX
+    const prepared = await withTenantTransaction(
+      this.pool,
+      command.organizationId,
+      async (client) => {
+        // 1. Lock invoice FOR UPDATE
+        const invoiceRes = await client.query(
+          `SELECT * FROM fiscal_invoices WHERE organization_id = $1 AND id = $2 FOR UPDATE;`,
+          [command.organizationId, command.invoiceId],
+        );
+
+        if (invoiceRes.rows.length === 0) {
+          throw new InvalidFiscalInvoiceError(`Fiscal invoice '${command.invoiceId}' not found`);
+        }
+
+        const invoiceRow = invoiceRes.rows[0]!;
+
+        // Idempotency: if already cancelled, return existing
+        if (invoiceRow.status === 'CANCELLED') {
+          const fullInvoice = await this.getInvoiceInternal(
+            client,
+            command.organizationId,
+            command.invoiceId,
+          );
+          return { alreadyCompleted: true as const, invoice: fullInvoice! };
+        }
+
+        validateCanCancel(invoiceRow.status);
+
+        const targetUuid = invoiceRow.invoice_uuid ?? invoiceRow.uuid;
+        if (!targetUuid) {
+          throw new InvalidFiscalInvoiceError('Cannot cancel invoice without UUID');
+        }
+
+        // 2. Request hash for cancellation
+        const requestHash = nodeCrypto
+          .createHash('sha256')
+          .update(
+            `${command.invoiceId}:${targetUuid}:${command.motivo}:${command.uuidSustitucion ?? ''}`,
+          )
+          .digest('hex');
+
+        // 3. Durable cancellation operation
+        const opRes = await client.query<{
+          id: string;
+          organization_id: string;
+          branch_id: string;
+          invoice_id: string;
+          operation_type: FiscalOperationType;
+          idempotency_key: string;
+          request_hash: string;
+          status: FiscalStampingOperationStatus;
+          target_uuid: string | null;
+          attempt_count: number;
+          last_error: string | null;
+        }>(
+          `SELECT * FROM fiscal_stamping_operations WHERE organization_id = $1 AND idempotency_key = $2 FOR UPDATE;`,
+          [command.organizationId, cancellationIdempotencyKey],
+        );
+
+        let opId: string;
+
+        if (opRes.rows.length > 0) {
+          const existingOp = opRes.rows[0]!;
+          opId = existingOp.id;
+
+          if (existingOp.request_hash !== requestHash) {
+            throw new InvoiceIdempotencyConflictError(
+              `Cancellation idempotency key '${cancellationIdempotencyKey}' reused with conflicting semantics`,
+            );
+          }
+
+          if (existingOp.status === 'SUCCEEDED') {
+            await client.query(
+              `UPDATE fiscal_invoices
+               SET status = 'CANCELLED',
+                   cancellation_reason = $1,
+                   cancellation_replacement_uuid = $2,
+                   cancelled_at = COALESCE(cancelled_at, NOW()),
+                   updated_at = NOW()
+               WHERE organization_id = $3 AND id = $4;`,
+              [
+                command.motivo,
+                command.uuidSustitucion ?? null,
+                command.organizationId,
+                command.invoiceId,
+              ],
+            );
+            const fullInvoice = await this.getInvoiceInternal(
+              client,
+              command.organizationId,
+              command.invoiceId,
+            );
+            return { alreadyCompleted: true as const, invoice: fullInvoice! };
+          }
+
+          if (existingOp.status === 'FAILED_TERMINAL') {
+            throw new InvalidFiscalInvoiceError(
+              existingOp.last_error ?? 'Fiscal cancellation failed terminally',
+            );
+          }
+
+          if (existingOp.status === 'RECONCILIATION_REQUIRED') {
+            const caps = this.pacConnector.capabilities;
+
+            // Path A: Authoritative Cancellation Lookup Supported
+            if (
+              caps.supportsAuthoritativeCancellationLookup &&
+              this.pacConnector.consultarCancelacion
+            ) {
+              const reconciled = await this.pacConnector.consultarCancelacion({
+                organizationId: command.organizationId,
+                invoiceId: command.invoiceId,
+                uuid: targetUuid,
+              });
+
+              if (reconciled.outcome === 'CANCELLATION_CONFIRMED') {
+                this.validateAuthoritativeCancellationResult(
+                  {
+                    status: 'CANCELLED',
+                    uuid: targetUuid,
+                    cancellationCode: reconciled.cancellationCode,
+                  },
+                  targetUuid,
+                );
+
+                const semanticEventId = generateFiscalSemanticEventId(
+                  command.organizationId,
+                  existingOp.id,
+                  'FacturaFiscalCancelada',
+                );
+
+                await client.query(
+                  `UPDATE fiscal_stamping_operations
+                   SET status = 'SUCCEEDED',
+                       semantic_event_id = $1,
+                       last_error = NULL,
+                       updated_at = NOW()
+                   WHERE organization_id = $2 AND id = $3;`,
+                  [semanticEventId, command.organizationId, existingOp.id],
+                );
+
+                await client.query(
+                  `UPDATE fiscal_invoices
+                   SET status = 'CANCELLED',
+                       cancellation_reason = $1,
+                       cancellation_replacement_uuid = $2,
+                       cancelled_at = NOW(),
+                       updated_at = NOW()
+                   WHERE organization_id = $3 AND id = $4;`,
+                  [
+                    command.motivo,
+                    command.uuidSustitucion ?? null,
+                    command.organizationId,
+                    command.invoiceId,
+                  ],
+                );
+
+                await this.outboxService.enqueue(client, {
+                  organizationId: command.organizationId,
+                  branchId: invoiceRow.branch_id,
+                  eventType: 'FacturaFiscalCancelada',
+                  aggregateType: 'FiscalInvoice',
+                  aggregateId: command.invoiceId,
+                  payload: {
+                    invoiceId: command.invoiceId,
+                    uuid: targetUuid,
+                    cancellationReason: command.motivo,
+                    cancellationReplacementUuid: command.uuidSustitucion ?? null,
+                    cancelledAt: new Date().toISOString(),
+                    semanticEventId,
+                  },
+                });
+
+                const fullInvoice = await this.getInvoiceInternal(
+                  client,
+                  command.organizationId,
+                  command.invoiceId,
+                );
+                return { alreadyCompleted: true as const, invoice: fullInvoice! };
+              }
+
+              if (reconciled.outcome === 'PENDING_APPROVAL') {
+                throw new CancellationPendingApprovalError(
+                  'Cancellation is PENDING_APPROVAL (PENDING_APPROVAL != CANCELLED)',
+                );
+              }
+
+              if (reconciled.outcome === 'REJECTED_CONFIRMED') {
+                await client.query(
+                  `UPDATE fiscal_stamping_operations
+                   SET status = 'FAILED_TERMINAL',
+                       last_error = $1,
+                       updated_at = NOW()
+                   WHERE organization_id = $2 AND id = $3;`,
+                  [
+                    reconciled.errorMessage ?? 'Authoritative cancellation rejected',
+                    command.organizationId,
+                    existingOp.id,
+                  ],
+                );
+                throw new InvalidFiscalInvoiceError(
+                  reconciled.errorMessage ?? 'Authoritative cancellation rejected',
+                );
+              }
+
+              if (reconciled.outcome === 'NOT_FOUND_CONFIRMED') {
+                if (!caps.supportsSafeCancellationReplayAfterConfirmedNotFound) {
+                  throw new ReconciliationRequiredError(
+                    'Cancellation confirmed NOT_FOUND, but safe replay after not-found is not supported under contract',
+                  );
+                }
+              } else if (reconciled.outcome === 'UNKNOWN') {
+                throw new ReconciliationRequiredError(
+                  'Cancellation reconciliation outcome is UNKNOWN; redispatch forbidden',
+                );
+              }
+            } else if (caps.supportsCancellationIdempotencyKey) {
+              // Path B: Rule A Cancellation Idempotent Replay Proven
+              validatePacCapabilityProvenance(
+                this.pacConnector,
+                'supportsCancellationIdempotencyKey',
+              );
+            } else {
+              // Path C: Neither capability proven
+              throw new ReconciliationRequiredError(
+                'Cancellation in RECONCILIATION_REQUIRED: neither lookup nor replay is supported under provider contract',
+              );
+            }
+          }
+
+          opId = existingOp.id;
+          await client.query(
+            `UPDATE fiscal_stamping_operations
+             SET status = 'IN_FLIGHT',
+                 attempt_count = attempt_count + 1,
+                 updated_at = NOW()
+             WHERE organization_id = $1 AND id = $2;`,
+            [command.organizationId, existingOp.id],
+          );
+        } else {
+          const insertRes = await client.query<{ id: string }>(
+            `INSERT INTO fiscal_stamping_operations (
+               id, organization_id, branch_id, invoice_id, operation_type, idempotency_key, semantic_idempotency_key, request_hash, target_uuid, status, attempt_count
+             ) VALUES (
+               gen_random_uuid(), $1, $2, $3, 'CANCEL', $4, $4, $5, $6, 'IN_FLIGHT', 1
+             ) RETURNING id;`,
+            [
+              command.organizationId,
+              invoiceRow.branch_id,
+              command.invoiceId,
+              cancellationIdempotencyKey,
+              requestHash,
+              targetUuid,
+            ],
+          );
+          opId = insertRes.rows[0]!.id;
+        }
+
+        // 4. Fetch emisor config for RFC
+        const emisorRes = await client.query(
+          `SELECT rfc FROM emisor_fiscal_config WHERE organization_id = $1;`,
+          [command.organizationId],
+        );
+        const emisorRfc = emisorRes.rows[0]?.rfc ?? 'XAXX010101000';
+
+        return {
+          alreadyCompleted: false as const,
+          opId: opId!,
+          targetUuid,
+          invoiceRow,
+          emisorRfc,
+        };
+      },
+    );
+
+    if (prepared.alreadyCompleted) {
+      return prepared.invoice!;
+    }
+
+    const { opId, targetUuid, invoiceRow, emisorRfc } = prepared;
+
+    // Phase 2: Call PAC Cancellation Gateway outside DB transaction
+    let cancelResult: any;
+    try {
+      cancelResult = await this.pacConnector.cancelar({
+        organizationId: command.organizationId,
+        uuid: targetUuid,
+        rfcEmisor: emisorRfc,
+        total: invoiceRow.total_amount,
+        reason: command.motivo as any,
+        replacementUuid: command.uuidSustitucion,
+        idempotencyKey: cancellationIdempotencyKey,
+      });
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      await withTenantTransaction(this.pool, command.organizationId, async (client) => {
+        await client.query(
+          `UPDATE fiscal_stamping_operations
+           SET status = 'RECONCILIATION_REQUIRED',
+               last_error = $1,
+               next_retry_at = NOW() + interval '5 seconds',
+               updated_at = NOW()
+           WHERE organization_id = $2 AND id = $3;`,
+          [errMsg, command.organizationId, opId],
+        );
+      });
+      if (err instanceof PacTimeoutError) {
+        throw err;
+      }
+      throw new PacTimeoutError(`PAC cancellation error: ${errMsg}`);
+    }
+
+    // Phase 3: Evaluate Cancellation Outcome
+    if (cancelResult.status === 'PENDING_APPROVAL') {
+      // Non-final state: PENDING_APPROVAL != CANCELLED
+      await withTenantTransaction(this.pool, command.organizationId, async (client) => {
+        await client.query(
+          `UPDATE fiscal_stamping_operations
+           SET status = 'READY',
+               reconciliation_status = 'PENDING_APPROVAL',
+               last_error = $1,
+               updated_at = NOW()
+           WHERE organization_id = $2 AND id = $3;`,
+          [
+            cancelResult.errorMessage ?? 'Cancellation pending receptor approval',
+            command.organizationId,
+            opId,
+          ],
+        );
+      });
+      throw new CancellationPendingApprovalError(
+        'Cancellation is PENDING_APPROVAL (PENDING_APPROVAL != CANCELLED)',
+      );
+    }
+
+    if (cancelResult.status === 'REJECTED') {
+      await withTenantTransaction(this.pool, command.organizationId, async (client) => {
+        await client.query(
+          `UPDATE fiscal_stamping_operations
+           SET status = 'FAILED_TERMINAL',
+               last_error = $1,
+               updated_at = NOW()
+           WHERE organization_id = $2 AND id = $3;`,
+          [cancelResult.errorMessage ?? 'PAC rejected cancellation', command.organizationId, opId],
+        );
+      });
+      throw new InvalidFiscalInvoiceError(cancelResult.errorMessage ?? 'PAC rejected cancellation');
+    }
+
+    // Authoritative Cancellation Validation (§15.3, Tests 25–36)
+    try {
+      this.validateAuthoritativeCancellationResult(cancelResult, targetUuid);
+    } catch (valErr: unknown) {
+      const msg = valErr instanceof Error ? valErr.message : String(valErr);
+      await withTenantTransaction(this.pool, command.organizationId, async (client) => {
+        await client.query(
+          `UPDATE fiscal_stamping_operations
+           SET status = 'RECONCILIATION_REQUIRED',
+               last_error = $1,
+               updated_at = NOW()
+           WHERE organization_id = $2 AND id = $3;`,
+          [msg, command.organizationId, opId],
+        );
+      });
+      throw valErr;
+    }
+
+    return withTenantTransaction(this.pool, command.organizationId, async (client) => {
+      const semanticEventId = generateFiscalSemanticEventId(
+        command.organizationId,
+        opId,
+        'FacturaFiscalCancelada',
+      );
+
+      // Update operation to SUCCEEDED
+      await client.query(
+        `UPDATE fiscal_stamping_operations
+         SET status = 'SUCCEEDED',
+             semantic_event_id = $1,
+             last_error = NULL,
+             updated_at = NOW()
+         WHERE organization_id = $2 AND id = $3;`,
+        [semanticEventId, command.organizationId, opId],
+      );
+
+      // Update invoice to CANCELLED
+      await client.query(
+        `UPDATE fiscal_invoices
+         SET status = 'CANCELLED',
+             cancellation_reason = $1,
+             cancellation_replacement_uuid = $2,
+             cancelled_at = NOW(),
+             updated_at = NOW()
+         WHERE organization_id = $3 AND id = $4;`,
+        [
+          command.motivo,
+          command.uuidSustitucion ?? null,
+          command.organizationId,
+          command.invoiceId,
+        ],
+      );
+
+      // Enqueue Outbox Event with deterministic semanticEventId
+      await this.outboxService.enqueue(client, {
+        organizationId: command.organizationId,
+        branchId: invoiceRow.branch_id,
+        eventType: 'FacturaFiscalCancelada',
+        aggregateType: 'FiscalInvoice',
+        aggregateId: command.invoiceId,
+        payload: {
+          invoiceId: command.invoiceId,
+          uuid: targetUuid,
+          cancellationReason: command.motivo,
+          cancellationReplacementUuid: command.uuidSustitucion ?? null,
+          cancelledAt: new Date().toISOString(),
+          semanticEventId,
+        },
+      });
+
+      const updated = await this.getInvoiceInternal(
+        client,
+        command.organizationId,
+        command.invoiceId,
+      );
+      return updated!;
+    });
+  }
+
+  private validateAuthoritativeStampResult(result: any, expectedUuid?: string): void {
+    if (result.status !== 'STAMPED') {
+      throw new FiscalSuccessValidationError(`PAC result status '${result.status}' is not STAMPED`);
+    }
+    if (!result.uuid || typeof result.uuid !== 'string' || result.uuid.trim().length === 0) {
+      throw new FiscalSuccessValidationError('PAC STAMPED result is missing required fiscal UUID');
+    }
+    const stampedXml = result.stampedXml ?? result.xmlTimbrado;
+    if (!stampedXml || typeof stampedXml !== 'string' || stampedXml.trim().length === 0) {
+      throw new FiscalSuccessValidationError('PAC STAMPED result is missing certified stamped XML');
+    }
+    if (
+      !stampedXml.includes('<tfd:TimbreFiscalDigital') &&
+      !stampedXml.includes('<TimbreFiscalDigital')
+    ) {
+      throw new FiscalSuccessValidationError(
+        'Certified XML does not contain authoritative Timbre Fiscal Digital',
+      );
+    }
+    const uuidMatch = stampedXml.match(/UUID="([a-fA-F0-9-]+)"/i);
+    if (!uuidMatch || !uuidMatch[1]) {
+      throw new FiscalSuccessValidationError(
+        'Cannot parse fiscal UUID from Timbre Fiscal Digital in certified XML',
+      );
+    }
+    if (uuidMatch[1].toUpperCase() !== result.uuid.toUpperCase()) {
+      throw new FiscalSuccessValidationError(
+        `Certified XML UUID '${uuidMatch[1]}' does not match PAC result UUID '${result.uuid}'`,
+      );
+    }
+    if (expectedUuid && result.uuid.toUpperCase() !== expectedUuid.toUpperCase()) {
+      throw new FiscalSuccessValidationError(
+        `PAC result UUID '${result.uuid}' does not match expected UUID '${expectedUuid}'`,
+      );
+    }
+  }
+
+  private validateAuthoritativeCancellationResult(result: any, targetUuid: string): void {
+    if (result.status === 'PENDING_APPROVAL') {
+      throw new CancellationPendingApprovalError(
+        'Cancellation is PENDING_APPROVAL (PENDING_APPROVAL != CANCELLED)',
+      );
+    }
+    if (result.status !== 'CANCELLED') {
+      throw new FiscalSuccessValidationError(
+        `PAC cancellation result status '${result.status}' is not CANCELLED`,
+      );
+    }
+    if (!result.uuid || result.uuid.toUpperCase() !== targetUuid.toUpperCase()) {
+      throw new FiscalSuccessValidationError(
+        `PAC cancellation UUID '${result.uuid}' does not match target invoice UUID '${targetUuid}'`,
+      );
+    }
+  }
+
+  private async getInvoiceInternal(
+    client: pg.PoolClient,
+    organizationId: string,
+    invoiceId: string,
+  ): Promise<FiscalInvoice | null> {
+    const invoiceRes = await client.query(
+      `SELECT * FROM fiscal_invoices WHERE organization_id = $1 AND id = $2;`,
+      [organizationId, invoiceId],
+    );
+    if (invoiceRes.rows.length === 0) return null;
+
+    const itemsRes = await client.query(
+      `SELECT * FROM fiscal_invoice_items WHERE organization_id = $1 AND invoice_id = $2 ORDER BY line_number ASC;`,
+      [organizationId, invoiceId],
+    );
+
+    return {
+      ...this.mapInvoiceRow(invoiceRes.rows[0]!),
+      items: itemsRes.rows.map((r) => this.mapItemRow(r)),
+    };
+  }
+
+  async getFiscalInvoiceById(
+    organizationId: string,
+    invoiceId: string,
+  ): Promise<FiscalInvoice | null> {
+    return withTenantTransaction(this.pool, organizationId, async (client) => {
+      return this.getInvoiceInternal(client, organizationId, invoiceId);
+    });
+  }
+
+  async getFiscalInvoiceByUuid(
+    organizationId: string,
+    uuid: string,
+  ): Promise<FiscalInvoice | null> {
+    return withTenantTransaction(this.pool, organizationId, async (client) => {
+      const invoiceRes = await client.query(
+        `SELECT * FROM fiscal_invoices WHERE organization_id = $1 AND invoice_uuid = $2;`,
+        [organizationId, uuid],
+      );
+      if (invoiceRes.rows.length === 0) return null;
+
+      const invoiceId = invoiceRes.rows[0]!.id;
+      return this.getInvoiceInternal(client, organizationId, invoiceId);
+    });
+  }
+
+  async queryUnclaimedFiscalFolios(
+    command: BatchCandidateQueryCommand,
+  ): Promise<BatchCandidateResult> {
+    return findUnclaimedFolios([], {
+      organizationId: command.organizationId,
+      branchId: command.branchId,
+      startDate: command.startDate,
+      endDate: command.endDate,
+    });
+  }
+
+  async createGlobalInvoiceBatch(
+    command: CreateGlobalInvoiceBatchCommand,
+  ): Promise<GlobalInvoiceBatch> {
+    return withTenantTransaction(this.pool, command.organizationId, async (client) => {
+      const batchRef = `BATCH-${command.anio}${command.mes}-${crypto.randomUUID().substring(0, 6)}`;
+      const lastDay = new Date(command.anio, Number(command.mes), 0).getDate();
+      const lastDayStr = String(lastDay).padStart(2, '0');
+      const periodStart = `${command.anio}-${command.mes}-01T00:00:00Z`;
+      const periodEnd = `${command.anio}-${command.mes}-${lastDayStr}T23:59:59Z`;
+
+      const res = await client.query<{
+        id: string;
+        organization_id: string;
+        branch_id: string;
+        batch_reference: string;
+        period_start: string | Date;
+        period_end: string | Date;
+        ticket_folios: string[];
+        subtotal: string;
+        tax_total: string;
+        total_amount: string;
+        status: 'PENDING' | 'PROCESSED' | 'FAILED';
+        fiscal_invoice_id: string | null;
+        created_at: string | Date;
+      }>(
+        `INSERT INTO lotes_facturacion_global (
+          id, organization_id, branch_id, batch_reference, period_start, period_end,
+          ticket_folios, subtotal, tax_total, total_amount, status
+        ) VALUES (
+          COALESCE($1, gen_random_uuid()), $2, $3, $4, $5, $6,
+          $7, $8, $9, $10, 'PENDING'
+        ) RETURNING *;`,
+        [
+          command.id ?? null,
+          command.organizationId,
+          command.branchId,
+          batchRef,
+          periodStart,
+          periodEnd,
+          [],
+          command.subtotalAmount,
+          command.taxAmount,
+          command.totalAmount,
+        ],
+      );
+
+      const row = res.rows[0]!;
+      return {
+        id: row.id,
+        organizationId: row.organization_id,
+        branchId: row.branch_id,
+        periodo: command.periodo,
+        mes: command.mes,
+        anio: command.anio ? Number(command.anio) : 2026,
+        folioCount: command.folioCount ? Number(command.folioCount) : 0,
+        batchReference: row.batch_reference,
+        periodStart:
+          typeof row.period_start === 'string' ? row.period_start : row.period_start.toISOString(),
+        periodEnd:
+          typeof row.period_end === 'string' ? row.period_end : row.period_end.toISOString(),
+        ticketFolios: row.ticket_folios ?? [],
+        subtotal: row.subtotal,
+        subtotalAmount: row.subtotal,
+        taxTotal: row.tax_total,
+        taxAmount: row.tax_total,
+        totalAmount: row.total_amount,
+        status: 'DRAFT',
+        fiscalInvoiceId: row.fiscal_invoice_id,
+        metadata: command.metadata ?? {},
+        createdAt:
+          typeof row.created_at === 'string' ? row.created_at : row.created_at.toISOString(),
+        updatedAt:
+          typeof row.created_at === 'string' ? row.created_at : row.created_at.toISOString(),
+      };
+    });
+  }
+
+  private mapTaxSchemeRow(row: {
+    id: string;
+    organization_id: string;
+    code: string;
+    name: string;
+    rate: string;
+    is_inclusive: boolean;
+    tax_type: TaxType;
+    created_at: string | Date;
+  }): TaxScheme {
+    return {
+      id: row.id,
+      organizationId: row.organization_id,
+      code: row.code,
+      name: row.name,
+      rate: row.rate,
+      isInclusive: Boolean(row.is_inclusive),
+      taxType: row.tax_type,
+      factorType: 'Tasa',
+      isActive: true,
+      createdAt: typeof row.created_at === 'string' ? row.created_at : row.created_at.toISOString(),
+    };
+  }
+
+  private mapEmisorRow(row: {
+    id: string;
+    organization_id: string;
+    rfc: string;
+    razon_social: string;
+    regimen_fiscal: string;
+    codigo_postal: string;
+    certificate_number: string | null;
+    certificate_pem: string | null;
+    private_key_vault_id: string | null;
+    valid_from: string | Date | null;
+    valid_to: string | Date | null;
+    is_active: boolean;
+    created_at: string | Date;
+    updated_at: string | Date;
+  }): EmisorFiscalConfig {
+    return {
+      id: row.id,
+      organizationId: row.organization_id,
+      rfc: row.rfc,
+      razonSocial: row.razon_social,
+      regimenFiscal: row.regimen_fiscal,
+      codigoPostal: row.codigo_postal,
+      certificateNumber: row.certificate_number,
+      certificatePem: row.certificate_pem,
+      privateKeyVaultId: row.private_key_vault_id,
+      validFrom: row.valid_from
+        ? typeof row.valid_from === 'string'
+          ? row.valid_from
+          : row.valid_from.toISOString()
+        : null,
+      validTo: row.valid_to
+        ? typeof row.valid_to === 'string'
+          ? row.valid_to
+          : row.valid_to.toISOString()
+        : null,
+      pacEnvironment: 'TEST',
+      pacPrimaryProvider:
+        row.private_key_vault_id && this.pacConnector.providerName !== 'UNAVAILABLE_PAC'
+          ? this.pacConnector.providerName
+          : null,
+      isActive: Boolean(row.is_active),
+      createdAt: typeof row.created_at === 'string' ? row.created_at : row.created_at.toISOString(),
+      updatedAt: typeof row.created_at === 'string' ? row.created_at : row.created_at.toISOString(),
+    };
+  }
+
+  private mapInvoiceRow(row: any): Omit<FiscalInvoice, 'items'> {
+    return {
+      id: row.id,
+      organizationId: row.organization_id,
+      branchId: row.branch_id,
+      invoiceUuid: row.invoice_uuid,
+      uuid: row.invoice_uuid,
+      series: row.series,
+      serie: row.series,
+      folio: row.folio,
+      customerTaxId: row.customer_tax_id,
+      customerName: row.customer_name,
+      customerRegimenFiscal: row.customer_regimen_fiscal,
+      customerPostalCode: row.customer_postal_code,
+      receptorRfc: row.customer_tax_id,
+      receptorNombre: row.customer_name,
+      receptorRegimenFiscal: row.customer_regimen_fiscal,
+      receptorCodigoPostal: row.customer_postal_code,
+      receptorUsoCfdi: row.cfdi_use,
+      cfdiUse: row.cfdi_use,
+      paymentMethod: row.payment_method,
+      paymentWay: row.payment_way,
+      subtotal: row.subtotal,
+      subtotalAmount: row.subtotal,
+      taxTotal: row.tax_total,
+      taxAmount: row.tax_total,
+      totalAmount: row.total_amount,
+      status: row.status,
+      cancellationReason: row.cancellation_reason,
+      cancellationReplacementUuid: row.cancellation_replacement_uuid,
+      stampedAt: row.stamped_at
+        ? typeof row.stamped_at === 'string'
+          ? row.stamped_at
+          : row.stamped_at.toISOString()
+        : null,
+      fechaTimbrado: row.stamped_at
+        ? typeof row.stamped_at === 'string'
+          ? row.stamped_at
+          : row.stamped_at.toISOString()
+        : null,
+      cancelledAt: row.cancelled_at
+        ? typeof row.cancelled_at === 'string'
+          ? row.cancelled_at
+          : row.cancelled_at.toISOString()
+        : null,
+      xmlPayload: row.xml_payload,
+      xmlContent: row.xml_payload,
+      stampedXml: row.stamped_xml,
+      selloEmisor: row.sello_emisor,
+      selloSat: row.sello_sat,
+      cadenaOriginalHash: row.cadena_original_hash,
+      cadenaOriginal: row.cadena_original_hash,
+      pacRequestReferenceId: row.pac_request_reference_id,
+      pacProvider:
+        row.pac_provider ??
+        (row.status === 'STAMPED' && this.pacConnector.providerName !== 'UNAVAILABLE_PAC'
+          ? this.pacConnector.providerName
+          : null),
+      createdAt: typeof row.created_at === 'string' ? row.created_at : row.created_at.toISOString(),
+      updatedAt: typeof row.updated_at === 'string' ? row.updated_at : row.updated_at.toISOString(),
+    };
+  }
+
+  private mapItemRow(row: any): FiscalInvoiceItem {
+    return {
+      id: row.id,
+      organizationId: row.organization_id,
+      invoiceId: row.invoice_id,
+      lineNumber: Number(row.line_number),
+      productCode: row.product_code,
+      sku: row.product_code,
+      description: row.description,
+      satProductCode: row.sat_product_code,
+      satUnitCode: row.sat_unit_code,
+      claveProdServ: row.sat_product_code,
+      claveUnidad: row.sat_unit_code,
+      quantity: row.quantity,
+      unitPrice: row.unit_price,
+      subtotal: row.subtotal,
+      subtotalAmount: row.subtotal,
+      taxAmount: row.tax_amount,
+      totalAmount: row.total_amount,
+      taxRate: row.tax_rate,
+      createdAt: typeof row.created_at === 'string' ? row.created_at : row.created_at.toISOString(),
+    };
+  }
+}
+
+/**
+ * Consumer Inbox Service for Transactional Deduplication of Fiscal & Cloud Events
+ * Governed by ACR-2026-020 Section 14.2 (Consumer Idempotency / Inbox Contract).
+ */
+export class ConsumerInboxService {
+  constructor(private readonly pool: pg.Pool = getPool()) {}
+
+  async processEventWithInbox<T>(
+    organizationId: string,
+    consumerContext: string,
+    semanticEventId: string,
+    eventKind: string,
+    handler: (client: pg.PoolClient) => Promise<T>,
+  ): Promise<{ duplicate: boolean; processed: boolean; result?: T }> {
+    return withTenantTransaction(this.pool, organizationId, async (client) => {
+      // 1. Check if semanticEventId already exists in consumer inbox for this tenant & context
+      const existing = await client.query(
+        `SELECT 1 FROM consumer_inbox_events
+         WHERE organization_id = $1 AND consumer_context = $2 AND semantic_event_id = $3
+         FOR UPDATE;`,
+        [organizationId, consumerContext, semanticEventId],
+      );
+
+      if (existing.rows.length > 0) {
+        // Duplicate event absorbed as safe NO-OP
+        return { duplicate: true, processed: false };
+      }
+
+      // 2. Execute business handler within the SAME local transaction
+      const result = await handler(client);
+
+      // 3. Atomically record in consumer inbox
+      await client.query(
+        `INSERT INTO consumer_inbox_events (
+           id, organization_id, semantic_event_id, event_kind, consumer_context, processed_at
+         ) VALUES (
+           gen_random_uuid(), $1, $2, $3, $4, NOW()
+         );`,
+        [organizationId, semanticEventId, eventKind, consumerContext],
+      );
+
+      return { duplicate: false, processed: true, result };
+    });
+  }
+}
+
 export * from '@trident/procurement';
+export {
+  type TaxScheme,
+  type TaxType,
+  type CreateTaxSchemeCommand,
+  type EmisorFiscalConfig,
+  type ConfigureEmisorFiscalCommand,
+  type FiscalInvoice,
+  type FiscalInvoiceItem,
+  type CreateDraftInvoiceCommand,
+  type StampFiscalInvoiceCommand,
+  type CancelFiscalInvoiceCommand,
+  type BatchCandidateQueryCommand,
+  type BatchCandidateResult,
+  type CreateGlobalInvoiceBatchCommand,
+  type GlobalInvoiceBatch,
+  type FiscalInvoiceStatus,
+  type IPacConnector,
+  type ICsdVault,
+  type FiscalStampingOperation,
+  type FiscalStampingOperationStatus,
+  type FiscalOperationType,
+  type PacStampRequest,
+  type PacStampResult,
+  type PacCancelRequest,
+  type PacCancelResult,
+  type PacCapabilities,
+  type PacContractProvenance,
+  type NormalizedStampReconciliationOutcome,
+  type NormalizedCancellationReconciliationOutcome,
+  type AuthoritativeStampReconciliationResult,
+  type AuthoritativeCancellationReconciliationResult,
+  type ConsumerInboxRecord,
+  PacCircuitBreaker,
+  MockPacConnector,
+  UnavailablePacConnector,
+  UnavailableCsdVault,
+  InMemoryCsdVault,
+  calculateItemTaxes,
+  calculateLineTaxes,
+  calculateInvoiceTaxes,
+  generateCfdi40Xml,
+  buildCfdi40Xml,
+  buildCadenaOriginal40,
+  signCadenaOriginal,
+  verifyCadenaOriginalSignature,
+  validateCsdKeyPairMatch,
+  formatCertBase64SingleLine,
+  extractCertNumberFromPem,
+  extractCertificateNumber,
+  validatePacCapabilityProvenance,
+  generateFiscalSemanticEventId,
+  validateRfc,
+  validateRegimenFiscal,
+  validatePostalCode,
+  validateDraftTransition,
+  validateCanCancel,
+  validateCanStamp,
+  findUnclaimedFolios,
+  InvalidRfcError,
+  InvalidTaxSchemeError,
+  InvalidEmisorConfigError,
+  InvalidFiscalInvoiceError,
+  InvoiceStatusTransitionError,
+  FiscalSigningError,
+  CsdCredentialsMissingError,
+  CsdMismatchError,
+  FiscalSuccessValidationError,
+  PacCapabilityMissingError,
+  PacContractProvenanceMissingError,
+  ReconciliationRequiredError,
+  CancellationPendingApprovalError,
+  CsdSignatureError,
+  PacConnectorError,
+  PacCircuitBreakerOpenError,
+  PacTimeoutError,
+  InvoiceIdempotencyConflictError,
+  TaxCalculationError,
+} from '@trident/billing';
