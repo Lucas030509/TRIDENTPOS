@@ -197,6 +197,62 @@ export class PacContractProvenanceMissingError extends BillingError {
   }
 }
 
+export class PacProvenanceValidationError extends BillingError {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PacProvenanceValidationError';
+  }
+}
+
+export class PacProvenanceRevokedError extends BillingError {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PacProvenanceRevokedError';
+  }
+}
+
+export class PacProvenanceExpiredError extends BillingError {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PacProvenanceExpiredError';
+  }
+}
+
+export class PacProvenanceScopeMismatchError extends BillingError {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PacProvenanceScopeMismatchError';
+  }
+}
+
+export class InvalidEventContractVersionError extends BillingError {
+  constructor(message: string) {
+    super(message);
+    this.name = 'InvalidEventContractVersionError';
+  }
+}
+
+export class EventContractIncompatibleError extends BillingError {
+  constructor(message: string) {
+    super(message);
+    this.name = 'EventContractIncompatibleError';
+  }
+}
+
+export class ConsumerRestoreDomainError extends BillingError {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ConsumerRestoreDomainError';
+  }
+}
+
+export class DestructiveDownMigrationError extends BillingError {
+  constructor(message: string) {
+    super(message);
+    this.name = 'DestructiveDownMigrationError';
+  }
+}
+
 export class ReconciliationRequiredError extends BillingError {
   constructor(message: string) {
     super(message);
@@ -208,5 +264,23 @@ export class CancellationPendingApprovalError extends BillingError {
   constructor(message: string) {
     super(message);
     this.name = 'CancellationPendingApprovalError';
+  }
+}
+
+export class SanitizedBillingError extends BillingError {
+  public readonly sanitizedMessage: string;
+  public readonly errorCode: string;
+  public readonly correlationId: string;
+
+  constructor(
+    sanitizedMessage: string,
+    errorCode: string = 'FISCAL_ERROR',
+    correlationId: string = '',
+  ) {
+    super(sanitizedMessage);
+    this.name = 'SanitizedBillingError';
+    this.sanitizedMessage = sanitizedMessage;
+    this.errorCode = errorCode;
+    this.correlationId = correlationId;
   }
 }

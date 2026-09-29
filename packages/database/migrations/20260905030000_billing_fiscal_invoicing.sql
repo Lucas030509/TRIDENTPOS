@@ -216,6 +216,7 @@ CREATE TABLE IF NOT EXISTS consumer_inbox_events (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     organization_id UUID NOT NULL REFERENCES organizations(id),
     semantic_event_id VARCHAR(100) NOT NULL,
+    event_contract_version VARCHAR(20) NOT NULL DEFAULT '1.0',
     event_kind VARCHAR(100) NOT NULL,
     consumer_context VARCHAR(100) NOT NULL,
     processed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -231,6 +232,23 @@ CREATE POLICY tenant_isolation_policy ON consumer_inbox_events
     WITH CHECK (organization_id = current_app_org_id());
 
 -- Down
+DO $$
+DECLARE
+    v_invoices_count BIGINT := 0;
+    v_ops_count BIGINT := 0;
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'fiscal_invoices') THEN
+        SELECT COUNT(*) INTO v_invoices_count FROM fiscal_invoices;
+    END IF;
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'fiscal_stamping_operations') THEN
+        SELECT COUNT(*) INTO v_ops_count FROM fiscal_stamping_operations;
+    END IF;
+
+    IF v_invoices_count > 0 OR v_ops_count > 0 THEN
+        RAISE EXCEPTION 'FAIL_CLOSED: Destructive down migration prohibited when populated fiscal records exist (% invoices, % operations). Rollback aborted to protect fiscal truth.', v_invoices_count, v_ops_count;
+    END IF;
+END $$;
+
 DROP TABLE IF EXISTS consumer_inbox_events;
 DROP TABLE IF EXISTS fiscal_stamping_operations;
 DROP TABLE IF EXISTS lotes_facturacion_global;
@@ -238,4 +256,5 @@ DROP TABLE IF EXISTS fiscal_invoice_items;
 DROP TABLE IF EXISTS fiscal_invoices;
 DROP TABLE IF EXISTS emisor_fiscal_config;
 DROP TABLE IF EXISTS tax_schemes;
+
 

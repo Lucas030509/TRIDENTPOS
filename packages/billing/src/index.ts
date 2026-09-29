@@ -15,3 +15,5 @@ export * from './csd-vault.js';
 export * from './pac-connector.js';
 export * from './invoice-lifecycle.js';
 export * from './batch-candidate-query.js';
+export * from './error-sanitizer.js';
+export * from './xml-validator.js';

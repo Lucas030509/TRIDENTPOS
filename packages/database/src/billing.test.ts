@@ -371,7 +371,47 @@ describe('TRIDENTPOS WP-021 Billing & Fiscal Invoicing Database Suite', { concur
     });
   });
 
-  it('WP021-DOWN-01: Non-production rollback of WP-021 removes billing tables and preserves predecessors', async () => {
+  it('WP021-DOWN-01: Non-production rollback of WP-021 fails closed when fiscal records exist (SEC-WP021-R4-HIGH-03)', async () => {
+    // 1. Verify that down migration fails closed when fiscal records exist
+    await assert.rejects(
+      async () => {
+        await migrateDown(pool, { allowDestructiveDown: true });
+      },
+      (err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        assert.match(msg, /FAIL_CLOSED.*Destructive down migration prohibited/i);
+        return true;
+      },
+    );
+
+    // 2. Verify fiscal tables and records are completely intact after failed down migration
+    const checkInvoices = await pool.query<{ count: string }>(
+      'SELECT COUNT(*) as count FROM fiscal_invoices;',
+    );
+    assert.ok(
+      parseInt(checkInvoices.rows[0]?.count || '0', 10) > 0,
+      'Fiscal invoices must remain intact',
+    );
+
+    const checkOps = await pool.query<{ count: string }>(
+      'SELECT COUNT(*) as count FROM fiscal_stamping_operations;',
+    );
+    assert.ok(
+      parseInt(checkOps.rows[0]?.count || '0', 10) > 0,
+      'Fiscal operations must remain intact',
+    );
+
+    // 3. Clear data and verify non-production down migration succeeds on empty tables
+    await pool.query(`
+      DELETE FROM fiscal_invoice_items;
+      DELETE FROM fiscal_stamping_operations;
+      DELETE FROM lotes_facturacion_global;
+      DELETE FROM fiscal_invoices;
+      DELETE FROM emisor_fiscal_config;
+      DELETE FROM tax_schemes;
+      DELETE FROM consumer_inbox_events;
+    `);
+
     const downResult = await migrateDown(pool, { allowDestructiveDown: true });
     assert.equal(downResult.reverted, '20260905030000_billing_fiscal_invoicing');
 

@@ -1,9 +1,10 @@
 /**
  * TRIDENTPOS Billing Bounded Context: Types & Interfaces
- * Governed by DATA_MODEL.md Sec. 2.4, MODULE_CATALOG.md MOD-BILL, and WP-021.
+ * Governed by DATA_MODEL.md Sec. 2.4, MODULE_CATALOG.md MOD-BILL, and ACR-2026-020 R5.
  */
 
 import crypto from 'node:crypto';
+import { InvalidEventContractVersionError } from './errors.js';
 
 export type TaxType =
   'IVA' | 'IEPS' | 'ISR' | 'RETENCION_IVA' | 'RETENCION_ISR' | 'PROPINA_LEGAL' | 'LOCAL';
@@ -173,11 +174,9 @@ export interface EmisorFiscalConfig {
   certificatePem?: string | null;
   certificadoPem?: string | null;
   privateKeyVaultId?: string | null;
-  llavePrivadaPem?: string | null;
-  llavePrivadaPassword?: string | null;
   pacEnvironment?: 'TEST' | 'PRODUCTION';
   pacUsername?: string | null;
-  pacPassword?: string | null;
+  pacSecretRef?: string | null;
   pacPrimaryProvider?: string | null;
   pacFallbackProvider?: string | null;
   validFrom?: string | null;
@@ -241,16 +240,74 @@ export interface PacCancelResult {
   pacProvider?: string;
 }
 
+export type FiscalOperationType = 'STAMP' | 'CANCEL';
+
+export type PacCapabilityName =
+  | 'supportsStamp'
+  | 'supportsCancel'
+  | 'supportsStampIdempotencyKey'
+  | 'supportsCancellationIdempotencyKey'
+  | 'supportsAuthoritativeStampLookup'
+  | 'supportsAuthoritativeCancellationLookup'
+  | 'supportsSafeStampReplayAfterConfirmedNotFound'
+  | 'supportsSafeCancellationReplayAfterConfirmedNotFound';
+
+export interface PacApprovedScope {
+  organizationId?: string | 'GLOBAL';
+  operationType: FiscalOperationType | '*';
+  capability: PacCapabilityName | '*';
+  recoveryCondition?: string | '*';
+}
+
 export interface PacContractProvenance {
+  providerName: string;
   contractIdentifier: string;
   contractVersion: string;
   evidenceUriOrReference: string;
-  evidenceDigestOrHash: string;
-  effectivePeriod: string;
-  guaranteeScopeOrLimitations: string;
+  evidenceMediaType: string;
+  evidenceByteLength: number;
+  evidenceDigestAlgorithm: 'SHA-256';
+  evidenceDigest: string; // SHA-256 hex string over raw bytes
+  approvalAuthorityId: string;
+  approvalKeyId: string;
+  approvalAttestation: string;
+  approvedScope: PacApprovedScope;
+  effectiveFrom: string; // ISO-8601
+  effectiveUntil: string; // ISO-8601
+  revocationAuthorityId: string;
+  revocationKeyId: string;
+  revocationSequence: number;
+  revocationStatus: 'ACTIVE' | 'REVOKED' | 'SUPERSEDED';
+  revocationAttestation: string;
+  revocationSnapshotIssuedAt: string; // ISO-8601
+  revocationSnapshotValidUntil: string; // ISO-8601
+  guaranteeScopeOrLimitations?: string;
+}
+
+export interface TrustedApprovalAuthority {
+  authorityId: string;
+  keyId: string;
+  publicKeyPem: string;
+  allowedScopes: Array<{
+    providerName: string;
+    scope: 'GLOBAL' | string;
+    allowedOperations: FiscalOperationType[];
+  }>;
+  status: 'ACTIVE' | 'REVOKED';
+}
+
+export interface ProvenanceValidationContext {
+  organizationId: string;
+  operationType: FiscalOperationType;
+  capability: PacCapabilityName;
+  recoveryCondition?: string;
+  evidenceBytes?: Buffer | Uint8Array;
+  maxStatusAgeMs?: number;
 }
 
 export interface PacCapabilities {
+  supportsStamp?: boolean;
+  supportsCancel?: boolean;
   supportsStampIdempotencyKey: boolean;
   supportsCancellationIdempotencyKey: boolean;
   supportsAuthoritativeStampLookup: boolean;
@@ -339,11 +396,9 @@ export interface ConfigureEmisorFiscalCommand {
   certificatePem?: string;
   certificadoPem?: string;
   privateKeyVaultId?: string;
-  llavePrivadaPem?: string;
-  llavePrivadaPassword?: string;
   pacEnvironment?: 'TEST' | 'PRODUCTION';
   pacUsername?: string;
-  pacPassword?: string;
+  pacSecretRef?: string;
   pacPrimaryProvider?: string;
   pacFallbackProvider?: string;
   isActive?: boolean;
@@ -383,8 +438,6 @@ export interface CreateDraftInvoiceCommand {
   items: CreateDraftInvoiceItemInput[];
 }
 
-export type FiscalOperationType = 'STAMP' | 'CANCEL';
-
 export type FiscalStampingOperationStatus =
   | 'PENDING'
   | 'READY'
@@ -417,6 +470,7 @@ export interface FiscalStampingOperation {
   reconciliationStatus?: string | null;
   stampedXml?: string | null;
   semanticEventId?: string | null;
+  eventContractVersion?: string | null;
   nextRetryAt?: string | null;
   createdAt: string;
   updatedAt: string;
@@ -504,12 +558,44 @@ export interface ConsumerInboxRecord {
   processedAt: string;
 }
 
+export interface SanitizedFiscalError {
+  errorCode: string;
+  sanitizedMessage: string;
+  correlationId: string;
+  timestamp: string;
+  isRetryable: boolean;
+}
+
+export interface SubscriberDeclaration {
+  subscriberName: string;
+  supportedMajors: number[];
+  requiredFields: string[];
+}
+
+export const FISCAL_EVENT_CONTRACT_VERSION = '1.0';
+
+export function validateEventContractVersion(version: unknown): { major: number; minor: number } {
+  if (typeof version !== 'string') {
+    throw new InvalidEventContractVersionError(
+      'eventContractVersion must be a string in major.minor format',
+    );
+  }
+  const match = version.trim().match(/^(0|[1-9]\d*)\.(0|[1-9]\d*)$/);
+  if (!match) {
+    throw new InvalidEventContractVersionError(
+      `Malformed eventContractVersion '${version}'; must be canonical major.minor format`,
+    );
+  }
+  return { major: parseInt(match[1]!, 10), minor: parseInt(match[2]!, 10) };
+}
+
 export function generateFiscalSemanticEventId(
   organizationId: string,
   operationId: string,
   eventKind: 'FacturaFiscalEmitida' | 'FacturaFiscalCancelada' | string,
 ): string {
   // Deterministic identity: hash(organizationId:operationId:eventKind)
+  // Stable across retries, restores, and outbox row recreation.
   return crypto
     .createHash('sha256')
     .update(`${organizationId}:${operationId}:${eventKind}`)

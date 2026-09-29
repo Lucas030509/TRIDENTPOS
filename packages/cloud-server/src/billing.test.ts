@@ -20,11 +20,19 @@ import {
   UnavailablePacConnector,
   UnavailableCsdVault,
   InMemoryCsdVault,
+  ConsumerInboxService,
+  FISCAL_EVENT_CONTRACT_VERSION,
+  createTestPacProvenance,
+  FiscalSuccessValidationError,
+  InvalidEventContractVersionError,
+  EventContractIncompatibleError,
   InvalidRfcError,
   InvalidFiscalInvoiceError,
   InvoiceStatusTransitionError,
   InvoiceIdempotencyConflictError,
   CsdCredentialsMissingError,
+  PacContractProvenanceMissingError,
+  PacProvenanceValidationError,
   PacTimeoutError,
 } from './index.js';
 
@@ -62,7 +70,7 @@ describe(
       csdVault = new InMemoryCsdVault();
       await csdVault.storePrivateKeyPem(tenantAId, testVaultId, testKeyPair.privateKey);
 
-      mockPac = new MockPacConnector();
+      mockPac = new MockPacConnector(undefined, createTestPacProvenance());
 
       const client = await pool.connect();
       try {
@@ -91,6 +99,7 @@ describe(
       const client = await pool.connect();
       try {
         await client.query(`
+        DELETE FROM consumer_inbox_events WHERE organization_id IN ('${tenantAId}', '${tenantBId}');
         DELETE FROM fiscal_stamping_operations WHERE organization_id IN ('${tenantAId}', '${tenantBId}');
         DELETE FROM lotes_facturacion_global WHERE organization_id IN ('${tenantAId}', '${tenantBId}');
         DELETE FROM fiscal_invoice_items WHERE organization_id IN ('${tenantAId}', '${tenantBId}');
@@ -457,7 +466,7 @@ describe(
     });
 
     it('WP021-CS-08: PAC Connector Timeout creates durable retry state without corrupting DB', async () => {
-      const failingPac = new MockPacConnector();
+      const failingPac = new MockPacConnector(undefined, createTestPacProvenance());
       failingPac.setBehavior({ simulateTimeout: true });
       const serviceWithFailingPac = new PostgresBillingService(pool, failingPac, csdVault);
 
@@ -649,7 +658,14 @@ describe(
           organizationId: tenantAId,
           invoiceId: draft.id,
         }),
-        PacTimeoutError,
+        (err: unknown) => {
+          const isExpected =
+            err instanceof PacContractProvenanceMissingError ||
+            err instanceof PacTimeoutError ||
+            err instanceof PacProvenanceValidationError;
+          assert.ok(isExpected, 'Must fail closed with provenance or timeout error');
+          return true;
+        },
       );
     });
 
@@ -775,6 +791,248 @@ describe(
         );
         const outboxJson = JSON.stringify(outboxRow.rows[0]);
         assert.equal(outboxJson.includes('PRIVATE KEY'), false);
+      } finally {
+        client.release();
+      }
+    });
+
+    it('WP021-REQ-75to80: Outbox Event Contract Versioning (1.0) and Major/Minor Compatibility', async () => {
+      const draft = await billingService.createDraftInvoice({
+        organizationId: tenantAId,
+        branchId: branchA1Id,
+        tipoComprobante: 'I',
+        serie: 'VER',
+        folio: `VER-${testRunId}`,
+        receptorRfc: rfcReceptor,
+        receptorNombre: 'CLIENTE VERSION SA DE CV',
+        receptorRegimenFiscal: '601',
+        receptorCodigoPostal: '64000',
+        receptorUsoCfdi: 'G03',
+        items: [
+          {
+            claveProdServ: '90101501',
+            claveUnidad: 'E48',
+            description: 'Item Versioning Test',
+            quantity: '1.0000',
+            unitPrice: '100.0000',
+            taxSchemeId: taxSchemeIva16Id,
+          },
+        ],
+      });
+
+      const stamped = await billingService.stampFiscalInvoice({
+        organizationId: tenantAId,
+        invoiceId: draft.id,
+      });
+
+      // 1. Verify Outbox event payload contains eventContractVersion = '1.0'
+      const client = await pool.connect();
+      try {
+        const outboxRes = await client.query<{
+          id: string;
+          event_type: string;
+          aggregate_id: string;
+          payload: string | Record<string, unknown>;
+        }>(
+          `SELECT * FROM cloud_integration_outbox
+           WHERE organization_id = $1 AND aggregate_id = $2 AND event_type = 'FacturaFiscalEmitida';`,
+          [tenantAId, draft.id],
+        );
+        assert.equal(outboxRes.rows.length, 1);
+        const event = outboxRes.rows[0]!;
+        const payload =
+          typeof event.payload === 'string' ? JSON.parse(event.payload) : event.payload;
+        assert.equal(payload.eventContractVersion, FISCAL_EVENT_CONTRACT_VERSION);
+        assert.equal(payload.eventContractVersion, '1.0');
+        assert.ok(payload.semanticEventId, 'semanticEventId must be present');
+        assert.equal(payload.uuid, stamped.uuid);
+      } finally {
+        client.release();
+      }
+    });
+
+    it('WP021-REQ-88to92: Consumer Inbox Service - Restore Domain, Idempotency and Compatibility', async () => {
+      const inboxService = new ConsumerInboxService(pool);
+      const consumerCtx = 'BILLING_EVENT_CONSUMER';
+      const semEventId = `sem-evt-${crypto.randomUUID()}`;
+
+      let mutationExecuted = 0;
+      const mutationEffect = async () => {
+        mutationExecuted++;
+      };
+
+      // 1. Requirement 88: Reject missing or malformed version
+      await assert.rejects(
+        inboxService.processEventWithInbox(
+          tenantAId,
+          consumerCtx,
+          semEventId,
+          'FacturaFiscalEmitida',
+          mutationEffect,
+          { eventContractVersion: '' },
+        ),
+        InvalidEventContractVersionError,
+      );
+      assert.equal(mutationExecuted, 0, 'No mutation executed when version is empty');
+
+      // 2. Requirement 89: Reject incompatible major version (e.g. 2.0)
+      await assert.rejects(
+        inboxService.processEventWithInbox(
+          tenantAId,
+          consumerCtx,
+          semEventId,
+          'FacturaFiscalEmitida',
+          mutationEffect,
+          { eventContractVersion: '2.0', supportedMajors: [1] },
+        ),
+        EventContractIncompatibleError,
+      );
+      assert.equal(mutationExecuted, 0, 'No mutation executed when major is incompatible');
+
+      // 3. Requirement 90: Successful first processing with version 1.0
+      const process1 = await inboxService.processEventWithInbox(
+        tenantAId,
+        consumerCtx,
+        semEventId,
+        'FacturaFiscalEmitida',
+        mutationEffect,
+        { eventContractVersion: '1.0' },
+      );
+      assert.equal(process1.processed, true);
+      assert.equal(process1.duplicate, false);
+      assert.equal(mutationExecuted, 1);
+
+      // 4. Requirement 91: Duplicate suppression on replay/redelivery
+      const process2 = await inboxService.processEventWithInbox(
+        tenantAId,
+        consumerCtx,
+        semEventId,
+        'FacturaFiscalEmitida',
+        mutationEffect,
+        { eventContractVersion: '1.0' },
+      );
+      assert.equal(process2.processed, false);
+      assert.equal(process2.duplicate, true);
+      assert.equal(mutationExecuted, 1, 'Mutation not executed again upon duplicate');
+
+      // 5. Tenant boundary isolation
+      const isProcessedTenantB = await inboxService.isEventProcessed(
+        tenantBId,
+        consumerCtx,
+        semEventId,
+      );
+      assert.equal(isProcessedTenantB, false, 'Tenant B inbox is completely isolated');
+
+      // 6. Requirement 92: Restore domain reconciliation
+      const reconcileResult = await inboxService.reconcileConsumerRestore(tenantAId, consumerCtx, [
+        {
+          semanticEventId: semEventId,
+          eventKind: 'FacturaFiscalEmitida',
+          eventContractVersion: '1.0',
+        },
+        {
+          semanticEventId: `restored-evt-${crypto.randomUUID()}`,
+          eventKind: 'FacturaFiscalEmitida',
+          eventContractVersion: '1.0',
+        },
+      ]);
+      assert.equal(reconcileResult.reconciledCount, 1, 'Only the new restored event was inserted');
+    });
+
+    it('WP021-SEC-HIGH-04: Structural XML Validation rejects corrupt or missing TimbreFiscalDigital', async () => {
+      const corruptPac = new MockPacConnector(undefined, createTestPacProvenance());
+      corruptPac.setBehavior({ simulateCorruptedStampXml: true });
+      const serviceWithCorruptPac = new PostgresBillingService(pool, corruptPac, csdVault);
+
+      const draft = await billingService.createDraftInvoice({
+        organizationId: tenantAId,
+        branchId: branchA1Id,
+        tipoComprobante: 'I',
+        serie: 'XML',
+        folio: `XML-${testRunId}`,
+        receptorRfc: rfcReceptor,
+        receptorNombre: 'CLIENTE XML CORRUPT SA DE CV',
+        receptorRegimenFiscal: '601',
+        receptorCodigoPostal: '64000',
+        receptorUsoCfdi: 'G03',
+        items: [
+          {
+            claveProdServ: '90101501',
+            claveUnidad: 'E48',
+            description: 'Item Corrupt XML',
+            quantity: '1.0000',
+            unitPrice: '100.0000',
+          },
+        ],
+      });
+
+      // Stamping must reject with FiscalSuccessValidationError (structural XML validation fail-closed)
+      await assert.rejects(
+        serviceWithCorruptPac.stampFiscalInvoice({
+          organizationId: tenantAId,
+          invoiceId: draft.id,
+        }),
+        FiscalSuccessValidationError,
+      );
+
+      // Verify invoice remains DRAFT
+      const checkDraft = await billingService.getFiscalInvoiceById(tenantAId, draft.id);
+      assert.equal(checkDraft?.status, 'DRAFT');
+    });
+
+    it('WP021-SEC-MED-01: Error Sanitizer strips sensitive credentials before database persistence', async () => {
+      const errorPac = new MockPacConnector(undefined, createTestPacProvenance());
+      errorPac.setBehavior({
+        simulateReject: true,
+        rejectErrorCode: 'ERR_RAW',
+        rejectErrorMessage:
+          'Connection refused to postgresql://postgres:SuperSecretPassword123@db.internal:5432/trident?ssl=true with Authorization: Bearer secret-pac-token-999',
+      });
+      const serviceWithErrorPac = new PostgresBillingService(pool, errorPac, csdVault);
+
+      const draft = await billingService.createDraftInvoice({
+        organizationId: tenantAId,
+        branchId: branchA1Id,
+        tipoComprobante: 'I',
+        serie: 'SAN',
+        folio: `SAN-${testRunId}`,
+        receptorRfc: rfcReceptor,
+        receptorNombre: 'CLIENTE SANITIZE SA DE CV',
+        receptorRegimenFiscal: '601',
+        receptorCodigoPostal: '64000',
+        receptorUsoCfdi: 'G03',
+        items: [
+          {
+            claveProdServ: '90101501',
+            claveUnidad: 'E48',
+            description: 'Item Error Sanitization',
+            quantity: '1.0000',
+            unitPrice: '100.0000',
+          },
+        ],
+      });
+
+      await assert.rejects(
+        serviceWithErrorPac.stampFiscalInvoice({
+          organizationId: tenantAId,
+          invoiceId: draft.id,
+        }),
+        InvalidFiscalInvoiceError,
+      );
+
+      // Verify database fiscal_stamping_operations.last_error has sensitive material stripped
+      const client = await pool.connect();
+      try {
+        const opRes = await client.query<{ last_error: string }>(
+          `SELECT last_error FROM fiscal_stamping_operations WHERE organization_id = $1 AND invoice_id = $2;`,
+          [tenantAId, draft.id],
+        );
+        assert.equal(opRes.rows.length, 1);
+        const lastError = opRes.rows[0]!.last_error;
+        assert.ok(lastError, 'last_error must be recorded');
+        assert.equal(lastError.includes('SuperSecretPassword123'), false);
+        assert.equal(lastError.includes('secret-pac-token-999'), false);
+        assert.ok(lastError.includes('[REDACTED_DATABASE_URI]') || lastError.includes('[REDACTED'));
       } finally {
         client.release();
       }
