@@ -19,6 +19,7 @@ import type {
   AuthoritativeCancellationReconciliationResult,
   AuthoritativeStampReconciliationResult,
   FiscalOperationType,
+  FiscalResultCorrelation,
   PacCancelRequest,
   PacCancelResult,
   PacCapabilities,
@@ -32,6 +33,7 @@ import type {
 
 export interface IPacConnector {
   readonly providerName: string;
+  readonly certifiedProviderRfc?: string;
   readonly capabilities: PacCapabilities;
   readonly contractProvenance?: PacContractProvenance | null;
   timbrar(request: PacStampRequest): Promise<PacStampResult>;
@@ -39,12 +41,14 @@ export interface IPacConnector {
   consultarEstatus(uuid: string): Promise<{ status: string; esCancelable: boolean }>;
   consultarTimbre?(params: {
     organizationId: string;
+    correlation?: FiscalResultCorrelation;
     invoiceId?: string;
     idempotencyKey?: string;
     uuid?: string;
   }): Promise<AuthoritativeStampReconciliationResult>;
   consultarCancelacion?(params: {
     organizationId: string;
+    correlation?: FiscalResultCorrelation;
     invoiceId?: string;
     uuid: string;
   }): Promise<AuthoritativeCancellationReconciliationResult>;
@@ -68,18 +72,25 @@ export function clearTrustRegistry(): void {
  */
 export function buildProvenanceAttestationPayload(provenance: PacContractProvenance): string {
   const scope = provenance.approvedScope;
-  return [
+  return JSON.stringify([
     provenance.providerName,
     provenance.contractIdentifier,
     provenance.contractVersion,
+    provenance.evidenceUriOrReference,
+    provenance.evidenceMediaType,
+    provenance.evidenceByteLength,
+    provenance.evidenceDigestAlgorithm,
     provenance.evidenceDigest,
+    provenance.approvalAuthorityId,
+    provenance.approvalKeyId,
     scope.operationType,
     scope.capability,
-    scope.organizationId ?? 'GLOBAL',
+    scope.organizationId,
     scope.recoveryCondition ?? 'NONE',
     provenance.effectiveFrom,
     provenance.effectiveUntil,
-  ].join('|');
+    provenance.guaranteeScopeOrLimitations ?? '',
+  ]);
 }
 
 /**
@@ -111,6 +122,7 @@ export function validatePacCapabilityProvenance(
       capability,
       recoveryCondition: extra.recoveryCondition,
       evidenceBytes: extra.evidenceBytes,
+      evidenceMediaType: extra.evidenceMediaType,
       maxStatusAgeMs: extra.maxStatusAgeMs,
     };
     nowIso =
@@ -124,7 +136,7 @@ export function validatePacCapabilityProvenance(
   // 1. Check basic capability boolean flag on connector
   const isEnabled =
     context.capability === 'supportsStamp' || context.capability === 'supportsCancel'
-      ? connector.capabilities[context.capability] !== false
+      ? connector.capabilities[context.capability] === true
       : Boolean(connector.capabilities[context.capability]);
   if (!isEnabled) {
     throw new PacCapabilityMissingError(
@@ -154,6 +166,12 @@ export function validatePacCapabilityProvenance(
   if (provenance.evidenceByteLength <= 0) {
     throw new PacProvenanceValidationError('Invalid evidenceByteLength: must be greater than zero');
   }
+  if (!context.evidenceBytes || context.evidenceMediaType !== provenance.evidenceMediaType) {
+    throw new PacProvenanceValidationError('Exact evidence bytes and media type are required');
+  }
+  if (provenance.providerName !== connector.providerName) {
+    throw new PacProvenanceScopeMismatchError('Provider binding mismatch');
+  }
   if (context.evidenceBytes) {
     const computedDigest = crypto.createHash('sha256').update(context.evidenceBytes).digest('hex');
     if (computedDigest.toLowerCase() !== provenance.evidenceDigest.toLowerCase()) {
@@ -173,34 +191,23 @@ export function validatePacCapabilityProvenance(
   if (!scope) {
     throw new PacProvenanceScopeMismatchError('Provenance is missing approvedScope');
   }
-  if (scope.capability !== '*' && scope.capability !== context.capability) {
+  if (scope.capability !== context.capability) {
     throw new PacProvenanceScopeMismatchError(
       `Provenance capability '${scope.capability}' does not match requested capability '${context.capability}'`,
     );
   }
-  if (scope.operationType !== '*' && scope.operationType !== context.operationType) {
+  if (scope.operationType !== context.operationType) {
     throw new PacProvenanceScopeMismatchError(
       `Provenance operation '${scope.operationType}' does not match requested operation '${context.operationType}'`,
     );
   }
   if (
-    scope.organizationId &&
-    scope.organizationId !== 'GLOBAL' &&
-    scope.organizationId !== context.organizationId
+    !context.organizationId ||
+    !scope.organizationId ||
+    (scope.organizationId !== 'GLOBAL' && scope.organizationId !== context.organizationId) ||
+    (scope.recoveryCondition ?? 'NONE') !== (context.recoveryCondition ?? 'NONE')
   ) {
-    throw new PacProvenanceScopeMismatchError(
-      `Provenance tenant scope '${scope.organizationId}' does not match requested tenant '${context.organizationId}'`,
-    );
-  }
-  if (
-    context.recoveryCondition &&
-    scope.recoveryCondition &&
-    scope.recoveryCondition !== '*' &&
-    scope.recoveryCondition !== context.recoveryCondition
-  ) {
-    throw new PacProvenanceScopeMismatchError(
-      `Provenance recovery condition '${scope.recoveryCondition}' does not match required '${context.recoveryCondition}'`,
-    );
+    throw new PacProvenanceScopeMismatchError('Tenant or recovery binding mismatch');
   }
 
   // 5. Temporal Validity Bounds Check
@@ -208,7 +215,12 @@ export function validatePacCapabilityProvenance(
   const effectiveFromTime = new Date(provenance.effectiveFrom).getTime();
   const effectiveUntilTime = new Date(provenance.effectiveUntil).getTime();
 
-  if (isNaN(effectiveFromTime) || isNaN(effectiveUntilTime)) {
+  if (
+    !Number.isFinite(nowTime) ||
+    !Number.isFinite(effectiveFromTime) ||
+    !Number.isFinite(effectiveUntilTime) ||
+    effectiveFromTime >= effectiveUntilTime
+  ) {
     throw new PacProvenanceValidationError('Provenance contains invalid ISO-8601 validity dates');
   }
   if (nowTime < effectiveFromTime) {
@@ -238,13 +250,18 @@ export function validatePacCapabilityProvenance(
       `Unknown revocationStatus '${provenance.revocationStatus}'; fail-closed`,
     );
   }
-  if (provenance.revocationSequence < 0) {
+  if (!Number.isSafeInteger(provenance.revocationSequence) || provenance.revocationSequence < 0) {
     throw new PacProvenanceValidationError('Invalid negative revocationSequence');
   }
 
   const snapshotIssuedTime = new Date(provenance.revocationSnapshotIssuedAt).getTime();
   const snapshotValidUntilTime = new Date(provenance.revocationSnapshotValidUntil).getTime();
-  if (isNaN(snapshotIssuedTime) || isNaN(snapshotValidUntilTime)) {
+  if (
+    !Number.isFinite(snapshotIssuedTime) ||
+    !Number.isFinite(snapshotValidUntilTime) ||
+    snapshotIssuedTime > nowTime ||
+    snapshotIssuedTime >= snapshotValidUntilTime
+  ) {
     throw new PacProvenanceValidationError('Provenance contains invalid revocation snapshot dates');
   }
   if (nowTime > snapshotValidUntilTime) {
@@ -253,32 +270,55 @@ export function validatePacCapabilityProvenance(
     );
   }
 
-  if (context.maxStatusAgeMs && nowTime - snapshotIssuedTime > context.maxStatusAgeMs) {
-    throw new PacProvenanceExpiredError(
-      `Revocation status age (${nowTime - snapshotIssuedTime}ms) exceeds maximum allowed age (${context.maxStatusAgeMs}ms)`,
-    );
+  if (
+    !Number.isFinite(context.maxStatusAgeMs) ||
+    !context.maxStatusAgeMs ||
+    context.maxStatusAgeMs <= 0 ||
+    nowTime - snapshotIssuedTime > context.maxStatusAgeMs
+  ) {
+    throw new PacProvenanceExpiredError('Revocation freshness is not proven');
   }
-
-  // 7. Trust Registry & Attestation Signature Check
-  if (provenance.approvalAuthorityId && provenance.approvalKeyId) {
-    const authorityKey = `${provenance.approvalAuthorityId}:${provenance.approvalKeyId}`;
-    const authority = trustRegistry.get(authorityKey);
-    if (trustRegistry.size > 0 && !authority) {
-      throw new PacProvenanceValidationError(
-        `Approval authority '${authorityKey}' is not registered in the trusted authority registry`,
-      );
+  for (const [id, keyId, signature, payload] of [
+    [
+      provenance.approvalAuthorityId,
+      provenance.approvalKeyId,
+      provenance.approvalAttestation,
+      buildProvenanceAttestationPayload(provenance),
+    ],
+    [
+      provenance.revocationAuthorityId,
+      provenance.revocationKeyId,
+      provenance.revocationAttestation,
+      buildRevocationAttestationPayload(provenance),
+    ],
+  ]) {
+    const authority = trustRegistry.get(`${id}:${keyId}`);
+    if (
+      !authority ||
+      authority.status !== 'ACTIVE' ||
+      !authority.allowedScopes.some(
+        (allowed) =>
+          allowed.providerName === connector.providerName &&
+          (allowed.scope === 'GLOBAL' || allowed.scope === context.organizationId) &&
+          allowed.allowedOperations.includes(context.operationType),
+      )
+    ) {
+      throw new PacProvenanceValidationError('Unknown, inactive or unauthorized signing authority');
     }
-    if (authority && authority.status !== 'ACTIVE') {
-      throw new PacProvenanceValidationError(
-        `Approval authority '${authorityKey}' is inactive or revoked in trust registry`,
-      );
+    try {
+      if (
+        !signature ||
+        !crypto.verify(
+          'sha256',
+          Buffer.from(payload!),
+          authority.publicKeyPem,
+          Buffer.from(signature, 'base64'),
+        )
+      )
+        throw new Error('Invalid signature');
+    } catch {
+      throw new PacProvenanceValidationError('Invalid authenticated attestation');
     }
-  }
-
-  if (!provenance.approvalAttestation || provenance.approvalAttestation.trim().length === 0) {
-    throw new PacProvenanceValidationError(
-      'Missing required approvalAttestation digital signature',
-    );
   }
 }
 
@@ -450,6 +490,7 @@ export interface MockPacBehaviorOptions {
  */
 export class MockPacConnector implements IPacConnector {
   public readonly providerName: string = 'MOCK_PAC';
+  public readonly certifiedProviderRfc = 'SAT970701NN3';
   public capabilities: PacCapabilities;
   public contractProvenance?: PacContractProvenance | null;
   public readonly circuitBreaker: PacCircuitBreaker;
@@ -464,6 +505,8 @@ export class MockPacConnector implements IPacConnector {
     circuitBreakerOptions?: CircuitBreakerOptions,
   ) {
     this.capabilities = {
+      supportsStamp: true,
+      supportsCancel: true,
       supportsStampIdempotencyKey: false,
       supportsCancellationIdempotencyKey: false,
       supportsAuthoritativeStampLookup: false,
@@ -514,6 +557,8 @@ export class MockPacConnector implements IPacConnector {
       this.circuitBreaker.recordSuccess();
       return {
         status: 'REJECTED',
+        correlation: request.correlation,
+        pacProvider: this.providerName,
         errorCode: this.behavior.rejectErrorCode ?? '301',
         errorMessage:
           this.behavior.rejectErrorMessage ??
@@ -523,7 +568,7 @@ export class MockPacConnector implements IPacConnector {
 
     // Success stamping simulation
     const uuid = this.behavior.simulateMissingStampUuid ? '' : crypto.randomUUID().toUpperCase();
-    const nowIso = new Date().toISOString();
+    const nowIso = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
     const stampedXmlUuid = this.behavior.simulateMismatchStampUuid
       ? crypto.randomUUID().toUpperCase()
       : uuid;
@@ -538,16 +583,15 @@ export class MockPacConnector implements IPacConnector {
       : xml.replace(
           '</cfdi:Comprobante>',
           `  <cfdi:Complemento>
-    <tfd:TimbreFiscalDigital xmlns:tfd="http://www.sat.gob.mx/TimbreFiscalDigital" xsi:schemaLocation="http://www.sat.gob.mx/TimbreFiscalDigital http://www.sat.gob.mx/sitio_internet/cfd/TimbreFiscalDigital/TimbreFiscalDigitalv11.xsd" Version="1.1" UUID="${stampedXmlUuid}" FechaTimbrado="${nowIso.substring(
-      0,
-      19,
-    )}" RfcProvCertif="SAT970701NN3" SelloCFD="mockSelloCfd" NoCertificadoSAT="${noCertificadoSat}" SelloSAT="${selloSat}"/>
+    <tfd:TimbreFiscalDigital xmlns:tfd="http://www.sat.gob.mx/TimbreFiscalDigital" xsi:schemaLocation="http://www.sat.gob.mx/TimbreFiscalDigital http://www.sat.gob.mx/sitio_internet/cfd/TimbreFiscalDigital/TimbreFiscalDigitalv11.xsd" Version="1.1" UUID="${stampedXmlUuid}" FechaTimbrado="${nowIso}" RfcProvCertif="SAT970701NN3" SelloCFD="mockSelloCfd" NoCertificadoSAT="${noCertificadoSat}" SelloSAT="${selloSat}"/>
   </cfdi:Complemento>
 </cfdi:Comprobante>`,
         );
 
     const result: PacStampResult = {
       status: 'STAMPED',
+      correlation: request.correlation,
+      certifiedProviderRfc: this.certifiedProviderRfc,
       uuid,
       selloSat,
       fechaTimbrado: nowIso,
@@ -581,6 +625,7 @@ export class MockPacConnector implements IPacConnector {
       this.circuitBreaker.recordSuccess();
       return {
         status: 'PENDING_APPROVAL',
+        correlation: request.correlation,
         uuid: request.uuid,
         cancellationCode: '202',
         errorMessage: 'Solicitud de cancelación recibida, en espera de respuesta del receptor',
@@ -593,10 +638,11 @@ export class MockPacConnector implements IPacConnector {
       this.circuitBreaker.recordSuccess();
       return {
         status: 'REJECTED',
+        correlation: request.correlation,
+        pacProvider: this.providerName,
         uuid: request.uuid,
         cancellationCode: '702',
         errorMessage: 'El comprobante ya se encuentra cancelado o UUID no encontrado',
-        pacProvider: this.providerName,
         pacTransactionId: crypto.randomUUID(),
       };
     }
@@ -605,6 +651,7 @@ export class MockPacConnector implements IPacConnector {
     this.circuitBreaker.recordSuccess();
     return {
       status: 'CANCELLED',
+      correlation: request.correlation,
       uuid: request.uuid,
       cancellationCode: '201',
       pacProvider: this.providerName,
@@ -625,6 +672,7 @@ export class MockPacConnector implements IPacConnector {
 
   async consultarTimbre(params: {
     organizationId: string;
+    correlation?: FiscalResultCorrelation;
     invoiceId?: string;
     idempotencyKey?: string;
     uuid?: string;
@@ -635,6 +683,9 @@ export class MockPacConnector implements IPacConnector {
     if (existing && existing.status === 'STAMPED') {
       return {
         outcome: 'STAMPED_CONFIRMED',
+        pacProvider: this.providerName,
+        correlation: params.correlation,
+        certifiedProviderRfc: this.certifiedProviderRfc,
         uuid: existing.uuid,
         stampedXml: existing.stampedXml,
         selloSat: existing.selloSat,
@@ -643,22 +694,44 @@ export class MockPacConnector implements IPacConnector {
         providerReference: existing.pacTransactionId,
       };
     }
-    return { outcome: 'NOT_FOUND_CONFIRMED' };
+    return {
+      outcome: 'NOT_FOUND_CONFIRMED',
+      pacProvider: this.providerName,
+      correlation: params.correlation,
+    };
   }
 
   async consultarCancelacion(params: {
     organizationId: string;
+    correlation?: FiscalResultCorrelation;
     invoiceId?: string;
     uuid: string;
   }): Promise<AuthoritativeCancellationReconciliationResult> {
     this.circuitBreaker.checkExecutionAllowed();
     if (this.cancelledRegistry.has(params.uuid)) {
-      return { outcome: 'CANCELLATION_CONFIRMED', uuid: params.uuid, cancellationCode: '201' };
+      return {
+        outcome: 'CANCELLATION_CONFIRMED',
+        pacProvider: this.providerName,
+        correlation: params.correlation,
+        uuid: params.uuid,
+        cancellationCode: '201',
+      };
     }
     if (this.pendingApprovalRegistry.has(params.uuid)) {
-      return { outcome: 'PENDING_APPROVAL', uuid: params.uuid, cancellationCode: '202' };
+      return {
+        outcome: 'PENDING_APPROVAL',
+        pacProvider: this.providerName,
+        correlation: params.correlation,
+        uuid: params.uuid,
+        cancellationCode: '202',
+      };
     }
-    return { outcome: 'NOT_FOUND_CONFIRMED', uuid: params.uuid };
+    return {
+      outcome: 'NOT_FOUND_CONFIRMED',
+      pacProvider: this.providerName,
+      correlation: params.correlation,
+      uuid: params.uuid,
+    };
   }
 
   async stampInvoice(request: PacStampRequest): Promise<PacStampResult> {
@@ -667,5 +740,92 @@ export class MockPacConnector implements IPacConnector {
 
   async cancelInvoice(request: PacCancelRequest): Promise<PacCancelResult> {
     return this.cancelar(request);
+  }
+}
+
+export function buildRevocationAttestationPayload(p: PacContractProvenance): string {
+  return JSON.stringify([
+    buildProvenanceAttestationPayload(p),
+    p.revocationAuthorityId,
+    p.revocationKeyId,
+    p.revocationSequence,
+    p.revocationStatus,
+    p.revocationSnapshotIssuedAt,
+    p.revocationSnapshotValidUntil,
+  ]);
+}
+
+/** Supplied by protected organization-controlled composition, never by the PAC. */
+export interface PacAuthorizationRegistry {
+  readonly maxStatusAgeMs: number;
+  /** Organization-controlled verification of authenticated provider evidence under the approved contract. */
+  verifyFiscalEvidence?(
+    context: FiscalResultCorrelation,
+    providerName: string,
+    result: unknown,
+  ): Promise<boolean>;
+  readCurrent(
+    context: ProvenanceValidationContext,
+    providerName: string,
+  ): Promise<{
+    provenance: PacContractProvenance;
+    evidenceBytes: Uint8Array;
+    evidenceMediaType: string;
+    authorities: Map<string, TrustedApprovalAuthority>;
+  }>;
+  /** Durable atomic high-water mark. Reject rollback even after process restart. */
+  acceptSequence(identity: string, sequence: number): Promise<boolean>;
+}
+
+export async function authorizePacCapabilityUse(
+  connector: IPacConnector,
+  capability: PacCapabilityName,
+  context: Partial<ProvenanceValidationContext>,
+  registry?: PacAuthorizationRegistry,
+): Promise<void> {
+  if (!registry || !context.organizationId || !context.operationType) {
+    throw new PacProvenanceValidationError('Current organization-controlled registry unavailable');
+  }
+  const request = { ...context, capability } as ProvenanceValidationContext;
+  try {
+    // Always read at use time; never substitute connector assertions or cached positives.
+    const current = await registry.readCurrent(request, connector.providerName);
+    const p = current.provenance;
+    if (
+      !connector.contractProvenance ||
+      connector.contractProvenance.contractIdentifier !== p.contractIdentifier ||
+      connector.contractProvenance.contractVersion !== p.contractVersion
+    ) {
+      throw new PacProvenanceScopeMismatchError('Contract identity mismatch');
+    }
+    validatePacCapabilityProvenance(
+      {
+        ...connector,
+        providerName: connector.providerName,
+        capabilities: connector.capabilities,
+        contractProvenance: p,
+      } as IPacConnector,
+      {
+        ...request,
+        evidenceBytes: current.evidenceBytes,
+        evidenceMediaType: current.evidenceMediaType,
+        maxStatusAgeMs: registry.maxStatusAgeMs,
+      },
+      undefined,
+      undefined,
+      current.authorities,
+    );
+    const identity = JSON.stringify([
+      p.providerName,
+      p.contractIdentifier,
+      p.contractVersion,
+      p.approvedScope,
+      p.revocationAuthorityId,
+    ]);
+    if (!(await registry.acceptSequence(identity, p.revocationSequence))) {
+      throw new PacProvenanceValidationError('Revocation sequence rollback');
+    }
+  } catch {
+    throw new PacProvenanceValidationError('Current PAC authorization unavailable or invalid');
   }
 }

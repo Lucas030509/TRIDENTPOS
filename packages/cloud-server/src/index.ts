@@ -1,3 +1,10 @@
+import {
+  authorizePacCapabilityUse,
+  assertSubscriberCompatibility,
+  type PacAuthorizationRegistry,
+  type FiscalResultCorrelation,
+  type SubscriberDeclaration,
+} from '@trident/billing';
 /**
  * TRIDENTPOS Cloud Server Composition Root
  *
@@ -106,7 +113,6 @@ import {
   formatCertBase64SingleLine,
   validateCsdKeyPairMatch,
   extractCertificateNumber,
-  validatePacCapabilityProvenance,
   validateEventContractVersion,
   FiscalErrorSanitizer,
   validateAndExtractTimbreFiscalDigital,
@@ -4599,6 +4605,8 @@ export class PostgresBillingService implements CloudBillingCompositionService {
     private readonly pacConnector: IPacConnector = new UnavailablePacConnector(),
     private readonly csdVault: ICsdVault = new UnavailableCsdVault(),
     outboxService?: CloudIntegrationOutboxService,
+    private readonly authorizationRegistry?: PacAuthorizationRegistry,
+    private readonly fiscalSubscribers?: SubscriberDeclaration[],
   ) {
     this.outboxService = outboxService ?? new CloudIntegrationOutboxService();
   }
@@ -4690,6 +4698,42 @@ export class PostgresBillingService implements CloudBillingCompositionService {
   }
 
   async configureEmisorFiscal(command: ConfigureEmisorFiscalCommand): Promise<EmisorFiscalConfig> {
+    const allowed = new Set([
+      'id',
+      'organizationId',
+      'rfc',
+      'razonSocial',
+      'regimenFiscal',
+      'codigoPostal',
+      'curp',
+      'certificateNumber',
+      'certificadoSatNumber',
+      'privateKeyVaultId',
+      'pacEnvironment',
+      'pacSecretRef',
+      'pacPrimaryProvider',
+      'pacFallbackProvider',
+      'isActive',
+    ]);
+    if (Object.keys(command).some((key) => !allowed.has(key))) {
+      throw new InvalidEmisorConfigError('Fiscal configuration accepts vault references only');
+    }
+    if (
+      Object.values(command).some(
+        (value) =>
+          typeof value === 'string' && /-----BEGIN|PRIVATE KEY|password\s*[:=]/i.test(value),
+      )
+    ) {
+      throw new InvalidEmisorConfigError('Secret material is forbidden in fiscal configuration');
+    }
+    if (command.certificateNumber && !/^\d{20}$/.test(command.certificateNumber)) {
+      throw new InvalidEmisorConfigError('Invalid public certificate number');
+    }
+    for (const ref of [command.privateKeyVaultId, command.pacSecretRef]) {
+      if (ref !== undefined && !/^[A-Za-z0-9][A-Za-z0-9_./:-]{0,254}$/.test(ref)) {
+        throw new InvalidEmisorConfigError('Invalid vault reference');
+      }
+    }
     validateRfc(command.rfc);
     validateRegimenFiscal(command.regimenFiscal);
     validatePostalCode(command.codigoPostal);
@@ -4740,7 +4784,7 @@ export class PostgresBillingService implements CloudBillingCompositionService {
           command.regimenFiscal.trim(),
           command.codigoPostal.trim(),
           command.certificateNumber ?? command.certificadoSatNumber ?? null,
-          command.certificatePem ?? command.certificadoPem ?? null,
+          null,
           command.privateKeyVaultId ?? null,
           null,
           null,
@@ -4980,6 +5024,7 @@ export class PostgresBillingService implements CloudBillingCompositionService {
           external_reference: string | null;
           external_uuid: string | null;
           stamped_xml: string | null;
+          request_xml: string | null;
         }>(
           `SELECT * FROM fiscal_stamping_operations WHERE organization_id = $1 AND idempotency_key = $2 FOR UPDATE;`,
           [command.organizationId, idempotencyKey],
@@ -5024,32 +5069,71 @@ export class PostgresBillingService implements CloudBillingCompositionService {
 
           if (existingOp.status === 'FAILED_TERMINAL') {
             throw new InvalidFiscalInvoiceError(
-              existingOp.last_error ?? 'Fiscal stamping failed terminally',
+              FiscalErrorSanitizer.stripSensitiveMaterial(existingOp.last_error ?? ''),
             );
           }
 
           // In RECONCILIATION_REQUIRED state: evaluate ACR-2026-020 Recovery Contract (§9.2)
-          if (existingOp.status === 'RECONCILIATION_REQUIRED') {
+          if (
+            existingOp.status === 'RECONCILIATION_REQUIRED' ||
+            existingOp.status === 'IN_FLIGHT'
+          ) {
             const caps = this.pacConnector.capabilities;
 
             // Path A: Authoritative Stamp Lookup supported
             if (caps.supportsAuthoritativeStampLookup && this.pacConnector.consultarTimbre) {
-              const reconciled = await this.pacConnector.consultarTimbre({
+              await this.authorizeCapability(
+                this.pacConnector,
+                'supportsAuthoritativeStampLookup',
+                {
+                  organizationId: command.organizationId,
+                  operationType: 'STAMP',
+                  recoveryCondition: 'RECONCILIATION_LOOKUP',
+                },
+              );
+              const reconciled = await this.pacConnector
+                .consultarTimbre({
+                  organizationId: command.organizationId,
+                  invoiceId: command.invoiceId,
+                  idempotencyKey,
+                  correlation: {
+                    organizationId: command.organizationId,
+                    invoiceId: command.invoiceId,
+                    operationId: existingOp.id,
+                    operationType: 'STAMP',
+                    idempotencyKey,
+                    requestHash,
+                  },
+                  uuid: existingOp.external_uuid ?? undefined,
+                })
+                .catch(() => {
+                  throw new ReconciliationRequiredError('PAC lookup unavailable');
+                });
+
+              await this.validateFiscalEvidence(reconciled, {
                 organizationId: command.organizationId,
                 invoiceId: command.invoiceId,
+                operationId: existingOp.id,
+                operationType: 'STAMP',
                 idempotencyKey,
-                uuid: existingOp.external_uuid ?? undefined,
+                requestHash,
               });
-
               if (reconciled.outcome === 'STAMPED_CONFIRMED' && reconciled.uuid) {
-                this.validateAuthoritativeStampResult({
-                  status: 'STAMPED',
-                  uuid: reconciled.uuid,
-                  stampedXml: reconciled.stampedXml,
-                  selloSat: reconciled.selloSat,
-                  fechaTimbrado: reconciled.fechaTimbrado,
-                  noCertificadoSat: reconciled.noCertificadoSat,
-                });
+                if (!existingOp.request_xml)
+                  throw new FiscalSuccessValidationError('Original submitted XML unavailable');
+                this.validateAuthoritativeStampResult(
+                  {
+                    status: 'STAMPED',
+                    uuid: reconciled.uuid,
+                    stampedXml: reconciled.stampedXml,
+                    certifiedProviderRfc: reconciled.certifiedProviderRfc,
+                    selloSat: reconciled.selloSat,
+                    fechaTimbrado: reconciled.fechaTimbrado,
+                    noCertificadoSat: reconciled.noCertificadoSat,
+                  },
+                  undefined,
+                  existingOp.request_xml,
+                );
 
                 const semanticEventId = generateFiscalSemanticEventId(
                   command.organizationId,
@@ -5094,7 +5178,7 @@ export class PostgresBillingService implements CloudBillingCompositionService {
                   ],
                 );
 
-                await this.outboxService.enqueue(client, {
+                await this.enqueueFiscalEvent(client, {
                   organizationId: command.organizationId,
                   branchId: currentInvoiceRow.branch_id,
                   eventType: 'FacturaFiscalEmitida',
@@ -5109,6 +5193,7 @@ export class PostgresBillingService implements CloudBillingCompositionService {
                     fechaTimbrado: reconciled.fechaTimbrado,
                     pacProvider: this.pacConnector.providerName,
                     semanticEventId,
+                    eventContractVersion: FISCAL_EVENT_CONTRACT_VERSION,
                   },
                 });
 
@@ -5128,13 +5213,13 @@ export class PostgresBillingService implements CloudBillingCompositionService {
                        updated_at = NOW()
                    WHERE organization_id = $2 AND id = $3;`,
                   [
-                    reconciled.errorMessage ?? 'Authoritative stamp reconciliation rejected',
+                    FiscalErrorSanitizer.stripSensitiveMaterial(reconciled.errorMessage ?? ''),
                     command.organizationId,
                     existingOp.id,
                   ],
                 );
                 throw new InvalidFiscalInvoiceError(
-                  reconciled.errorMessage ?? 'Authoritative stamp reconciliation rejected',
+                  FiscalErrorSanitizer.stripSensitiveMaterial(reconciled.errorMessage ?? ''),
                 );
               }
 
@@ -5144,7 +5229,7 @@ export class PostgresBillingService implements CloudBillingCompositionService {
                     'Stamp reconciliation confirmed NOT_FOUND, but safe replay after not-found is not supported under contract',
                   );
                 }
-                validatePacCapabilityProvenance(
+                await this.authorizeCapability(
                   this.pacConnector,
                   'supportsSafeStampReplayAfterConfirmedNotFound',
                   {
@@ -5161,7 +5246,7 @@ export class PostgresBillingService implements CloudBillingCompositionService {
               }
             } else if (caps.supportsStampIdempotencyKey) {
               // Path B: Rule A Idempotent Replay Proven
-              validatePacCapabilityProvenance(this.pacConnector, 'supportsStampIdempotencyKey', {
+              await this.authorizeCapability(this.pacConnector, 'supportsStampIdempotencyKey', {
                 organizationId: command.organizationId,
                 operationType: 'STAMP',
                 recoveryCondition: 'IDEMPOTENT_RETRY',
@@ -5229,10 +5314,11 @@ export class PostgresBillingService implements CloudBillingCompositionService {
           );
         }
 
-        const privateKeyPem = await this.csdVault.getPrivateKeyPem(
-          command.organizationId,
-          emisor.privateKeyVaultId,
-        );
+        const privateKeyPem = await this.csdVault
+          .getPrivateKeyPem(command.organizationId, emisor.privateKeyVaultId)
+          .catch(() => {
+            throw new CsdCredentialsMissingError('CSD vault access unavailable');
+          });
 
         if (!privateKeyPem) {
           throw new CsdCredentialsMissingError(
@@ -5240,7 +5326,19 @@ export class PostgresBillingService implements CloudBillingCompositionService {
           );
         }
 
-        if (!emisor.certificatePem || emisor.certificatePem.trim().length === 0) {
+        const credentials = await this.csdVault
+          .getCsdCredentials?.(command.organizationId)
+          .catch(() => {
+            throw new CsdCredentialsMissingError('CSD vault access unavailable');
+          });
+        const certificatePem = credentials?.certificatePem;
+        if (
+          !certificatePem ||
+          !/^-----BEGIN CERTIFICATE-----[\s\S]*-----END CERTIFICATE-----\s*$/.test(
+            certificatePem,
+          ) ||
+          certificatePem.includes('PRIVATE KEY')
+        ) {
           throw new CsdCredentialsMissingError(
             `CSD certificate PEM is missing for organization '${command.organizationId}'`,
           );
@@ -5249,13 +5347,13 @@ export class PostgresBillingService implements CloudBillingCompositionService {
         // Derive/validate certificate number (Fail closed without synthetic dummy fallbacks)
         let noCertificado = emisor.certificateNumber;
         if (!noCertificado || noCertificado.trim().length === 0) {
-          noCertificado = extractCertificateNumber(emisor.certificatePem);
+          noCertificado = extractCertificateNumber(certificatePem);
         }
 
         // Cryptographic keypair matching validation (Fail-closed before PAC invocation)
-        validateCsdKeyPairMatch(emisor.certificatePem, privateKeyPem);
+        validateCsdKeyPairMatch(certificatePem, privateKeyPem);
 
-        const certificadoBase64 = formatCertBase64SingleLine(emisor.certificatePem);
+        const certificadoBase64 = formatCertBase64SingleLine(certificatePem);
 
         // 7. Build Cadena Original & Sign
         const invoiceToStamp: FiscalInvoice = {
@@ -5281,11 +5379,23 @@ export class PostgresBillingService implements CloudBillingCompositionService {
           certificateBase64: certificadoBase64,
         });
 
+        const pinned = await client.query(
+          `UPDATE fiscal_stamping_operations
+          SET request_xml = COALESCE(request_xml, $1) WHERE organization_id = $2 AND id = $3
+          RETURNING request_xml;`,
+          [cfdiXml, command.organizationId, opId],
+        );
+        if (pinned.rows[0]?.request_xml !== cfdiXml) {
+          throw new ReconciliationRequiredError(
+            'Submitted XML changed; blind redispatch prohibited',
+          );
+        }
         return {
           alreadyCompleted: false as const,
           opId: opId!,
           invoiceToStamp,
           cfdiXml,
+          requestHash,
           selloEmisor,
           cadenaOriginal,
           emisor,
@@ -5300,7 +5410,7 @@ export class PostgresBillingService implements CloudBillingCompositionService {
     const { opId, invoiceToStamp, cfdiXml, selloEmisor, cadenaOriginal, emisor } = prepared;
 
     // Validate PAC STAMP capability provenance fail-closed
-    validatePacCapabilityProvenance(this.pacConnector, 'supportsStamp', {
+    await this.authorizeCapability(this.pacConnector, 'supportsStamp', {
       organizationId: command.organizationId,
       operationType: 'STAMP',
     });
@@ -5314,6 +5424,14 @@ export class PostgresBillingService implements CloudBillingCompositionService {
         referenceId: command.invoiceId,
         idempotencyKey,
         xmlPayload: cfdiXml,
+        correlation: {
+          organizationId: command.organizationId,
+          invoiceId: command.invoiceId,
+          operationId: opId,
+          operationType: 'STAMP',
+          idempotencyKey,
+          requestHash: prepared.requestHash!,
+        },
       });
     } catch (err: unknown) {
       const sanitized = FiscalErrorSanitizer.sanitize(err);
@@ -5329,12 +5447,33 @@ export class PostgresBillingService implements CloudBillingCompositionService {
         );
       });
       if (err instanceof PacTimeoutError) {
-        throw err;
+        throw new PacTimeoutError(sanitized.sanitizedMessage);
       }
       throw new PacTimeoutError(`PAC gateway error: ${sanitized.sanitizedMessage}`);
     }
 
     // Phase 3: Reconcile / Commit Outcome in DB transaction
+    try {
+      await this.validateFiscalEvidence(stampResult, {
+        organizationId: command.organizationId,
+        invoiceId: command.invoiceId,
+        operationId: opId,
+        operationType: 'STAMP',
+        idempotencyKey: idempotencyKey,
+        requestHash: prepared.requestHash!,
+      });
+    } catch (error) {
+      const safe = FiscalErrorSanitizer.sanitize(error);
+      await withTenantTransaction(this.pool, command.organizationId, async (client) => {
+        await client.query(
+          `UPDATE fiscal_stamping_operations SET status = 'RECONCILIATION_REQUIRED', last_error = $1
+          WHERE organization_id = $2 AND id = $3;`,
+          [safe.sanitizedMessage, command.organizationId, opId],
+        );
+      });
+      throw new FiscalSuccessValidationError(safe.sanitizedMessage);
+    }
+
     if (stampResult.status === 'TIMEOUT') {
       const sanitized = FiscalErrorSanitizer.sanitize(
         stampResult.errorMessage ?? 'PAC gateway timed out',
@@ -5374,7 +5513,15 @@ export class PostgresBillingService implements CloudBillingCompositionService {
 
     // Authoritative Fiscal Success Validation (§13, Tests 8–11)
     try {
-      this.validateAuthoritativeStampResult(stampResult);
+      await this.validateFiscalEvidence(stampResult, {
+        organizationId: command.organizationId,
+        invoiceId: command.invoiceId,
+        operationId: opId,
+        operationType: 'STAMP',
+        idempotencyKey,
+        requestHash: prepared.requestHash!,
+      });
+      this.validateAuthoritativeStampResult(stampResult, undefined, cfdiXml);
     } catch (valErr: unknown) {
       const sanitized = FiscalErrorSanitizer.sanitize(valErr);
       await withTenantTransaction(this.pool, command.organizationId, async (client) => {
@@ -5387,7 +5534,7 @@ export class PostgresBillingService implements CloudBillingCompositionService {
           [sanitized.sanitizedMessage, command.organizationId, opId],
         );
       });
-      throw valErr;
+      throw new FiscalSuccessValidationError(sanitized.sanitizedMessage);
     }
 
     return withTenantTransaction(this.pool, command.organizationId, async (client) => {
@@ -5452,7 +5599,7 @@ export class PostgresBillingService implements CloudBillingCompositionService {
       );
 
       // Enqueue Outbox Event with deterministic semanticEventId and eventContractVersion
-      await this.outboxService.enqueue(client, {
+      await this.enqueueFiscalEvent(client, {
         organizationId: command.organizationId,
         branchId: invoiceToStamp!.branchId,
         eventType: 'FacturaFiscalEmitida',
@@ -5592,11 +5739,14 @@ export class PostgresBillingService implements CloudBillingCompositionService {
 
           if (existingOp.status === 'FAILED_TERMINAL') {
             throw new InvalidFiscalInvoiceError(
-              existingOp.last_error ?? 'Fiscal cancellation failed terminally',
+              FiscalErrorSanitizer.stripSensitiveMaterial(existingOp.last_error ?? ''),
             );
           }
 
-          if (existingOp.status === 'RECONCILIATION_REQUIRED') {
+          if (
+            existingOp.status === 'RECONCILIATION_REQUIRED' ||
+            existingOp.status === 'IN_FLIGHT'
+          ) {
             const caps = this.pacConnector.capabilities;
 
             // Path A: Authoritative Cancellation Lookup Supported
@@ -5604,7 +5754,7 @@ export class PostgresBillingService implements CloudBillingCompositionService {
               caps.supportsAuthoritativeCancellationLookup &&
               this.pacConnector.consultarCancelacion
             ) {
-              validatePacCapabilityProvenance(
+              await this.authorizeCapability(
                 this.pacConnector,
                 'supportsAuthoritativeCancellationLookup',
                 {
@@ -5614,17 +5764,37 @@ export class PostgresBillingService implements CloudBillingCompositionService {
                 },
               );
 
-              const reconciled = await this.pacConnector.consultarCancelacion({
+              const reconciled = await this.pacConnector
+                .consultarCancelacion({
+                  organizationId: command.organizationId,
+                  invoiceId: command.invoiceId,
+                  correlation: {
+                    organizationId: command.organizationId,
+                    invoiceId: command.invoiceId,
+                    operationId: existingOp.id,
+                    operationType: 'CANCEL',
+                    idempotencyKey: cancellationIdempotencyKey,
+                    requestHash,
+                  },
+                  uuid: targetUuid,
+                })
+                .catch(() => {
+                  throw new ReconciliationRequiredError('PAC cancellation lookup unavailable');
+                });
+
+              await this.validateFiscalEvidence(reconciled, {
                 organizationId: command.organizationId,
                 invoiceId: command.invoiceId,
-                uuid: targetUuid,
+                operationId: existingOp.id,
+                operationType: 'CANCEL',
+                idempotencyKey: cancellationIdempotencyKey,
+                requestHash,
               });
-
               if (reconciled.outcome === 'CANCELLATION_CONFIRMED') {
                 this.validateAuthoritativeCancellationResult(
                   {
                     status: 'CANCELLED',
-                    uuid: targetUuid,
+                    uuid: reconciled.uuid,
                     cancellationCode: reconciled.cancellationCode,
                   },
                   targetUuid,
@@ -5662,7 +5832,7 @@ export class PostgresBillingService implements CloudBillingCompositionService {
                   ],
                 );
 
-                await this.outboxService.enqueue(client, {
+                await this.enqueueFiscalEvent(client, {
                   organizationId: command.organizationId,
                   branchId: invoiceRow.branch_id,
                   eventType: 'FacturaFiscalCancelada',
@@ -5701,13 +5871,13 @@ export class PostgresBillingService implements CloudBillingCompositionService {
                        updated_at = NOW()
                    WHERE organization_id = $2 AND id = $3;`,
                   [
-                    reconciled.errorMessage ?? 'Authoritative cancellation rejected',
+                    FiscalErrorSanitizer.stripSensitiveMaterial(reconciled.errorMessage ?? ''),
                     command.organizationId,
                     existingOp.id,
                   ],
                 );
                 throw new InvalidFiscalInvoiceError(
-                  reconciled.errorMessage ?? 'Authoritative cancellation rejected',
+                  FiscalErrorSanitizer.stripSensitiveMaterial(reconciled.errorMessage ?? ''),
                 );
               }
 
@@ -5717,7 +5887,7 @@ export class PostgresBillingService implements CloudBillingCompositionService {
                     'Cancellation confirmed NOT_FOUND, but safe replay after not-found is not supported under contract',
                   );
                 }
-                validatePacCapabilityProvenance(
+                await this.authorizeCapability(
                   this.pacConnector,
                   'supportsSafeCancellationReplayAfterConfirmedNotFound',
                   {
@@ -5733,7 +5903,7 @@ export class PostgresBillingService implements CloudBillingCompositionService {
               }
             } else if (caps.supportsCancellationIdempotencyKey) {
               // Path B: Rule A Cancellation Idempotent Replay Proven
-              validatePacCapabilityProvenance(
+              await this.authorizeCapability(
                 this.pacConnector,
                 'supportsCancellationIdempotencyKey',
                 {
@@ -5789,6 +5959,7 @@ export class PostgresBillingService implements CloudBillingCompositionService {
           alreadyCompleted: false as const,
           opId: opId!,
           targetUuid,
+          requestHash,
           invoiceRow,
           emisorRfc,
         };
@@ -5802,7 +5973,7 @@ export class PostgresBillingService implements CloudBillingCompositionService {
     const { opId, targetUuid, invoiceRow, emisorRfc } = prepared;
 
     // Validate PAC CANCEL capability provenance fail-closed
-    validatePacCapabilityProvenance(this.pacConnector, 'supportsCancel', {
+    await this.authorizeCapability(this.pacConnector, 'supportsCancel', {
       organizationId: command.organizationId,
       operationType: 'CANCEL',
     });
@@ -5813,6 +5984,14 @@ export class PostgresBillingService implements CloudBillingCompositionService {
       cancelResult = await this.pacConnector.cancelar({
         organizationId: command.organizationId,
         uuid: targetUuid,
+        correlation: {
+          organizationId: command.organizationId,
+          invoiceId: command.invoiceId,
+          operationId: opId,
+          operationType: 'CANCEL',
+          idempotencyKey: cancellationIdempotencyKey,
+          requestHash: prepared.requestHash!,
+        },
         rfcEmisor: emisorRfc,
         total: invoiceRow.total_amount,
         reason: command.motivo as any,
@@ -5833,12 +6012,33 @@ export class PostgresBillingService implements CloudBillingCompositionService {
         );
       });
       if (err instanceof PacTimeoutError) {
-        throw err;
+        throw new PacTimeoutError(sanitized.sanitizedMessage);
       }
       throw new PacTimeoutError(`PAC cancellation error: ${sanitized.sanitizedMessage}`);
     }
 
     // Phase 3: Evaluate Cancellation Outcome
+    try {
+      await this.validateFiscalEvidence(cancelResult, {
+        organizationId: command.organizationId,
+        invoiceId: command.invoiceId,
+        operationId: opId,
+        operationType: 'CANCEL',
+        idempotencyKey: cancellationIdempotencyKey,
+        requestHash: prepared.requestHash!,
+      });
+    } catch (error) {
+      const safe = FiscalErrorSanitizer.sanitize(error);
+      await withTenantTransaction(this.pool, command.organizationId, async (client) => {
+        await client.query(
+          `UPDATE fiscal_stamping_operations SET status = 'RECONCILIATION_REQUIRED', last_error = $1
+          WHERE organization_id = $2 AND id = $3;`,
+          [safe.sanitizedMessage, command.organizationId, opId],
+        );
+      });
+      throw new FiscalSuccessValidationError(safe.sanitizedMessage);
+    }
+
     if (cancelResult.status === 'PENDING_APPROVAL') {
       // Non-final state: PENDING_APPROVAL != CANCELLED
       await withTenantTransaction(this.pool, command.organizationId, async (client) => {
@@ -5850,7 +6050,7 @@ export class PostgresBillingService implements CloudBillingCompositionService {
                updated_at = NOW()
            WHERE organization_id = $2 AND id = $3;`,
           [
-            cancelResult.errorMessage ?? 'Cancellation pending receptor approval',
+            FiscalErrorSanitizer.stripSensitiveMaterial(cancelResult.errorMessage ?? ''),
             command.organizationId,
             opId,
           ],
@@ -5881,6 +6081,14 @@ export class PostgresBillingService implements CloudBillingCompositionService {
 
     // Authoritative Cancellation Validation (§15.3, Tests 25–36)
     try {
+      await this.validateFiscalEvidence(cancelResult, {
+        organizationId: command.organizationId,
+        invoiceId: command.invoiceId,
+        operationId: opId,
+        operationType: 'CANCEL',
+        idempotencyKey: cancellationIdempotencyKey,
+        requestHash: prepared.requestHash!,
+      });
       this.validateAuthoritativeCancellationResult(cancelResult, targetUuid);
     } catch (valErr: unknown) {
       const sanitized = FiscalErrorSanitizer.sanitize(valErr);
@@ -5894,7 +6102,7 @@ export class PostgresBillingService implements CloudBillingCompositionService {
           [sanitized.sanitizedMessage, command.organizationId, opId],
         );
       });
-      throw valErr;
+      throw new FiscalSuccessValidationError(sanitized.sanitizedMessage);
     }
 
     return withTenantTransaction(this.pool, command.organizationId, async (client) => {
@@ -5933,7 +6141,7 @@ export class PostgresBillingService implements CloudBillingCompositionService {
       );
 
       // Enqueue Outbox Event with deterministic semanticEventId and eventContractVersion
-      await this.outboxService.enqueue(client, {
+      await this.enqueueFiscalEvent(client, {
         organizationId: command.organizationId,
         branchId: invoiceRow.branch_id,
         eventType: 'FacturaFiscalCancelada',
@@ -5959,9 +6167,138 @@ export class PostgresBillingService implements CloudBillingCompositionService {
     });
   }
 
-  private validateAuthoritativeStampResult(result: any, expectedUuid?: string): void {
+  async replayFiscalEvent(organizationId: string, operationId: string): Promise<void> {
+    await withTenantTransaction(this.pool, organizationId, async (client) => {
+      const res = await client.query(
+        `SELECT * FROM fiscal_stamping_operations
+        WHERE organization_id = $1 AND id = $2 AND status = 'SUCCEEDED' FOR UPDATE;`,
+        [organizationId, operationId],
+      );
+      const op = res.rows[0];
+      if (!op?.event_payload)
+        throw new EventContractIncompatibleError('Durable original envelope unavailable');
+      await this.enqueueFiscalEvent(client, {
+        organizationId,
+        branchId: op.branch_id,
+        eventType:
+          op.operation_type === 'STAMP' ? 'FacturaFiscalEmitida' : 'FacturaFiscalCancelada',
+        aggregateType: 'FiscalInvoice',
+        aggregateId: op.invoice_id,
+        payload: op.event_payload,
+      });
+    });
+  }
+
+  private async enqueueFiscalEvent(
+    client: pg.PoolClient,
+    input: Parameters<CloudIntegrationOutboxService['enqueue']>[1],
+  ): Promise<void> {
+    const payload = input.payload as Record<string, unknown>;
+    validateEventContractVersion(payload['eventContractVersion']);
+    if (!this.fiscalSubscribers)
+      throw new EventContractIncompatibleError('Required subscriber declarations unavailable');
+    const required = ['eventContractVersion', 'semanticEventId', 'invoiceId', 'uuid'];
+    for (const subscriber of this.fiscalSubscribers) {
+      assertSubscriberCompatibility(payload['eventContractVersion'], payload, subscriber, required);
+    }
+    const stored = await client.query(
+      `SELECT id, invoice_id, operation_type, event_contract_version, event_payload FROM fiscal_stamping_operations
+       WHERE organization_id = $1 AND semantic_event_id = $2 FOR UPDATE;`,
+      [input.organizationId, payload['semanticEventId']],
+    );
+    if (stored.rows.length !== 1)
+      throw new EventContractIncompatibleError('Fiscal operation identity unavailable');
+    const row = stored.rows[0]!;
+    const eventKind =
+      row.operation_type === 'STAMP' ? 'FacturaFiscalEmitida' : 'FacturaFiscalCancelada';
+    if (
+      input.eventType !== eventKind ||
+      input.aggregateId !== row.invoice_id ||
+      payload['semanticEventId'] !==
+        generateFiscalSemanticEventId(input.organizationId, row.id, eventKind)
+    ) {
+      throw new EventContractIncompatibleError('Fiscal envelope identity mismatch');
+    }
+    let durablePayload = payload;
+    if (row.event_payload) {
+      durablePayload = row.event_payload;
+      validateEventContractVersion(row.event_contract_version);
+      if (
+        durablePayload['eventContractVersion'] !== row.event_contract_version ||
+        durablePayload['semanticEventId'] !== payload['semanticEventId']
+      ) {
+        throw new EventContractIncompatibleError('Corrupt persisted fiscal event');
+      }
+    } else {
+      await client.query(
+        `UPDATE fiscal_stamping_operations SET event_contract_version = $1, event_payload = $2::jsonb
+         WHERE organization_id = $3 AND semantic_event_id = $4 AND event_payload IS NULL;`,
+        [
+          payload['eventContractVersion'],
+          JSON.stringify(payload),
+          input.organizationId,
+          payload['semanticEventId'],
+        ],
+      );
+    }
+    for (const subscriber of this.fiscalSubscribers) {
+      assertSubscriberCompatibility(
+        durablePayload['eventContractVersion'],
+        durablePayload,
+        subscriber,
+        required,
+      );
+    }
+    // Enqueue original immutable payload/version, never regenerate on retry/recreation.
+    await this.outboxService.enqueue(client, { ...input, payload: durablePayload });
+  }
+
+  private async authorizeCapability(
+    connector: IPacConnector,
+    capability: Parameters<typeof authorizePacCapabilityUse>[1],
+    context: Parameters<typeof authorizePacCapabilityUse>[2],
+  ): Promise<void> {
+    return authorizePacCapabilityUse(connector, capability, context, this.authorizationRegistry);
+  }
+
+  private async validateFiscalEvidence(
+    result: any,
+    expected: FiscalResultCorrelation,
+  ): Promise<void> {
+    this.validateResultCorrelation(result, expected);
+    try {
+      if (
+        !this.authorizationRegistry?.verifyFiscalEvidence ||
+        !(await this.authorizationRegistry.verifyFiscalEvidence(
+          expected,
+          this.pacConnector.providerName,
+          result,
+        ))
+      ) {
+        throw new Error('Unauthenticated result');
+      }
+    } catch {
+      throw new FiscalSuccessValidationError('Authenticated fiscal evidence unavailable');
+    }
+  }
+
+  private validateResultCorrelation(result: any, expected: FiscalResultCorrelation): void {
+    if (
+      result.pacProvider !== this.pacConnector.providerName ||
+      !result.correlation ||
+      Object.entries(expected).some(([key, value]) => result.correlation[key] !== value)
+    ) {
+      throw new FiscalSuccessValidationError('Uncorrelated PAC evidence');
+    }
+  }
+
+  private validateAuthoritativeStampResult(
+    result: any,
+    expectedUuid?: string,
+    originalXml?: string,
+  ): void {
     if (result.status !== 'STAMPED') {
-      throw new FiscalSuccessValidationError(`PAC result status '${result.status}' is not STAMPED`);
+      throw new FiscalSuccessValidationError('PAC result is not STAMPED');
     }
     if (!result.uuid || typeof result.uuid !== 'string' || result.uuid.trim().length === 0) {
       throw new FiscalSuccessValidationError('PAC STAMPED result is missing required fiscal UUID');
@@ -5972,9 +6309,24 @@ export class PostgresBillingService implements CloudBillingCompositionService {
     }
 
     // Structural CFDI 4.0 XML and TimbreFiscalDigital validation (SEC-WP021-R4-HIGH-04)
-    validateAndExtractTimbreFiscalDigital(stampedXml, {
+    if (
+      !this.pacConnector.certifiedProviderRfc ||
+      result.certifiedProviderRfc !== this.pacConnector.certifiedProviderRfc
+    ) {
+      throw new FiscalSuccessValidationError('Certified provider identity unavailable');
+    }
+    const tfd = validateAndExtractTimbreFiscalDigital(stampedXml, {
       expectedUuid: expectedUuid ?? result.uuid,
+      expectedProvider: this.pacConnector.certifiedProviderRfc,
+      expectedOriginalXml: originalXml,
     });
+    if (
+      result.selloSat !== tfd.selloSat ||
+      result.fechaTimbrado !== tfd.fechaTimbrado ||
+      result.noCertificadoSat !== tfd.noCertificadoSat
+    ) {
+      throw new FiscalSuccessValidationError('Inconsistent stamped metadata');
+    }
   }
 
   private validateAuthoritativeCancellationResult(result: any, targetUuid: string): void {
@@ -5984,14 +6336,10 @@ export class PostgresBillingService implements CloudBillingCompositionService {
       );
     }
     if (result.status !== 'CANCELLED') {
-      throw new FiscalSuccessValidationError(
-        `PAC cancellation result status '${result.status}' is not CANCELLED`,
-      );
+      throw new FiscalSuccessValidationError('PAC cancellation result is not CANCELLED');
     }
     if (!result.uuid || result.uuid.toUpperCase() !== targetUuid.toUpperCase()) {
-      throw new FiscalSuccessValidationError(
-        `PAC cancellation UUID '${result.uuid}' does not match target invoice UUID '${targetUuid}'`,
-      );
+      throw new FiscalSuccessValidationError('PAC cancellation UUID mismatch');
     }
   }
 
@@ -6178,7 +6526,7 @@ export class PostgresBillingService implements CloudBillingCompositionService {
       regimenFiscal: row.regimen_fiscal,
       codigoPostal: row.codigo_postal,
       certificateNumber: row.certificate_number,
-      certificatePem: row.certificate_pem,
+      certificatePem: null,
       privateKeyVaultId: row.private_key_vault_id,
       validFrom: row.valid_from
         ? typeof row.valid_from === 'string'
@@ -6292,14 +6640,59 @@ export class PostgresBillingService implements CloudBillingCompositionService {
 export interface ProcessEventWithInboxOptions {
   eventContractVersion?: string;
   supportedMajors?: number[];
+  payload?: Record<string, unknown>;
+  requiredFields?: string[];
+  effectMode?: 'TRANSACTIONAL_SQL' | 'EXTERNAL';
+  verifyEffect?: (client: pg.PoolClient) => Promise<boolean>;
+}
+
+export interface DurableFiscalReplayEvent {
+  organizationId: string;
+  semanticEventId: string;
+  eventKind: string;
+  eventContractVersion: string;
+  payload: Record<string, unknown>;
+}
+
+/** Producer-owned source; consumers cannot query Billing private tables. */
+export interface DurableFiscalReplaySource {
+  readInterval(
+    organizationId: string,
+    from: string,
+    until: string,
+  ): Promise<{
+    retainedFrom: string;
+    retainedUntil: string;
+    complete: boolean;
+    redeliveryIndependentOfAcknowledgment: boolean;
+    events: DurableFiscalReplayEvent[];
+  }>;
+}
+
+export interface ConsumerRestorePlan {
+  from: string;
+  until: string;
+  restoreDomain: 'EFFECT_AND_INBOX_RESTORED_TOGETHER';
+  source: DurableFiscalReplaySource;
+  handler: (client: pg.PoolClient, event: DurableFiscalReplayEvent) => Promise<void>;
+  verifyEffect: (client: pg.PoolClient, event: DurableFiscalReplayEvent) => Promise<boolean>;
 }
 
 /**
  * Consumer Inbox Service for Transactional Deduplication of Fiscal & Cloud Events
  * Governed by ACR-2026-020 Section 14.2 (Consumer Idempotency / Inbox Contract).
  */
+export interface ConsumerRestorePolicy {
+  /** Trusted composition must reload the governing Data approval; no inferred horizon. */
+  approvalReference: string;
+  maxRestoreHorizonMs: number;
+}
+
 export class ConsumerInboxService {
-  constructor(private readonly pool: pg.Pool = getPool()) {}
+  constructor(
+    private readonly pool: pg.Pool = getPool(),
+    private readonly restorePolicy?: ConsumerRestorePolicy,
+  ) {}
 
   async processEventWithInbox<T>(
     organizationId: string,
@@ -6309,10 +6702,7 @@ export class ConsumerInboxService {
     handler: (client: pg.PoolClient) => Promise<T>,
     options?: ProcessEventWithInboxOptions | string,
   ): Promise<{ duplicate: boolean; processed: boolean; result?: T }> {
-    const rawVersion =
-      typeof options === 'string'
-        ? options
-        : (options?.eventContractVersion ?? FISCAL_EVENT_CONTRACT_VERSION);
+    const rawVersion = typeof options === 'string' ? options : options?.eventContractVersion;
     const supportedMajors =
       typeof options === 'object' && options?.supportedMajors ? options.supportedMajors : [1];
 
@@ -6326,33 +6716,96 @@ export class ConsumerInboxService {
       );
     }
 
-    return withTenantTransaction(this.pool, organizationId, async (client) => {
-      // 1. Check if semanticEventId already exists in consumer inbox for this tenant & context
-      const existing = await client.query(
-        `SELECT 1 FROM consumer_inbox_events
-         WHERE organization_id = $1 AND consumer_context = $2 AND semantic_event_id = $3
-         FOR UPDATE;`,
-        [organizationId, consumerContext, semanticEventId],
+    if (
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(organizationId) ||
+      !consumerContext ||
+      consumerContext.length > 100 ||
+      !/^[0-9a-f]{64}$/.test(semanticEventId) ||
+      !['FacturaFiscalEmitida', 'FacturaFiscalCancelada'].includes(eventKind)
+    ) {
+      throw new EventContractIncompatibleError('Invalid fiscal event identity or tenant');
+    }
+    const details = typeof options === 'object' ? options : undefined;
+    if (details?.effectMode !== 'TRANSACTIONAL_SQL') {
+      throw new EventContractIncompatibleError(
+        'BLOCKED BY CONTRACT: external durable idempotency not established',
       );
-
-      if (existing.rows.length > 0) {
-        // Duplicate event absorbed as safe NO-OP
+    }
+    const payload = details?.payload;
+    if (
+      !payload ||
+      payload['semanticEventId'] !== semanticEventId ||
+      payload['eventContractVersion'] !== rawVersion
+    ) {
+      throw new EventContractIncompatibleError('Missing or inconsistent semantic payload');
+    }
+    if (
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        String(payload['invoiceId']),
+      ) ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        String(payload['uuid']),
+      ) ||
+      (payload['organizationId'] !== undefined && payload['organizationId'] !== organizationId)
+    ) {
+      throw new EventContractIncompatibleError('Required fiscal payload identity invalid');
+    }
+    assertSubscriberCompatibility(rawVersion, payload, {
+      subscriberName: consumerContext,
+      supportedMajors,
+      requiredFields: [
+        ...new Set([
+          'semanticEventId',
+          'eventContractVersion',
+          'invoiceId',
+          'uuid',
+          ...(details?.requiredFields ?? []),
+        ]),
+      ],
+    });
+    return withTenantTransaction(this.pool, organizationId, async (client) => {
+      // Insert before mutation: the unique key serializes concurrent duplicate deliveries.
+      // This reservation is rolled back together with any failed handler.
+      const reservation = await client.query(
+        `INSERT INTO consumer_inbox_events
+         (id, organization_id, semantic_event_id, event_kind, event_contract_version, consumer_context, event_payload, processed_at)
+         VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6::jsonb, NOW())
+         ON CONFLICT (organization_id, consumer_context, semantic_event_id) DO NOTHING RETURNING id;`,
+        [
+          organizationId,
+          semanticEventId,
+          eventKind,
+          rawVersion,
+          consumerContext,
+          JSON.stringify(payload),
+        ],
+      );
+      if (reservation.rows.length === 0) {
+        const existing = await client.query(
+          `SELECT event_kind, event_contract_version, event_payload = $4::jsonb AS same_payload
+           FROM consumer_inbox_events WHERE organization_id = $1 AND consumer_context = $2 AND semantic_event_id = $3;`,
+          [organizationId, consumerContext, semanticEventId, JSON.stringify(payload)],
+        );
+        const previous = existing.rows[0];
+        if (
+          !previous ||
+          previous.event_kind !== eventKind ||
+          previous.event_contract_version !== rawVersion ||
+          !previous.same_payload
+        ) {
+          throw new EventContractIncompatibleError('Conflicting semantic replay');
+        }
+        if (details?.verifyEffect && !(await details.verifyEffect(client))) {
+          throw new EventContractIncompatibleError(
+            'Inbox/effect restore inconsistency: explicit reconciliation required',
+          );
+        }
         return { duplicate: true, processed: false };
       }
-
-      // 2. Execute business handler within the SAME local transaction
       const result = await handler(client);
-
-      // 3. Atomically record in consumer inbox with event_contract_version
-      await client.query(
-        `INSERT INTO consumer_inbox_events (
-           id, organization_id, semantic_event_id, event_kind, event_contract_version, consumer_context, processed_at
-         ) VALUES (
-           gen_random_uuid(), $1, $2, $3, $4, $5, NOW()
-         );`,
-        [organizationId, semanticEventId, eventKind, rawVersion, consumerContext],
-      );
-
+      if (details?.verifyEffect && !(await details.verifyEffect(client))) {
+        throw new EventContractIncompatibleError('Restored business effect not proven');
+      }
       return { duplicate: false, processed: true, result };
     });
   }
@@ -6391,31 +6844,86 @@ export class ConsumerInboxService {
       eventKind: string;
       eventContractVersion: string;
     }>,
+    plan?: ConsumerRestorePlan,
   ): Promise<{ reconciledCount: number }> {
-    return withTenantTransaction(this.pool, organizationId, async (client) => {
-      let count = 0;
-      for (const event of acknowledgedEvents) {
-        validateEventContractVersion(event.eventContractVersion);
-        const res = await client.query(
-          `INSERT INTO consumer_inbox_events (
-             id, organization_id, semantic_event_id, event_kind, event_contract_version, consumer_context, processed_at
-           ) VALUES (
-             gen_random_uuid(), $1, $2, $3, $4, $5, NOW()
-           ) ON CONFLICT (organization_id, consumer_context, semantic_event_id) DO NOTHING;`,
-          [
-            organizationId,
-            event.semanticEventId,
-            event.eventKind,
-            event.eventContractVersion,
-            consumerContext,
-          ],
-        );
-        if ((res.rowCount ?? 0) > 0) {
-          count++;
-        }
-      }
-      return { reconciledCount: count };
-    });
+    if (
+      !this.restorePolicy?.approvalReference ||
+      !Number.isFinite(this.restorePolicy.maxRestoreHorizonMs) ||
+      this.restorePolicy.maxRestoreHorizonMs <= 0
+    ) {
+      throw new EventContractIncompatibleError('Approved consumer restore horizon unavailable');
+    }
+    if (
+      !plan ||
+      plan.restoreDomain !== 'EFFECT_AND_INBOX_RESTORED_TOGETHER' ||
+      typeof plan.verifyEffect !== 'function' ||
+      !Number.isFinite(Date.parse(plan.from)) ||
+      !Number.isFinite(Date.parse(plan.until)) ||
+      Date.parse(plan.from) > Date.parse(plan.until) ||
+      Date.parse(plan.until) - Date.parse(plan.from) > this.restorePolicy.maxRestoreHorizonMs
+    ) {
+      throw new EventContractIncompatibleError(
+        'Restore domain or approved replay interval unproven',
+      );
+    }
+    const snapshot = await plan.source
+      .readInterval(organizationId, plan.from, plan.until)
+      .catch(() => {
+        throw new EventContractIncompatibleError('Durable source unavailable');
+      });
+    if (
+      !snapshot.complete ||
+      !snapshot.redeliveryIndependentOfAcknowledgment ||
+      !Number.isFinite(Date.parse(snapshot.retainedFrom)) ||
+      !Number.isFinite(Date.parse(snapshot.retainedUntil)) ||
+      Date.parse(snapshot.retainedFrom) > Date.parse(plan.from) ||
+      Date.parse(snapshot.retainedUntil) < Date.parse(plan.until)
+    ) {
+      throw new EventContractIncompatibleError(
+        'Durable source unavailable or retention insufficient',
+      );
+    }
+    // Validate the entire source before applying any event; acknowledgments cannot replace payloads.
+    for (const event of snapshot.events) {
+      assertSubscriberCompatibility(event.eventContractVersion, event.payload, {
+        subscriberName: consumerContext,
+        supportedMajors: [1],
+        requiredFields: ['semanticEventId', 'eventContractVersion', 'invoiceId', 'uuid'],
+      });
+      if (event.organizationId !== organizationId)
+        throw new EventContractIncompatibleError('Cross-tenant replay');
+    }
+    if (
+      acknowledgedEvents.some(
+        (ack) =>
+          !snapshot.events.some(
+            (event) =>
+              event.semanticEventId === ack.semanticEventId &&
+              event.eventKind === ack.eventKind &&
+              event.eventContractVersion === ack.eventContractVersion,
+          ),
+      )
+    ) {
+      throw new EventContractIncompatibleError('Acknowledged event missing from durable source');
+    }
+    let reconciledCount = 0;
+    for (const event of snapshot.events) {
+      const result = await this.processEventWithInbox(
+        organizationId,
+        consumerContext,
+        event.semanticEventId,
+        event.eventKind,
+        (client) => plan.handler(client, event),
+        {
+          eventContractVersion: event.eventContractVersion,
+          payload: event.payload,
+          effectMode: 'TRANSACTIONAL_SQL',
+          verifyEffect: (client) => plan.verifyEffect(client, event),
+        },
+      );
+      if (result.processed) reconciledCount++;
+    }
+    return { reconciledCount };
   }
 }
 

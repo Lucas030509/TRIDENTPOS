@@ -4,7 +4,7 @@
  */
 
 import crypto from 'node:crypto';
-import { InvalidEventContractVersionError } from './errors.js';
+import { EventContractIncompatibleError, InvalidEventContractVersionError } from './errors.js';
 
 export type TaxType =
   'IVA' | 'IEPS' | 'ISR' | 'RETENCION_IVA' | 'RETENCION_ISR' | 'PROPINA_LEGAL' | 'LOCAL';
@@ -195,6 +195,7 @@ export interface CsdCredentials {
 }
 
 export interface PacStampRequest {
+  correlation?: FiscalResultCorrelation;
   organizationId: string;
   invoiceId?: string;
   referenceId?: string;
@@ -206,6 +207,8 @@ export interface PacStampRequest {
 }
 
 export interface PacStampResult {
+  correlation?: FiscalResultCorrelation;
+  certifiedProviderRfc?: string;
   status: 'STAMPED' | 'REJECTED' | 'TIMEOUT';
   uuid?: string;
   selloSat?: string;
@@ -220,6 +223,7 @@ export interface PacStampResult {
 }
 
 export interface PacCancelRequest {
+  correlation?: FiscalResultCorrelation;
   organizationId: string;
   uuid: string;
   rfcEmisor: string;
@@ -232,6 +236,8 @@ export interface PacCancelRequest {
 }
 
 export interface PacCancelResult {
+  correlation?: FiscalResultCorrelation;
+  certifiedProviderRfc?: string;
   status: 'CANCELLED' | 'REJECTED' | 'PENDING_APPROVAL' | 'TIMEOUT';
   uuid: string;
   cancellationCode?: string;
@@ -302,6 +308,7 @@ export interface ProvenanceValidationContext {
   capability: PacCapabilityName;
   recoveryCondition?: string;
   evidenceBytes?: Buffer | Uint8Array;
+  evidenceMediaType?: string;
   maxStatusAgeMs?: number;
 }
 
@@ -322,6 +329,9 @@ export type NormalizedStampReconciliationOutcome =
   'STAMPED_CONFIRMED' | 'REJECTED_CONFIRMED' | 'NOT_FOUND_CONFIRMED' | 'PENDING' | 'UNKNOWN';
 
 export interface AuthoritativeStampReconciliationResult {
+  pacProvider?: string;
+  correlation?: FiscalResultCorrelation;
+  certifiedProviderRfc?: string;
   outcome: NormalizedStampReconciliationOutcome;
   uuid?: string;
   stampedXml?: string;
@@ -341,6 +351,9 @@ export type NormalizedCancellationReconciliationOutcome =
   | 'UNKNOWN';
 
 export interface AuthoritativeCancellationReconciliationResult {
+  pacProvider?: string;
+  correlation?: FiscalResultCorrelation;
+  certifiedProviderRfc?: string;
   outcome: NormalizedCancellationReconciliationOutcome;
   uuid: string;
   cancellationCode?: string;
@@ -580,13 +593,18 @@ export function validateEventContractVersion(version: unknown): { major: number;
       'eventContractVersion must be a string in major.minor format',
     );
   }
-  const match = version.trim().match(/^(0|[1-9]\d*)\.(0|[1-9]\d*)$/);
+  const match = version.match(/^(0|[1-9]\d*)\.(0|[1-9]\d*)$/);
   if (!match) {
     throw new InvalidEventContractVersionError(
-      `Malformed eventContractVersion '${version}'; must be canonical major.minor format`,
+      'Malformed eventContractVersion; canonical major.minor required',
     );
   }
-  return { major: parseInt(match[1]!, 10), minor: parseInt(match[2]!, 10) };
+  const major = Number(match[1]);
+  const minor = Number(match[2]);
+  if (!Number.isSafeInteger(major) || !Number.isSafeInteger(minor)) {
+    throw new InvalidEventContractVersionError('Version integer out of supported range');
+  }
+  return { major, minor };
 }
 
 export function generateFiscalSemanticEventId(
@@ -600,4 +618,67 @@ export function generateFiscalSemanticEventId(
     .createHash('sha256')
     .update(`${organizationId}:${operationId}:${eventKind}`)
     .digest('hex');
+}
+
+export function assertSubscriberCompatibility(
+  version: unknown,
+  payload: Record<string, unknown>,
+  subscriber: SubscriberDeclaration,
+  requiredFields: string[] = [],
+): void {
+  const parsed = validateEventContractVersion(version);
+  if (
+    !subscriber ||
+    !subscriber.subscriberName ||
+    !Array.isArray(subscriber.supportedMajors) ||
+    !subscriber.supportedMajors.includes(parsed.major) ||
+    !Array.isArray(subscriber.requiredFields) ||
+    requiredFields.some((field) => !subscriber.requiredFields.includes(field)) ||
+    subscriber.requiredFields.some(
+      (field) => !Object.prototype.hasOwnProperty.call(payload, field) || payload[field] == null,
+    )
+  ) {
+    throw new EventContractIncompatibleError(
+      'Subscriber contract incompatible or required payload missing',
+    );
+  }
+}
+
+export interface FiscalResultCorrelation {
+  organizationId: string;
+  invoiceId: string;
+  operationId: string;
+  operationType: FiscalOperationType;
+  idempotencyKey: string;
+  requestHash: string;
+}
+
+export interface FiscalEventSchema {
+  version: string;
+  fields: Record<string, { required: boolean; meaning: string }>;
+}
+
+export function assertEventContractEvolution(
+  previous: FiscalEventSchema,
+  next: FiscalEventSchema,
+): void {
+  const before = validateEventContractVersion(previous.version);
+  const after = validateEventContractVersion(next.version);
+  const breaking =
+    Object.entries(previous.fields).some(
+      ([name, field]) =>
+        !next.fields[name] ||
+        next.fields[name]!.meaning !== field.meaning ||
+        (!field.required && next.fields[name]!.required),
+    ) ||
+    Object.entries(next.fields).some(([name, field]) => !previous.fields[name] && field.required);
+  if (
+    breaking
+      ? after.major !== before.major + 1 || after.minor !== 0
+      : after.major !== before.major || after.minor !== before.minor + 1
+  ) {
+    throw new EventContractIncompatibleError(
+      'Contract change requires correct major/minor increment',
+    );
+  }
 }

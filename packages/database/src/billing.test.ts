@@ -75,7 +75,7 @@ describe('TRIDENTPOS WP-021 Billing & Fiscal Invoicing Database Suite', { concur
     try {
       await initClient.query(`
         DROP TABLE IF EXISTS consumer_inbox_events, fiscal_stamping_operations, lotes_facturacion_global, fiscal_invoice_items, fiscal_invoices, emisor_fiscal_config, tax_schemes CASCADE;
-        DELETE FROM _migrations WHERE id = '20260905030000' OR name = 'billing_fiscal_invoicing';
+        DELETE FROM _migrations WHERE id IN ('20260905030000','20261001000000') OR name = 'billing_fiscal_invoicing';
       `);
     } finally {
       initClient.release();
@@ -379,7 +379,7 @@ describe('TRIDENTPOS WP-021 Billing & Fiscal Invoicing Database Suite', { concur
       },
       (err: unknown) => {
         const msg = err instanceof Error ? err.message : String(err);
-        assert.match(msg, /FAIL_CLOSED.*Destructive down migration prohibited/i);
+        assert.match(msg, /FAIL_CLOSED/i);
         return true;
       },
     );
@@ -412,6 +412,8 @@ describe('TRIDENTPOS WP-021 Billing & Fiscal Invoicing Database Suite', { concur
       DELETE FROM consumer_inbox_events;
     `);
 
+    const envelopeDown = await migrateDown(pool, { allowDestructiveDown: true });
+    assert.equal(envelopeDown.reverted, '20261001000000_wp021_security_event_integrity');
     const downResult = await migrateDown(pool, { allowDestructiveDown: true });
     assert.equal(downResult.reverted, '20260905030000_billing_fiscal_invoicing');
 

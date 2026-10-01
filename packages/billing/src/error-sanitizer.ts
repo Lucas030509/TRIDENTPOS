@@ -44,7 +44,8 @@ export class FiscalErrorSanitizer {
    */
   public static sanitize(error: unknown, correlationId?: string): SanitizedFiscalError {
     const rawMessage = error instanceof Error ? error.message : String(error);
-    const resolvedCorrelationId = correlationId ?? crypto.randomUUID();
+    const resolvedCorrelationId =
+      correlationId && /^[0-9a-f-]{36}$/i.test(correlationId) ? correlationId : crypto.randomUUID();
     const timestamp = new Date().toISOString();
 
     const errorCode = this.resolveErrorCode(error);
@@ -64,41 +65,10 @@ export class FiscalErrorSanitizer {
    * Cleans sensitive patterns: PEM blocks, passwords, tokens, connection strings, stack traces.
    */
   public static stripSensitiveMaterial(message: string): string {
-    if (!message) return 'Unknown error occurred';
-
-    let cleaned = message;
-
-    // 1. Remove PEM blocks (private keys, certificates)
-    cleaned = cleaned.replace(
-      /-----BEGIN [A-Z0-9_\s-]+-----[\s\S]*?-----END [A-Z0-9_\s-]+-----/gi,
-      '[REDACTED_KEY_MATERIAL]',
-    );
-
-    // 2. Remove connection strings (e.g. postgresql://user:pass@host)
-    cleaned = cleaned.replace(
-      /(postgres(?:ql)?|mysql|redis|mongodb|http|https):\/\/[^:\s]+:[^@\s]+@/gi,
-      '$1://[REDACTED_CREDENTIALS]@',
-    );
-
-    // 3. Remove bearer tokens
-    cleaned = cleaned.replace(/(bearer)\s+[A-Za-z0-9_.-]+/gi, '$1 [REDACTED_TOKEN]');
-
-    // 4. Remove password, token, secret, and credential assignments
-    cleaned = cleaned.replace(
-      /(password|passwd|pwd|pass|token|secret|api[_-]?key|authorization)\s*[:=\s]\s*['"]?[^\s,;'"]+['"]?/gi,
-      '$1=[REDACTED]',
-    );
-
-    // 5. Redact token-like prefixes
-    cleaned = cleaned.replace(/(?:secret|token|key|pwd)-[A-Za-z0-9_.-]+/gi, '[REDACTED_SECRET]');
-
-    // 4. Remove stack traces from message string
-    cleaned = cleaned.replace(/\s+at\s+.*/gi, '');
-
-    // 5. Trim and normalize whitespace
-    cleaned = cleaned.replace(/\s+/g, ' ').trim();
-
-    return cleaned || 'Internal sanitized fiscal error';
+    // Untrusted errors are opaque, including encoded/JSON/multiline secrets.
+    // Retain only allowlisted domain code and generated correlation, never raw text.
+    void message;
+    return 'Fiscal operation failed; consult the correlation identifier';
   }
 
   private static resolveErrorCode(error: unknown): string {

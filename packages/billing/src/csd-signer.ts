@@ -23,9 +23,8 @@ export function signCadenaOriginal(cadenaOriginal: string, privateKeyPem: string
     signer.update(cadenaOriginal, 'utf8');
     signer.end();
     return signer.sign(privateKeyPem, 'base64');
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    throw new CsdSignatureError(`Failed to generate digital stamp (sello): ${msg}`);
+  } catch {
+    throw new CsdSignatureError('Failed to generate digital stamp');
   }
 }
 
@@ -70,8 +69,7 @@ export function validateCsdKeyPairMatch(certificatePem: string, privateKeyPem: s
     }
   } catch (err: unknown) {
     if (err instanceof CsdMismatchError) throw err;
-    const msg = err instanceof Error ? err.message : String(err);
-    throw new CsdMismatchError(`CSD cryptographic key matching failed: ${msg}`);
+    throw new CsdMismatchError('CSD cryptographic key matching failed');
   }
 }
 
@@ -123,8 +121,7 @@ export function extractCertNumberFromPem(certPem: string): string {
     );
   } catch (err: unknown) {
     if (err instanceof BillingError) throw err;
-    const msg = err instanceof Error ? err.message : String(err);
-    throw new CsdCredentialsMissingError(`Failed to parse CSD X509 certificate: ${msg}`);
+    throw new CsdCredentialsMissingError('Failed to parse CSD X509 certificate');
   }
 }
 

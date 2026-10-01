@@ -34,24 +34,14 @@ import {
   FiscalInvoiceAlreadyCancelledError,
   PacCircuitBreakerOpenError,
   PacTimeoutError,
-  validateEventContractVersion,
-  generateFiscalSemanticEventId,
-  validatePacCapabilityProvenance,
   validateAndExtractTimbreFiscalDigital,
   FiscalErrorSanitizer,
-  InvalidEventContractVersionError,
-  PacContractProvenanceMissingError,
-  PacProvenanceValidationError,
-  PacProvenanceRevokedError,
-  PacProvenanceExpiredError,
-  PacProvenanceScopeMismatchError,
   FiscalSuccessValidationError,
   type FiscalInvoice,
   type FiscalInvoiceItem,
   type EmisorFiscalConfig,
   type TaxScheme,
   type UnclaimedFiscalTicket,
-  type PacContractProvenance,
 } from './index.js';
 
 describe('TRIDENTPOS WP-021 Billing & Fiscal Invoicing Unit Suite', () => {
@@ -622,326 +612,6 @@ describe('TRIDENTPOS WP-021 Billing & Fiscal Invoicing Unit Suite', () => {
     });
   });
 
-  describe('8. Event Contract Versioning (Requirements 75–80 & SEC-WP021-R4-HIGH-02)', () => {
-    it('REQ-75: Validates canonical major.minor eventContractVersion format', () => {
-      const v10 = validateEventContractVersion('1.0');
-      assert.equal(v10.major, 1);
-      assert.equal(v10.minor, 0);
-
-      const v12 = validateEventContractVersion('1.2');
-      assert.equal(v12.major, 1);
-      assert.equal(v12.minor, 2);
-
-      const v20 = validateEventContractVersion('2.0');
-      assert.equal(v20.major, 2);
-      assert.equal(v20.minor, 0);
-    });
-
-    it('REQ-76: Missing eventContractVersion fails closed', () => {
-      assert.throws(
-        () => validateEventContractVersion(undefined),
-        InvalidEventContractVersionError,
-      );
-      assert.throws(() => validateEventContractVersion(null), InvalidEventContractVersionError);
-      assert.throws(() => validateEventContractVersion(123), InvalidEventContractVersionError);
-    });
-
-    it('REQ-77: Malformed eventContractVersion format fails closed', () => {
-      assert.throws(() => validateEventContractVersion('1'), InvalidEventContractVersionError);
-      assert.throws(() => validateEventContractVersion('1.0.0'), InvalidEventContractVersionError);
-      assert.throws(() => validateEventContractVersion('v1.0'), InvalidEventContractVersionError);
-      assert.throws(
-        () => validateEventContractVersion('1.0-beta'),
-        InvalidEventContractVersionError,
-      );
-      assert.throws(() => validateEventContractVersion(''), InvalidEventContractVersionError);
-      assert.throws(
-        () => validateEventContractVersion('major.minor'),
-        InvalidEventContractVersionError,
-      );
-    });
-
-    it('REQ-78: Unknown major version is distinguishable and rejected by subscribers', () => {
-      const parsed = validateEventContractVersion('2.0');
-      assert.equal(parsed.major, 2);
-      // Consumer compatibility check against supported majors [1]
-      const supportedMajors = [1];
-      assert.equal(supportedMajors.includes(parsed.major), false);
-    });
-
-    it('REQ-79: Compatible minor version is accepted without breaking changes', () => {
-      const parsed10 = validateEventContractVersion('1.0');
-      const parsed11 = validateEventContractVersion('1.1');
-      assert.equal(parsed10.major, 1);
-      assert.equal(parsed11.major, 1);
-      assert.equal(parsed10.major === parsed11.major, true);
-    });
-
-    it('REQ-80: Version is NOT included in semanticEventId (deterministic stability)', () => {
-      const eventId1 = generateFiscalSemanticEventId('org-1', 'op-1', 'FacturaFiscalEmitida');
-      const eventId2 = generateFiscalSemanticEventId('org-1', 'op-1', 'FacturaFiscalEmitida');
-      assert.equal(eventId1, eventId2);
-      // Verify semanticEventId is 64 hex characters (SHA-256)
-      assert.match(eventId1, /^[a-f0-9]{64}$/);
-      // Different operation produces different deterministic ID
-      const eventIdDiff = generateFiscalSemanticEventId('org-1', 'op-2', 'FacturaFiscalEmitida');
-      assert.notEqual(eventId1, eventIdDiff);
-    });
-  });
-
-  describe('9. PAC Capability Provenance Fail-Closed (Requirements 81–87 & SEC-WP021-R4-HIGH-01)', () => {
-    const rawEvidenceBytes = Buffer.from('PAC Contract Evidence SLA 2026-09-01 v1.0');
-    const validEvidenceDigest = crypto.createHash('sha256').update(rawEvidenceBytes).digest('hex');
-
-    const validProvenance: PacContractProvenance = {
-      providerName: 'MOCK_PAC_PROVENANCE',
-      contractIdentifier: 'CTR-2026-SAT-001',
-      contractVersion: '1.0',
-      evidenceUriOrReference: 'https://vault.tridentpos.internal/evidence/ctr-001.pdf',
-      evidenceMediaType: 'application/pdf',
-      evidenceByteLength: rawEvidenceBytes.length,
-      evidenceDigestAlgorithm: 'SHA-256',
-      evidenceDigest: validEvidenceDigest,
-      approvalAuthorityId: 'AUTH_LEGAL_01',
-      approvalKeyId: 'KEY_2026_A',
-      approvalAttestation: 'ATTEST_MOCK_VALID',
-      approvedScope: {
-        organizationId: 'GLOBAL',
-        operationType: 'STAMP',
-        capability: 'supportsStamp',
-      },
-      effectiveFrom: '2026-01-01T00:00:00Z',
-      effectiveUntil: '2028-12-31T23:59:59Z',
-      revocationAuthorityId: 'AUTH_LEGAL_01',
-      revocationKeyId: 'KEY_2026_A',
-      revocationSequence: 1,
-      revocationStatus: 'ACTIVE',
-      revocationAttestation: 'REV_ATTEST_VALID',
-      revocationSnapshotIssuedAt: '2026-09-01T00:00:00Z',
-      revocationSnapshotValidUntil: '2027-09-01T00:00:00Z',
-    };
-
-    it('REQ-81: Valid contractual provenance record passes capability validation', () => {
-      const connector = new MockPacConnector(
-        {
-          supportsStamp: true,
-          supportsCancel: true,
-          supportsStampIdempotencyKey: true,
-          supportsCancellationIdempotencyKey: true,
-          supportsAuthoritativeStampLookup: true,
-          supportsAuthoritativeCancellationLookup: true,
-          supportsSafeStampReplayAfterConfirmedNotFound: true,
-          supportsSafeCancellationReplayAfterConfirmedNotFound: true,
-        },
-        validProvenance,
-      );
-
-      assert.doesNotThrow(() => {
-        validatePacCapabilityProvenance(
-          connector,
-          'supportsStamp',
-          {
-            organizationId: 'org-tenant-1',
-            operationType: 'STAMP',
-            evidenceBytes: rawEvidenceBytes,
-          },
-          '2026-09-15T12:00:00Z',
-        );
-      });
-    });
-
-    it('REQ-82: Missing provenance record fails closed', () => {
-      const connectorNoProv = new MockPacConnector(
-        {
-          supportsStamp: true,
-          supportsCancel: true,
-          supportsStampIdempotencyKey: true,
-          supportsCancellationIdempotencyKey: true,
-          supportsAuthoritativeStampLookup: true,
-          supportsAuthoritativeCancellationLookup: true,
-          supportsSafeStampReplayAfterConfirmedNotFound: true,
-          supportsSafeCancellationReplayAfterConfirmedNotFound: true,
-        },
-        null,
-      );
-
-      assert.throws(
-        () =>
-          validatePacCapabilityProvenance(connectorNoProv, 'supportsStamp', {
-            organizationId: 'org-1',
-            operationType: 'STAMP',
-          }),
-        PacContractProvenanceMissingError,
-      );
-    });
-
-    it('REQ-83: Evidence digest mismatch or altered bytes fails closed', () => {
-      const connector = new MockPacConnector(
-        {
-          supportsStamp: true,
-          supportsCancel: true,
-          supportsStampIdempotencyKey: true,
-          supportsCancellationIdempotencyKey: true,
-          supportsAuthoritativeStampLookup: true,
-          supportsAuthoritativeCancellationLookup: true,
-          supportsSafeStampReplayAfterConfirmedNotFound: true,
-          supportsSafeCancellationReplayAfterConfirmedNotFound: true,
-        },
-        validProvenance,
-      );
-
-      const alteredBytes = Buffer.from('TAMPERED PAC EVIDENCE BYTES');
-      assert.throws(
-        () =>
-          validatePacCapabilityProvenance(connector, 'supportsStamp', {
-            organizationId: 'org-1',
-            operationType: 'STAMP',
-            evidenceBytes: alteredBytes,
-          }),
-        PacProvenanceValidationError,
-      );
-    });
-
-    it('REQ-84: Revoked provenance status fails closed', () => {
-      const revokedProvenance: PacContractProvenance = {
-        ...validProvenance,
-        revocationStatus: 'REVOKED',
-      };
-      const connector = new MockPacConnector(
-        {
-          supportsStamp: true,
-          supportsCancel: true,
-          supportsStampIdempotencyKey: true,
-          supportsCancellationIdempotencyKey: true,
-          supportsAuthoritativeStampLookup: true,
-          supportsAuthoritativeCancellationLookup: true,
-          supportsSafeStampReplayAfterConfirmedNotFound: true,
-          supportsSafeCancellationReplayAfterConfirmedNotFound: true,
-        },
-        revokedProvenance,
-      );
-
-      assert.throws(
-        () =>
-          validatePacCapabilityProvenance(connector, 'supportsStamp', {
-            organizationId: 'org-1',
-            operationType: 'STAMP',
-          }),
-        PacProvenanceRevokedError,
-      );
-    });
-
-    it('REQ-85: Expired provenance validity bounds fails closed', () => {
-      const expiredProvenance: PacContractProvenance = {
-        ...validProvenance,
-        effectiveUntil: '2026-01-01T00:00:00Z',
-      };
-      const connector = new MockPacConnector(
-        {
-          supportsStamp: true,
-          supportsCancel: true,
-          supportsStampIdempotencyKey: true,
-          supportsCancellationIdempotencyKey: true,
-          supportsAuthoritativeStampLookup: true,
-          supportsAuthoritativeCancellationLookup: true,
-          supportsSafeStampReplayAfterConfirmedNotFound: true,
-          supportsSafeCancellationReplayAfterConfirmedNotFound: true,
-        },
-        expiredProvenance,
-      );
-
-      assert.throws(
-        () =>
-          validatePacCapabilityProvenance(
-            connector,
-            'supportsStamp',
-            {
-              organizationId: 'org-1',
-              operationType: 'STAMP',
-            },
-            '2026-09-29T00:00:00Z',
-          ),
-        PacProvenanceExpiredError,
-      );
-    });
-
-    it('REQ-86: Scope mismatch (operation, capability, or tenant) fails closed', () => {
-      const stampOnlyProvenance: PacContractProvenance = {
-        ...validProvenance,
-        approvedScope: {
-          organizationId: 'org-only-a',
-          operationType: 'STAMP',
-          capability: 'supportsStamp',
-        },
-      };
-      const connector = new MockPacConnector(
-        {
-          supportsStamp: true,
-          supportsCancel: true,
-          supportsStampIdempotencyKey: true,
-          supportsCancellationIdempotencyKey: true,
-          supportsAuthoritativeStampLookup: true,
-          supportsAuthoritativeCancellationLookup: true,
-          supportsSafeStampReplayAfterConfirmedNotFound: true,
-          supportsSafeCancellationReplayAfterConfirmedNotFound: true,
-        },
-        stampOnlyProvenance,
-      );
-
-      // Operation mismatch: scope is STAMP, requested is CANCEL
-      assert.throws(
-        () =>
-          validatePacCapabilityProvenance(connector, 'supportsCancel', {
-            organizationId: 'org-only-a',
-            operationType: 'CANCEL',
-          }),
-        PacProvenanceScopeMismatchError,
-      );
-
-      // Tenant mismatch: scope is org-only-a, requested is org-only-b
-      assert.throws(
-        () =>
-          validatePacCapabilityProvenance(connector, 'supportsStamp', {
-            organizationId: 'org-only-b',
-            operationType: 'STAMP',
-          }),
-        PacProvenanceScopeMismatchError,
-      );
-    });
-
-    it('REQ-87: Stale positive status cache exceeding maxStatusAgeMs fails closed', () => {
-      const connector = new MockPacConnector(
-        {
-          supportsStamp: true,
-          supportsCancel: true,
-          supportsStampIdempotencyKey: true,
-          supportsCancellationIdempotencyKey: true,
-          supportsAuthoritativeStampLookup: true,
-          supportsAuthoritativeCancellationLookup: true,
-          supportsSafeStampReplayAfterConfirmedNotFound: true,
-          supportsSafeCancellationReplayAfterConfirmedNotFound: true,
-        },
-        validProvenance,
-      );
-
-      // 1 day max age, but snapshot was issued 2026-09-01 and current time is 2026-09-29
-      assert.throws(
-        () =>
-          validatePacCapabilityProvenance(
-            connector,
-            'supportsStamp',
-            {
-              organizationId: 'org-1',
-              operationType: 'STAMP',
-              maxStatusAgeMs: 24 * 60 * 60 * 1000, // 24h
-            },
-            '2026-09-29T12:00:00Z',
-          ),
-        PacProvenanceExpiredError,
-      );
-    });
-  });
-
   describe('10. Structural XML Timbre Fiscal Digital Validation (SEC-WP021-R4-HIGH-04)', () => {
     const validXml = `<?xml version="1.0" encoding="UTF-8"?>
 <cfdi:Comprobante xmlns:cfdi="http://www.sat.gob.mx/cfd/4" xmlns:tfd="http://www.sat.gob.mx/TimbreFiscalDigital" Version="4.0" Serie="FAC" Folio="101" Fecha="2026-09-29T10:00:00" SubTotal="100.00" Total="116.00" Moneda="MXN" TipoDeComprobante="I" MetodoPago="PUE" LugarExpedicion="06000" Sello="EMISOR_SELLO_123">
@@ -951,7 +621,7 @@ describe('TRIDENTPOS WP-021 Billing & Fiscal Invoicing Unit Suite', () => {
     <cfdi:Concepto ClaveProdServ="90101501" Cantidad="1.00" ClaveUnidad="E48" Descripcion="Consumo" ValorUnitario="100.00" Importe="100.00" ObjetoImp="02"/>
   </cfdi:Conceptos>
   <cfdi:Complemento>
-    <tfd:TimbreFiscalDigital Version="1.1" UUID="a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d" FechaTimbrado="2026-09-29T10:00:05" RfcProvCertif="SAT970701NN3" SelloCFD="SELLO_CFD_VAL" NoCertificadoSAT="30001000000500003416" SelloSAT="SELLO_SAT_OFFICIAL_123"/>
+    <tfd:TimbreFiscalDigital Version="1.1" UUID="a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d" FechaTimbrado="2026-09-29T10:00:05" RfcProvCertif="SAT970701NN3" SelloCFD="SELLO_CFD_VAL" NoCertificadoSAT="30001000000500003416" SelloSAT="QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFB"/>
   </cfdi:Complemento>
 </cfdi:Comprobante>`;
 
@@ -962,7 +632,7 @@ describe('TRIDENTPOS WP-021 Billing & Fiscal Invoicing Unit Suite', () => {
       assert.equal(data.uuid, 'a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d');
       assert.equal(data.fechaTimbrado, '2026-09-29T10:00:05');
       assert.equal(data.rfcProvCertif, 'SAT970701NN3');
-      assert.equal(data.selloSat, 'SELLO_SAT_OFFICIAL_123');
+      assert.equal(data.selloSat, 'QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFB');
       assert.equal(data.noCertificadoSat, '30001000000500003416');
     });
 
@@ -1009,3 +679,5 @@ describe('TRIDENTPOS WP-021 Billing & Fiscal Invoicing Unit Suite', () => {
     });
   });
 });
+
+import './security-remediation.test.js';

@@ -232,23 +232,38 @@ CREATE POLICY tenant_isolation_policy ON consumer_inbox_events
     WITH CHECK (organization_id = current_app_org_id());
 
 -- Down
+SET LOCAL row_security = off;
+LOCK TABLE consumer_inbox_events IN ACCESS EXCLUSIVE MODE;
+LOCK TABLE fiscal_stamping_operations IN ACCESS EXCLUSIVE MODE;
+LOCK TABLE lotes_facturacion_global IN ACCESS EXCLUSIVE MODE;
+LOCK TABLE fiscal_invoice_items IN ACCESS EXCLUSIVE MODE;
+LOCK TABLE fiscal_invoices IN ACCESS EXCLUSIVE MODE;
+LOCK TABLE emisor_fiscal_config IN ACCESS EXCLUSIVE MODE;
+LOCK TABLE tax_schemes IN ACCESS EXCLUSIVE MODE;
 DO $$
-DECLARE
-    v_invoices_count BIGINT := 0;
-    v_ops_count BIGINT := 0;
 BEGIN
-    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'fiscal_invoices') THEN
-        SELECT COUNT(*) INTO v_invoices_count FROM fiscal_invoices;
+    IF EXISTS (SELECT 1 FROM consumer_inbox_events) THEN
+        RAISE EXCEPTION 'FAIL_CLOSED: populated consumer_inbox_events; fiscal/recovery truth must not be destroyed';
     END IF;
-    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'fiscal_stamping_operations') THEN
-        SELECT COUNT(*) INTO v_ops_count FROM fiscal_stamping_operations;
+    IF EXISTS (SELECT 1 FROM fiscal_stamping_operations) THEN
+        RAISE EXCEPTION 'FAIL_CLOSED: populated fiscal_stamping_operations; fiscal/recovery truth must not be destroyed';
     END IF;
-
-    IF v_invoices_count > 0 OR v_ops_count > 0 THEN
-        RAISE EXCEPTION 'FAIL_CLOSED: Destructive down migration prohibited when populated fiscal records exist (% invoices, % operations). Rollback aborted to protect fiscal truth.', v_invoices_count, v_ops_count;
+    IF EXISTS (SELECT 1 FROM lotes_facturacion_global) THEN
+        RAISE EXCEPTION 'FAIL_CLOSED: populated lotes_facturacion_global; fiscal/recovery truth must not be destroyed';
+    END IF;
+    IF EXISTS (SELECT 1 FROM fiscal_invoice_items) THEN
+        RAISE EXCEPTION 'FAIL_CLOSED: populated fiscal_invoice_items; fiscal/recovery truth must not be destroyed';
+    END IF;
+    IF EXISTS (SELECT 1 FROM fiscal_invoices) THEN
+        RAISE EXCEPTION 'FAIL_CLOSED: populated fiscal_invoices; fiscal/recovery truth must not be destroyed';
+    END IF;
+    IF EXISTS (SELECT 1 FROM emisor_fiscal_config) THEN
+        RAISE EXCEPTION 'FAIL_CLOSED: populated emisor_fiscal_config; fiscal/recovery truth must not be destroyed';
+    END IF;
+    IF EXISTS (SELECT 1 FROM tax_schemes) THEN
+        RAISE EXCEPTION 'FAIL_CLOSED: populated tax_schemes; fiscal/recovery truth must not be destroyed';
     END IF;
 END $$;
-
 DROP TABLE IF EXISTS consumer_inbox_events;
 DROP TABLE IF EXISTS fiscal_stamping_operations;
 DROP TABLE IF EXISTS lotes_facturacion_global;
@@ -256,5 +271,3 @@ DROP TABLE IF EXISTS fiscal_invoice_items;
 DROP TABLE IF EXISTS fiscal_invoices;
 DROP TABLE IF EXISTS emisor_fiscal_config;
 DROP TABLE IF EXISTS tax_schemes;
-
-
