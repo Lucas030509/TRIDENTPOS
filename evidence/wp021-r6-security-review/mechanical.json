@@ -1,0 +1,38 @@
+{
+  "logs_match": true,
+  "log_hashes": {
+    "wp021-r6-billing.log": "5f3b155c7d9100299484a6012da4740424e022dde937f539e586f13fab6b3f0d",
+    "wp021-r6-build.log": "357819db82d673afb6006e3b90e37979611a130245941e66072caee64203e66c",
+    "wp021-r6-cloud-server-native.log": "ce840985691ed542f0935b3e4e674dfc4ee472456992405ae9a717bc5eb31128",
+    "wp021-r6-database-native.log": "00a0db50b68116235e163179a14c62985ca0d1c360cbb85a33033ae316e8587f",
+    "wp021-r6-format-check.log": "89a0d19f8fd5c46b54c8dfdaf758622b97c0289f7813bd4280ceafca4d91c826",
+    "wp021-r6-format.log": "45d4ea46ee5c134a771daf91d052fa8fe36be49d63e7824144cd48b3253c8f2c",
+    "wp021-r6-graph.log": "391b9633e7f1cd72218434506c1a12d9790b0ebeb6312f7f6338a3f46fd2cdbe",
+    "wp021-r6-lint.log": "44feb5ae4a09273a6b086871d5910ada7d923961fd9d0ffd2b7abf5505d386f6",
+    "wp021-r6-sql-targeted.log": "db7aa07f7642741989e0b4e90bcd1fcbb14b5a2317b86fa33dba035f7b2bdb51",
+    "wp021-r6-typecheck.log": "e47554b93f54d6efa6fa22263b39d57a9c70bb48a35ff2ad5f8eda402c443d0e"
+  },
+  "bundle_hash": "875cb7d3fbbd7c12b64bef2953ba4ab11ec38b5355ca1248b282dc136d3cd98f",
+  "ancestor_36ba35baea8aa88143dbd5b3993589c9adf9abd6": 0,
+  "ancestor_fa4545c5dd6491bac473d959635b27015b804911": 0,
+  "ancestor_885855f4b4c51833135a9d384c673ed4bc0e406b": 0,
+  "fsck_exit": 0,
+  "commits": "1",
+  "changed_files": [
+    "evidence/WP-021_R6_SECURITY_REMEDIATION_BUILDER_EVIDENCE.md",
+    "packages/billing/src/csd-signer.ts",
+    "packages/billing/src/error-sanitizer.ts",
+    "packages/billing/src/index.test.ts",
+    "packages/billing/src/pac-connector.ts",
+    "packages/billing/src/security-remediation.test.ts",
+    "packages/billing/src/types.ts",
+    "packages/billing/src/xml-validator.ts",
+    "packages/cloud-server/src/billing-test-fixtures.ts",
+    "packages/cloud-server/src/billing.test.ts",
+    "packages/cloud-server/src/index.ts",
+    "packages/database/migrations/20260905030000_billing_fiscal_invoicing.sql",
+    "packages/database/migrations/20261001000000_wp021_security_event_integrity.sql",
+    "packages/database/src/billing.test.ts",
+    "tests/integration/wp021-security-remediation.test.mjs"
+  ]
+}

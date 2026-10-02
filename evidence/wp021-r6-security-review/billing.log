@@ -1,0 +1,82 @@
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm.
+
+> @trident/billing@0.1.0 test
+> node --test dist/index.test.js
+
+▶ Canonical REQ-75..87 — bounded remediation simulation
+  ✔ REQ-75 canonical syntax rejects whitespace/overflow and identity excludes version (2.058492ms)
+  ✔ REQ-76 optional additive fields increment minor and same-major consumer ignores extras (0.317478ms)
+  ✔ REQ-77 changed meaning or new required field requires new major (0.255855ms)
+  ✔ REQ-78 invalid/missing version, unknown major and required payload reject before consumption (0.383147ms)
+  ✔ REQ-79 required subscriber incompatible or unknown declaration blocks publication (0.19912ms)
+  ✔ REQ-81 actual authenticated signatures bind exact approval fields (4.298568ms)
+  ✔ REQ-82 unknown authority, signature, evidence, media and length changes fail closed (10.143256ms)
+  ✔ REQ-83 missing or unverifiable registry/provenance is unavailable (1.75172ms)
+  ✔ REQ-84 positive result cannot cache past revocation, supersession or expiry (8.630125ms)
+  ✔ REQ-85 provider/contract/operation/capability/recovery/tenant mismatch unavailable (6.723422ms)
+  ✔ REQ-86 unavailable/stale/future status, bad status signature and monotonic rollback unavailable (13.749309ms)
+  ✔ REQ-87 matrix proves separate operation and recovery scope for every capability (12.064281ms)
+✔ Canonical REQ-75..87 — bounded remediation simulation (61.983526ms)
+▶ XML and error abuse regression
+  ✔ Rejects forged namespaces, arbitrary TFD placement, duplicate attributes and provider mismatch (1.875286ms)
+  ✔ Opaque sanitizer excludes JSON/JWT/encoded/multiline secrets including supplied correlation (0.692223ms)
+✔ XML and error abuse regression (2.728572ms)
+▶ TRIDENTPOS WP-021 Billing & Fiscal Invoicing Unit Suite
+  ▶ 1. Exact Scale-4 Monetary Arithmetic
+    ✔ WP021-NUM-01: scale-4 additions and subtractions (0.501786ms)
+    ✔ WP021-NUM-02: scale-4 multiplication and division with Half Away From Zero rounding (0.393623ms)
+    ✔ WP021-NUM-03: scale-4 string validation (0.129275ms)
+  ✔ 1. Exact Scale-4 Monetary Arithmetic (1.162472ms)
+  ▶ 2. RFC and Fiscal Field Validators
+    ✔ WP021-RFC-01: Persona Moral RFC validation (0.239971ms)
+    ✔ WP021-RFC-02: Persona Física RFC validation (0.158729ms)
+    ✔ WP021-RFC-03: Generic SAT RFCs validation (0.091378ms)
+    ✔ WP021-RFC-04: Invalid RFC fails closed (0.161634ms)
+    ✔ WP021-RFC-05: Postal code & regimen fiscal validation (0.195655ms)
+  ✔ 2. RFC and Fiscal Field Validators (1.08131ms)
+  ▶ 3. Multi-Tier Tax Calculations
+    ✔ WP021-TAX-01: single inclusive 16% tax computes exact subtotal and tax (0.295836ms)
+    ✔ WP021-TAX-02: single exclusive 16% tax computes exact subtotal and total (0.117247ms)
+    ✔ WP021-TAX-03: multi-tier exclusive taxes (IVA 16% + IEPS 8%) (0.121593ms)
+    ✔ WP021-TAX-04: zero tax scheme returns subtotal equals total (0.076174ms)
+  ✔ 3. Multi-Tier Tax Calculations (0.777131ms)
+  ▶ 4. CFDI 4.0 XML Generation & RSA-SHA256 CSD Signatures
+    ✔ WP021-CFDI-01: builds Cadena Original 4.0 pipe format correctly (0.328845ms)
+    ✔ WP021-CFDI-02: signs Cadena Original with RSA-SHA256 and verifies signature (1.550737ms)
+    ✔ WP021-CFDI-03: generates schema-valid CFDI 4.0 XML with Sello (1.150433ms)
+  ✔ 4. CFDI 4.0 XML Generation & RSA-SHA256 CSD Signatures (3.14505ms)
+  ▶ 5. PAC Connector & Circuit Breaker
+    ✔ WP021-PAC-01: successful mock timbrado generates stamped XML and UUID (0.396187ms)
+    ✔ WP021-PAC-02: idempotent retry with same reference returns identical UUID (0.286622ms)
+    ✔ WP021-PAC-03: invalid RFC rejection simulation returns REJECTED status (0.110857ms)
+    ✔ WP021-PAC-04: simulated PAC timeout throws PacTimeoutError (1.251175ms)
+    ✔ WP021-PAC-05: circuit breaker trips to OPEN after threshold failures (150.805041ms)
+  ✔ 5. PAC Connector & Circuit Breaker (153.283787ms)
+  ▶ 6. Invoicing Lifecycle Transitions & OQ-ARCH-02 Batch Grouping
+    ✔ WP021-LIFE-01: validates DRAFT invoice for stamping (0.450068ms)
+    ✔ WP021-LIFE-02: applies stamp to transition DRAFT -> STAMPED (0.26557ms)
+    ✔ WP021-LIFE-03: applies cancellation to transition STAMPED -> CANCELLED (0.19244ms)
+    ✔ WP021-LIFE-04: OQ-ARCH-02 groups unclaimed folios into batch candidate (0.232901ms)
+  ✔ 6. Invoicing Lifecycle Transitions & OQ-ARCH-02 Batch Grouping (1.297385ms)
+  ▶ 7. CSD Vault and Runtime Connectors (SEC-VAL-05 & QI-BLK-021-R1-01/02)
+    ✔ WP021-VAULT-01: UnavailableCsdVault fails closed (0.21887ms)
+    ✔ WP021-VAULT-02: InMemoryCsdVault stores and retrieves private key pem (0.169736ms)
+    ✔ WP021-PAC-06: UnavailablePacConnector fails closed on stamping and cancellation (0.178409ms)
+  ✔ 7. CSD Vault and Runtime Connectors (SEC-VAL-05 & QI-BLK-021-R1-01/02) (0.672564ms)
+  ▶ 10. Structural XML Timbre Fiscal Digital Validation (SEC-WP021-R4-HIGH-04)
+    ✔ Structural XML validator parses and extracts valid TimbreFiscalDigital (0.388646ms)
+    ✔ Missing TimbreFiscalDigital in pre-stamp raw XML fails closed (0.213362ms)
+    ✔ Malformed XML tags or unclosed attributes fail closed (0.116897ms)
+  ✔ 10. Structural XML Timbre Fiscal Digital Validation (SEC-WP021-R4-HIGH-04) (0.827677ms)
+  ▶ 11. Error Sanitization (SEC-WP021-R4-MED-01)
+    ✔ Strips PEM private keys, database strings, passwords, and PAC credentials from external error (0.209886ms)
+  ✔ 11. Error Sanitization (SEC-WP021-R4-MED-01) (0.327243ms)
+✔ TRIDENTPOS WP-021 Billing & Fiscal Invoicing Unit Suite (195.793026ms)
+ℹ tests 45
+ℹ suites 12
+ℹ pass 45
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 410.912867

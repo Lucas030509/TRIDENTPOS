@@ -1,0 +1,24 @@
+✔ REQ-80 persisted version/payload survive retry and outbox recreation; immutable trigger rejects rewrite (1570.504775ms)
+✔ REQ-78 consumer rejects missing version/required payload/identity before SQL mutation (2.537774ms)
+✔ REQ-88 SQL effect and inbox commit together; simulated paired rollback then replay restores effect once (12.880315ms)
+✔ REQ-89 inconsistent or absent restore-domain reconciliation cannot insert processed-only inbox (2.657615ms)
+✔ REQ-89 retained inbox with missing SQL effect blocks even when caller claims paired restore (7.596443ms)
+✔ REQ-90 unknown/insufficient retention, unavailable source and cross-tenant payload block recovery (0.862159ms)
+✔ REQ-91 consumer-only restore after prior acknowledgment requests independent redelivery and restores SQL effect (5.304073ms)
+✔ REQ-92 external effects without an approved durable-idempotent sink remain BLOCKED BY CONTRACT (1.789626ms)
+✔ SQL handler failure rolls back effect and inbox; conflicting replay cannot silently deduplicate (7.707997ms)
+✔ HIGH-05 public PEM/password/username ingress rejects before persistence; vault refs return no PEM (4.288422ms)
+✔ HIGH-03 DOWN refuses each independently populated fiscal/recovery table independently (65.443402ms)
+✔ Tenant RLS isolates inbox and rejects cross-tenant writes under a non-bypass role (7.769894ms)
+✔ DOWN fails closed when the migration role cannot see populated rows through RLS (8.08221ms)
+✔ HIGH-04 valid correlated STAMP and CANCEL produce persisted fiscal envelopes and no private key (198.718875ms)
+✔ HIGH-04 wrong tenant/operation correlation rejects before terminal fiscal mutation (162.615914ms)
+✔ MED-01 provider JSON/multiline error cannot leak through persisted or external error paths (235.356387ms)
+ℹ tests 16
+ℹ suites 0
+ℹ pass 16
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2506.871199

@@ -1,0 +1,26 @@
+▶ Canonical REQ-75..87 — bounded remediation simulation
+  ✔ REQ-75 canonical syntax rejects whitespace/overflow and identity excludes version (1.836187ms)
+  ✔ REQ-76 optional additive fields increment minor and same-major consumer ignores extras (0.332231ms)
+  ✔ REQ-77 changed meaning or new required field requires new major (0.236837ms)
+  ✔ REQ-78 invalid/missing version, unknown major and required payload reject before consumption (0.169396ms)
+  ✔ REQ-79 required subscriber incompatible or unknown declaration blocks publication (0.25237ms)
+  ✔ REQ-81 actual authenticated signatures bind exact approval fields (5.144152ms)
+  ✔ REQ-82 unknown authority, signature, evidence, media and length changes fail closed (10.674797ms)
+  ✔ REQ-83 missing or unverifiable registry/provenance is unavailable (1.920014ms)
+  ✔ REQ-84 positive result cannot cache past revocation, supersession or expiry (9.120305ms)
+  ✔ REQ-85 provider/contract/operation/capability/recovery/tenant mismatch unavailable (6.868561ms)
+  ✔ REQ-86 unavailable/stale/future status, bad status signature and monotonic rollback unavailable (16.001104ms)
+  ✔ REQ-87 matrix proves separate operation and recovery scope for every capability (14.295564ms)
+✔ Canonical REQ-75..87 — bounded remediation simulation (68.394853ms)
+▶ XML and error abuse regression
+  ✔ Rejects forged namespaces, arbitrary TFD placement, duplicate attributes and provider mismatch (2.101147ms)
+  ✔ Opaque sanitizer excludes JSON/JWT/encoded/multiline secrets including supplied correlation (0.680356ms)
+✔ XML and error abuse regression (3.143758ms)
+ℹ tests 14
+ℹ suites 2
+ℹ pass 14
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 293.469442

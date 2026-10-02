@@ -1,0 +1,83 @@
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm.
+
+> tridentpos@0.1.0 build
+> turbo run build
+
+
+Attention:
+Turborepo now collects completely anonymous telemetry regarding usage.
+This information is used to shape the Turborepo roadmap and prioritize features.
+You can learn more, including how to opt-out if you'd not like to participate in this anonymous program, by visiting the following URL:
+https://turborepo.dev/docs/telemetry
+
+• turbo 2.10.12
+
+   • Packages in scope: @trident/billing, @trident/cloud-server, @trident/core, @trident/database, @trident/edge, @trident/finance, @trident/inventory, @trident/pos, @trident/pos-edge-runtime, @trident/procurement, @trident/sync, @trident/ui
+   • Running build in 12 packages
+   • Remote caching disabled
+
+@trident/core:build: cache miss, executing c1cc5ba852ba9092
+@trident/core:build: 
+@trident/core:build: > @trident/core@0.1.0 build
+@trident/core:build: > tsc -b
+@trident/core:build: 
+@trident/ui:build: cache miss, executing dc340267d6402770
+@trident/database:build: cache miss, executing be468668ff4233e5
+@trident/billing:build: cache miss, executing f9ebbb95a0575fee
+@trident/pos:build: cache miss, executing e436822cd68a4e48
+@trident/finance:build: cache miss, executing 58f1205cc0aa5f1e
+@trident/procurement:build: cache miss, executing ab594018bf82fda2
+@trident/edge:build: cache miss, executing 2bc8960280b5e075
+@trident/inventory:build: cache miss, executing 0c0d6eb37a06f38e
+@trident/ui:build: 
+@trident/ui:build: > @trident/ui@0.1.0 build
+@trident/ui:build: > tsc -b
+@trident/ui:build: 
+@trident/finance:build: 
+@trident/finance:build: > @trident/finance@0.1.0 build
+@trident/finance:build: > tsc -b
+@trident/finance:build: 
+@trident/inventory:build: 
+@trident/inventory:build: > @trident/inventory@0.1.0 build
+@trident/inventory:build: > tsc -b
+@trident/inventory:build: 
+@trident/pos:build: 
+@trident/pos:build: > @trident/pos@0.1.0 build
+@trident/pos:build: > tsc -b
+@trident/pos:build: 
+@trident/billing:build: 
+@trident/billing:build: > @trident/billing@0.1.0 build
+@trident/billing:build: > tsc -b
+@trident/billing:build: 
+@trident/edge:build: 
+@trident/edge:build: > @trident/edge@0.1.0 build
+@trident/edge:build: > tsc -b && node -e "import('node:fs').then(fs => { fs.copyFileSync('src/index.html', 'dist/index.html'); fs.copyFileSync('src/preload.cjs', 'dist/preload.cjs'); })"
+@trident/edge:build: 
+@trident/database:build: 
+@trident/database:build: > @trident/database@0.1.0 build
+@trident/database:build: > tsc -b
+@trident/database:build: 
+@trident/procurement:build: 
+@trident/procurement:build: > @trident/procurement@0.1.0 build
+@trident/procurement:build: > tsc -b
+@trident/procurement:build: 
+@trident/cloud-server:build: cache miss, executing 026f77362cc2545e
+@trident/cloud-server:build: 
+@trident/cloud-server:build: > @trident/cloud-server@0.1.0 build
+@trident/cloud-server:build: > tsc -b
+@trident/cloud-server:build: 
+@trident/pos-edge-runtime:build: cache miss, executing 14aa3cc6ab817c00
+@trident/sync:build: cache miss, executing a8765d76bbcd0893
+@trident/pos-edge-runtime:build: 
+@trident/pos-edge-runtime:build: > @trident/pos-edge-runtime@0.1.0 build
+@trident/pos-edge-runtime:build: > tsc -b
+@trident/pos-edge-runtime:build: 
+@trident/sync:build: 
+@trident/sync:build: > @trident/sync@0.1.0 build
+@trident/sync:build: > tsc -b
+@trident/sync:build: 
+
+ Tasks:    12 successful, 12 total
+Cached:    0 cached, 12 total
+  Time:    10.444s 
+

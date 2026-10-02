@@ -1,0 +1,437 @@
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm.
+
+> @trident/database@0.1.0 test
+> node --test --test-concurrency=1 dist/index.test.js dist/outbox.test.js dist/sync.test.js dist/inventory.test.js dist/procurement.test.js dist/finance.test.js dist/billing.test.js
+
+✖ TRIDENTPOS WP-021 Billing & Fiscal Invoicing Database Suite (0.404276ms)
+✖ TRIDENTPOS WP-020 Finance & Cash Reconciliation Database Suite (0.445451ms)
+✖ TRIDENTPOS WP-003 PostgreSQL Migration Engine Integration Suite (0.513764ms)
+✖ TRIDENTPOS WP-004 Organization & Branch Multi-Tenant RLS Foundation Suite (0.094202ms)
+✖ TRIDENTPOS WP-005 Cloud IAM & Administrative Authentication Suite (0.044587ms)
+✖ TRIDENTPOS WP-006 Tamper-Evident Security Logging & Cloud Audit Trail Suite (0.080351ms)
+✖ TRIDENTPOS WP-011 Cloud Folio Lease Allocation & Fencing Protocol Suite (0.073872ms)
+✖ TRIDENTPOS WP-016B Platform Core Master Catalog Foundation (Categories & Products) Suite (0.040471ms)
+✖ TRIDENTPOS WP-017 Inventory & Recipes Database Suite (0.578002ms)
+✖ TRIDENTPOS WP-018 Real-Time Kárdex, Waste & KDS Depletion Database Suite (0.069565ms)
+▶ TRIDENTPOS WP-012 Cloud Transactional Outbox & Ingested Idempotency Engine Suite
+  ✖ WP012-T05: clientOpId is preserved across retry representation
+  ✖ WP012-T06: Idempotency identity is deterministic for identical logical operation
+  ✖ WP012-T07: Different clientOpId produces a different logical operation
+  ✖ WP012-T08: Different aggregate/action cannot collide logically
+  ✖ WP012-T09: Exact duplicate request returns persisted original result
+  ✖ WP012-T10: Exact duplicate executes zero second mutation
+  ✖ WP012-T11: Duplicate result survives process/service re-instantiation
+  ✖ WP012-T12: Concurrent duplicate requests using independent PostgreSQL connections produce exactly one mutation
+  ✖ WP012-T13: Cross-tenant idempotency access is denied
+  ✖ WP012-T14: Cross-branch operation cannot reuse another branch authority
+  ✖ WP012-T15: First greenfield aggregate sequence 1 applies
+  ✖ WP012-T16: Expected next sequence applies and advances causal sequence
+  ✖ WP012-T17: incomingSequence < expectedSequence causes zero new mutation
+  ✖ WP012-T18: incomingSequence > expectedSequence is durably buffered
+  ✖ WP012-T19: Gap event is not applied to domain handler
+  ✖ WP012-T20: Missing sequence interval is correctly identified
+  ✖ WP012-T21 & WP012-T22: Arrival of missing sequence closes gap and drains contiguous sequence in order
+  ✖ WP012-T23: Timestamps cannot alter causal ordering
+  ✖ WP012-T24: ReorderingBuffer survives process restart
+  ✖ WP012-T30: CloudIntegrationOutbox event persists atomically with Cloud fixture transaction
+  ✖ WP012-T31: Cloud transaction rollback removes both fixture mutation and integration event
+  ✖ WP012-T32: Dispatcher successfully dispatches one pending event and records durable completion
+  ✖ WP012-T33 & WP012-T34: Retryable failure increments retry state and applies exponential backoff
+  ✖ WP012-T35: Failure after retry #5 routes event to CloudIntegrationDLQ
+  ✖ WP012-T36: Non-retryable validation failure routes directly to DLQ
+  ✖ WP012-T37: Poison event moved to DLQ does not permanently block processing of subsequent queue items
+  ✖ WP012-T38: DLQ preserves raw payload + error + trace/context + attempt information
+  ✖ WP012-T39: Multiple dispatcher workers cannot process the same claimed event concurrently
+  ✖ WP012-T42: RLS denies direct cross-tenant access to WP-012 Cloud persistence
+  ✖ WP012-T43: Composite branch integrity rejects organization/branch mismatch
+  ✖ WP012-R1-T48: Distinct logical tuple can never receive another tuple's cached response even under forced identity/hash collision simulation
+  ✖ WP012-R1-T49: cloud_integration_outbox rejects organization A + branch B mismatch
+  ✖ WP012-R1-T53: Initial failure does not consume retry #1
+  ✖ WP012-R1-T54: Initial failure + retries #1..#4 remain outside DLQ
+  ✖ WP012-R1-T55: Failure of retry #5 moves event to DLQ
+  ✖ WP012-R1-T56: Non-canonical maxRetries override cannot alter governed limit of 5
+  ✖ WP012-R1-T57: Concurrent workers claim disjoint events using independent PostgreSQL connections
+  ✖ WP012-R1-T58: Stale Worker A cannot complete an event after Worker B has legitimately reclaimed it
+  ✖ WP012-R1-T59: Stale Worker A cannot record failure/DLQ transition after Worker B owns the current claim
+  ✖ WP012-R1-T61: Production Cloud migration contains no wp012_test_* table
+  ✖ WP012-R2-T65: IngestedIdempotencyEngine fails closed immediately if CloudReceiptIssuer is omitted or invalid
+  ✖ WP012-R2-T70: Replay of duplicate event returns byte/field-equivalent original CloudTransactionReceipt from persistence
+  ✖ WP012-R2-T71: Duplicate replay does not call injected CloudReceiptIssuer a second time
+  ✖ WP012-R2-T72: Duplicate receipt retrieved after engine restart matches original persisted receipt and passes verification
+✖ TRIDENTPOS WP-012 Cloud Transactional Outbox & Ingested Idempotency Engine Suite (1.348893ms)
+✖ TRIDENTPOS WP-019 Procurement & Supplier Receiving Database Suite (0.403378ms)
+✖ TRIDENTPOS WP-013 Cloud Sync Repositories & RLS Suite (0.772534ms)
+ℹ tests 44
+ℹ suites 13
+ℹ pass 0
+ℹ fail 0
+ℹ cancelled 44
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 741.531146
+
+✖ failing tests:
+
+test at dist/billing.test.js:17:1
+✖ TRIDENTPOS WP-021 Billing & Fiscal Invoicing Database Suite (0.404276ms)
+  Error: DATABASE_URL is required. Refusing to select an implicit database target for migrations.
+      at resolveDatabaseUrl (file:///workspace/scratch/aebb2511f878/review/subject/packages/database/dist/connection.js:28:15)
+      at getPool (file:///workspace/scratch/aebb2511f878/review/subject/packages/database/dist/connection.js:40:37)
+      at SuiteContext.<anonymous> (file:///workspace/scratch/aebb2511f878/review/subject/packages/database/dist/billing.test.js:18:18)
+      at Suite.runInAsyncScope (node:async_hooks:227:14)
+      at Suite.createBuild (node:internal/test_runner/test:1809:13)
+      at new Suite (node:internal/test_runner/test:1773:28)
+      at Test.createSubtest (node:internal/test_runner/test:1038:18)
+      at run (node:internal/test_runner/harness:393:28)
+      at test (node:internal/test_runner/harness:407:12)
+      at file:///workspace/scratch/aebb2511f878/review/subject/packages/database/dist/billing.test.js:17:1
+
+test at dist/finance.test.js:17:1
+✖ TRIDENTPOS WP-020 Finance & Cash Reconciliation Database Suite (0.445451ms)
+  Error: DATABASE_URL is required. Refusing to select an implicit database target for migrations.
+      at resolveDatabaseUrl (file:///workspace/scratch/aebb2511f878/review/subject/packages/database/dist/connection.js:28:15)
+      at getPool (file:///workspace/scratch/aebb2511f878/review/subject/packages/database/dist/connection.js:40:37)
+      at SuiteContext.<anonymous> (file:///workspace/scratch/aebb2511f878/review/subject/packages/database/dist/finance.test.js:18:18)
+      at Suite.runInAsyncScope (node:async_hooks:227:14)
+      at Suite.createBuild (node:internal/test_runner/test:1809:13)
+      at new Suite (node:internal/test_runner/test:1773:28)
+      at Test.createSubtest (node:internal/test_runner/test:1038:18)
+      at run (node:internal/test_runner/harness:393:28)
+      at test (node:internal/test_runner/harness:407:12)
+      at file:///workspace/scratch/aebb2511f878/review/subject/packages/database/dist/finance.test.js:17:1
+
+test at dist/index.test.js:24:1
+✖ TRIDENTPOS WP-003 PostgreSQL Migration Engine Integration Suite (0.513764ms)
+  Error: DATABASE_URL is required. Refusing to select an implicit database target for migrations.
+      at resolveDatabaseUrl (file:///workspace/scratch/aebb2511f878/review/subject/packages/database/dist/connection.js:28:15)
+      at getPool (file:///workspace/scratch/aebb2511f878/review/subject/packages/database/dist/connection.js:40:37)
+      at SuiteContext.<anonymous> (file:///workspace/scratch/aebb2511f878/review/subject/packages/database/dist/index.test.js:25:18)
+      at Suite.runInAsyncScope (node:async_hooks:227:14)
+      at Suite.createBuild (node:internal/test_runner/test:1809:13)
+      at new Suite (node:internal/test_runner/test:1773:28)
+      at Test.createSubtest (node:internal/test_runner/test:1038:18)
+      at run (node:internal/test_runner/harness:393:28)
+      at test (node:internal/test_runner/harness:407:12)
+      at file:///workspace/scratch/aebb2511f878/review/subject/packages/database/dist/index.test.js:24:1
+
+test at dist/index.test.js:319:1
+✖ TRIDENTPOS WP-004 Organization & Branch Multi-Tenant RLS Foundation Suite (0.094202ms)
+  Error: DATABASE_URL is required. Refusing to select an implicit database target for migrations.
+      at resolveDatabaseUrl (file:///workspace/scratch/aebb2511f878/review/subject/packages/database/dist/connection.js:28:15)
+      at getPool (file:///workspace/scratch/aebb2511f878/review/subject/packages/database/dist/connection.js:40:37)
+      at SuiteContext.<anonymous> (file:///workspace/scratch/aebb2511f878/review/subject/packages/database/dist/index.test.js:320:18)
+      at Suite.runInAsyncScope (node:async_hooks:227:14)
+      at Suite.createBuild (node:internal/test_runner/test:1809:13)
+      at new Suite (node:internal/test_runner/test:1773:28)
+      at Test.createSubtest (node:internal/test_runner/test:1038:18)
+      at run (node:internal/test_runner/harness:393:28)
+      at test (node:internal/test_runner/harness:407:12)
+      at file:///workspace/scratch/aebb2511f878/review/subject/packages/database/dist/index.test.js:319:1
+
+test at dist/index.test.js:879:1
+✖ TRIDENTPOS WP-005 Cloud IAM & Administrative Authentication Suite (0.044587ms)
+  Error: DATABASE_URL is required. Refusing to select an implicit database target for migrations.
+      at resolveDatabaseUrl (file:///workspace/scratch/aebb2511f878/review/subject/packages/database/dist/connection.js:28:15)
+      at getPool (file:///workspace/scratch/aebb2511f878/review/subject/packages/database/dist/connection.js:40:37)
+      at SuiteContext.<anonymous> (file:///workspace/scratch/aebb2511f878/review/subject/packages/database/dist/index.test.js:880:18)
+      at Suite.runInAsyncScope (node:async_hooks:227:14)
+      at Suite.createBuild (node:internal/test_runner/test:1809:13)
+      at new Suite (node:internal/test_runner/test:1773:28)
+      at Test.createSubtest (node:internal/test_runner/test:1038:18)
+      at run (node:internal/test_runner/harness:393:28)
+      at test (node:internal/test_runner/harness:407:12)
+      at file:///workspace/scratch/aebb2511f878/review/subject/packages/database/dist/index.test.js:879:1
+
+test at dist/index.test.js:1695:1
+✖ TRIDENTPOS WP-006 Tamper-Evident Security Logging & Cloud Audit Trail Suite (0.080351ms)
+  Error: DATABASE_URL is required. Refusing to select an implicit database target for migrations.
+      at resolveDatabaseUrl (file:///workspace/scratch/aebb2511f878/review/subject/packages/database/dist/connection.js:28:15)
+      at getPool (file:///workspace/scratch/aebb2511f878/review/subject/packages/database/dist/connection.js:40:37)
+      at SuiteContext.<anonymous> (file:///workspace/scratch/aebb2511f878/review/subject/packages/database/dist/index.test.js:1696:18)
+      at Suite.runInAsyncScope (node:async_hooks:227:14)
+      at Suite.createBuild (node:internal/test_runner/test:1809:13)
+      at new Suite (node:internal/test_runner/test:1773:28)
+      at Test.createSubtest (node:internal/test_runner/test:1038:18)
+      at run (node:internal/test_runner/harness:393:28)
+      at test (node:internal/test_runner/harness:407:12)
+      at file:///workspace/scratch/aebb2511f878/review/subject/packages/database/dist/index.test.js:1695:1
+
+test at dist/index.test.js:2625:1
+✖ TRIDENTPOS WP-011 Cloud Folio Lease Allocation & Fencing Protocol Suite (0.073872ms)
+  Error: DATABASE_URL is required. Refusing to select an implicit database target for migrations.
+      at resolveDatabaseUrl (file:///workspace/scratch/aebb2511f878/review/subject/packages/database/dist/connection.js:28:15)
+      at getPool (file:///workspace/scratch/aebb2511f878/review/subject/packages/database/dist/connection.js:40:37)
+      at SuiteContext.<anonymous> (file:///workspace/scratch/aebb2511f878/review/subject/packages/database/dist/index.test.js:2626:18)
+      at Suite.runInAsyncScope (node:async_hooks:227:14)
+      at Suite.createBuild (node:internal/test_runner/test:1809:13)
+      at new Suite (node:internal/test_runner/test:1773:28)
+      at Test.createSubtest (node:internal/test_runner/test:1038:18)
+      at run (node:internal/test_runner/harness:393:28)
+      at test (node:internal/test_runner/harness:407:12)
+      at file:///workspace/scratch/aebb2511f878/review/subject/packages/database/dist/index.test.js:2625:1
+
+test at dist/index.test.js:3446:1
+✖ TRIDENTPOS WP-016B Platform Core Master Catalog Foundation (Categories & Products) Suite (0.040471ms)
+  Error: DATABASE_URL is required. Refusing to select an implicit database target for migrations.
+      at resolveDatabaseUrl (file:///workspace/scratch/aebb2511f878/review/subject/packages/database/dist/connection.js:28:15)
+      at getPool (file:///workspace/scratch/aebb2511f878/review/subject/packages/database/dist/connection.js:40:37)
+      at SuiteContext.<anonymous> (file:///workspace/scratch/aebb2511f878/review/subject/packages/database/dist/index.test.js:3447:18)
+      at Suite.runInAsyncScope (node:async_hooks:227:14)
+      at Suite.createBuild (node:internal/test_runner/test:1809:13)
+      at new Suite (node:internal/test_runner/test:1773:28)
+      at Test.createSubtest (node:internal/test_runner/test:1038:18)
+      at run (node:internal/test_runner/harness:393:28)
+      at test (node:internal/test_runner/harness:407:12)
+      at file:///workspace/scratch/aebb2511f878/review/subject/packages/database/dist/index.test.js:3446:1
+
+test at dist/inventory.test.js:17:1
+✖ TRIDENTPOS WP-017 Inventory & Recipes Database Suite (0.578002ms)
+  Error: DATABASE_URL is required. Refusing to select an implicit database target for migrations.
+      at resolveDatabaseUrl (file:///workspace/scratch/aebb2511f878/review/subject/packages/database/dist/connection.js:28:15)
+      at getPool (file:///workspace/scratch/aebb2511f878/review/subject/packages/database/dist/connection.js:40:37)
+      at SuiteContext.<anonymous> (file:///workspace/scratch/aebb2511f878/review/subject/packages/database/dist/inventory.test.js:18:18)
+      at Suite.runInAsyncScope (node:async_hooks:227:14)
+      at Suite.createBuild (node:internal/test_runner/test:1809:13)
+      at new Suite (node:internal/test_runner/test:1773:28)
+      at Test.createSubtest (node:internal/test_runner/test:1038:18)
+      at run (node:internal/test_runner/harness:393:28)
+      at test (node:internal/test_runner/harness:407:12)
+      at file:///workspace/scratch/aebb2511f878/review/subject/packages/database/dist/inventory.test.js:17:1
+
+test at dist/inventory.test.js:610:1
+✖ TRIDENTPOS WP-018 Real-Time Kárdex, Waste & KDS Depletion Database Suite (0.069565ms)
+  Error: DATABASE_URL is required. Refusing to select an implicit database target for migrations.
+      at resolveDatabaseUrl (file:///workspace/scratch/aebb2511f878/review/subject/packages/database/dist/connection.js:28:15)
+      at getPool (file:///workspace/scratch/aebb2511f878/review/subject/packages/database/dist/connection.js:40:37)
+      at SuiteContext.<anonymous> (file:///workspace/scratch/aebb2511f878/review/subject/packages/database/dist/inventory.test.js:611:18)
+      at Suite.runInAsyncScope (node:async_hooks:227:14)
+      at Suite.createBuild (node:internal/test_runner/test:1809:13)
+      at new Suite (node:internal/test_runner/test:1773:28)
+      at Test.createSubtest (node:internal/test_runner/test:1038:18)
+      at run (node:internal/test_runner/harness:393:28)
+      at test (node:internal/test_runner/harness:407:12)
+      at file:///workspace/scratch/aebb2511f878/review/subject/packages/database/dist/inventory.test.js:610:1
+
+test at dist/outbox.test.js:207:5
+✖ WP012-T05: clientOpId is preserved across retry representation
+  'test did not finish before its parent and was cancelled'
+
+test at dist/outbox.test.js:244:5
+✖ WP012-T06: Idempotency identity is deterministic for identical logical operation
+  'test did not finish before its parent and was cancelled'
+
+test at dist/outbox.test.js:263:5
+✖ WP012-T07: Different clientOpId produces a different logical operation
+  'test did not finish before its parent and was cancelled'
+
+test at dist/outbox.test.js:270:5
+✖ WP012-T08: Different aggregate/action cannot collide logically
+  'test did not finish before its parent and was cancelled'
+
+test at dist/outbox.test.js:279:5
+✖ WP012-T09: Exact duplicate request returns persisted original result
+  'test did not finish before its parent and was cancelled'
+
+test at dist/outbox.test.js:315:5
+✖ WP012-T10: Exact duplicate executes zero second mutation
+  'test did not finish before its parent and was cancelled'
+
+test at dist/outbox.test.js:341:5
+✖ WP012-T11: Duplicate result survives process/service re-instantiation
+  'test did not finish before its parent and was cancelled'
+
+test at dist/outbox.test.js:365:5
+✖ WP012-T12: Concurrent duplicate requests using independent PostgreSQL connections produce exactly one mutation
+  'test did not finish before its parent and was cancelled'
+
+test at dist/outbox.test.js:397:5
+✖ WP012-T13: Cross-tenant idempotency access is denied
+  'test did not finish before its parent and was cancelled'
+
+test at dist/outbox.test.js:417:5
+✖ WP012-T14: Cross-branch operation cannot reuse another branch authority
+  'test did not finish before its parent and was cancelled'
+
+test at dist/outbox.test.js:437:5
+✖ WP012-T15: First greenfield aggregate sequence 1 applies
+  'test did not finish before its parent and was cancelled'
+
+test at dist/outbox.test.js:453:5
+✖ WP012-T16: Expected next sequence applies and advances causal sequence
+  'test did not finish before its parent and was cancelled'
+
+test at dist/outbox.test.js:480:5
+✖ WP012-T17: incomingSequence < expectedSequence causes zero new mutation
+  'test did not finish before its parent and was cancelled'
+
+test at dist/outbox.test.js:522:5
+✖ WP012-T18: incomingSequence > expectedSequence is durably buffered
+  'test did not finish before its parent and was cancelled'
+
+test at dist/outbox.test.js:550:5
+✖ WP012-T19: Gap event is not applied to domain handler
+  'test did not finish before its parent and was cancelled'
+
+test at dist/outbox.test.js:568:5
+✖ WP012-T20: Missing sequence interval is correctly identified
+  'test did not finish before its parent and was cancelled'
+
+test at dist/outbox.test.js:603:5
+✖ WP012-T21 & WP012-T22: Arrival of missing sequence closes gap and drains contiguous sequence in order
+  'test did not finish before its parent and was cancelled'
+
+test at dist/outbox.test.js:662:5
+✖ WP012-T23: Timestamps cannot alter causal ordering
+  'test did not finish before its parent and was cancelled'
+
+test at dist/outbox.test.js:699:5
+✖ WP012-T24: ReorderingBuffer survives process restart
+  'test did not finish before its parent and was cancelled'
+
+test at dist/outbox.test.js:730:5
+✖ WP012-T30: CloudIntegrationOutbox event persists atomically with Cloud fixture transaction
+  'test did not finish before its parent and was cancelled'
+
+test at dist/outbox.test.js:763:5
+✖ WP012-T31: Cloud transaction rollback removes both fixture mutation and integration event
+  'test did not finish before its parent and was cancelled'
+
+test at dist/outbox.test.js:796:5
+✖ WP012-T32: Dispatcher successfully dispatches one pending event and records durable completion
+  'test did not finish before its parent and was cancelled'
+
+test at dist/outbox.test.js:835:5
+✖ WP012-T33 & WP012-T34: Retryable failure increments retry state and applies exponential backoff
+  'test did not finish before its parent and was cancelled'
+
+test at dist/outbox.test.js:883:5
+✖ WP012-T35: Failure after retry #5 routes event to CloudIntegrationDLQ
+  'test did not finish before its parent and was cancelled'
+
+test at dist/outbox.test.js:947:5
+✖ WP012-T36: Non-retryable validation failure routes directly to DLQ
+  'test did not finish before its parent and was cancelled'
+
+test at dist/outbox.test.js:987:5
+✖ WP012-T37: Poison event moved to DLQ does not permanently block processing of subsequent queue items
+  'test did not finish before its parent and was cancelled'
+
+test at dist/outbox.test.js:1039:5
+✖ WP012-T38: DLQ preserves raw payload + error + trace/context + attempt information
+  'test did not finish before its parent and was cancelled'
+
+test at dist/outbox.test.js:1082:5
+✖ WP012-T39: Multiple dispatcher workers cannot process the same claimed event concurrently
+  'test did not finish before its parent and was cancelled'
+
+test at dist/outbox.test.js:1120:5
+✖ WP012-T42: RLS denies direct cross-tenant access to WP-012 Cloud persistence
+  'test did not finish before its parent and was cancelled'
+
+test at dist/outbox.test.js:1148:5
+✖ WP012-T43: Composite branch integrity rejects organization/branch mismatch
+  'test did not finish before its parent and was cancelled'
+
+test at dist/outbox.test.js:1174:5
+✖ WP012-R1-T48: Distinct logical tuple can never receive another tuple's cached response even under forced identity/hash collision simulation
+  'test did not finish before its parent and was cancelled'
+
+test at dist/outbox.test.js:1224:5
+✖ WP012-R1-T49: cloud_integration_outbox rejects organization A + branch B mismatch
+  'test did not finish before its parent and was cancelled'
+
+test at dist/outbox.test.js:1244:5
+✖ WP012-R1-T53: Initial failure does not consume retry #1
+  'test did not finish before its parent and was cancelled'
+
+test at dist/outbox.test.js:1284:5
+✖ WP012-R1-T54: Initial failure + retries #1..#4 remain outside DLQ
+  'test did not finish before its parent and was cancelled'
+
+test at dist/outbox.test.js:1327:5
+✖ WP012-R1-T55: Failure of retry #5 moves event to DLQ
+  'test did not finish before its parent and was cancelled'
+
+test at dist/outbox.test.js:1379:5
+✖ WP012-R1-T56: Non-canonical maxRetries override cannot alter governed limit of 5
+  'test did not finish before its parent and was cancelled'
+
+test at dist/outbox.test.js:1411:5
+✖ WP012-R1-T57: Concurrent workers claim disjoint events using independent PostgreSQL connections
+  'test did not finish before its parent and was cancelled'
+
+test at dist/outbox.test.js:1453:5
+✖ WP012-R1-T58: Stale Worker A cannot complete an event after Worker B has legitimately reclaimed it
+  'test did not finish before its parent and was cancelled'
+
+test at dist/outbox.test.js:1496:5
+✖ WP012-R1-T59: Stale Worker A cannot record failure/DLQ transition after Worker B owns the current claim
+  'test did not finish before its parent and was cancelled'
+
+test at dist/outbox.test.js:1537:5
+✖ WP012-R1-T61: Production Cloud migration contains no wp012_test_* table
+  'test did not finish before its parent and was cancelled'
+
+test at dist/outbox.test.js:1543:5
+✖ WP012-R2-T65: IngestedIdempotencyEngine fails closed immediately if CloudReceiptIssuer is omitted or invalid
+  'test did not finish before its parent and was cancelled'
+
+test at dist/outbox.test.js:1548:5
+✖ WP012-R2-T70: Replay of duplicate event returns byte/field-equivalent original CloudTransactionReceipt from persistence
+  'test did not finish before its parent and was cancelled'
+
+test at dist/outbox.test.js:1592:5
+✖ WP012-R2-T71: Duplicate replay does not call injected CloudReceiptIssuer a second time
+  'test did not finish before its parent and was cancelled'
+
+test at dist/outbox.test.js:1628:5
+✖ WP012-R2-T72: Duplicate receipt retrieved after engine restart matches original persisted receipt and passes verification
+  'test did not finish before its parent and was cancelled'
+
+test at dist/outbox.test.js:29:1
+✖ TRIDENTPOS WP-012 Cloud Transactional Outbox & Ingested Idempotency Engine Suite (1.348893ms)
+  Error: DATABASE_URL is required. Refusing to select an implicit database target for migrations.
+      at resolveDatabaseUrl (file:///workspace/scratch/aebb2511f878/review/subject/packages/database/dist/connection.js:28:15)
+      at SuiteContext.<anonymous> (file:///workspace/scratch/aebb2511f878/review/subject/packages/database/dist/outbox.test.js:44:31)
+      at TestHook.runInAsyncScope (node:async_hooks:227:14)
+      at TestHook.run (node:internal/test_runner/test:1382:25)
+      at TestHook.run (node:internal/test_runner/test:1726:18)
+      at TestHook.run (node:internal/util:581:20)
+      at Suite.runHook (node:internal/test_runner/test:1269:20)
+      at Suite.run (node:internal/test_runner/test:1863:18)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3)
+
+test at dist/procurement.test.js:17:1
+✖ TRIDENTPOS WP-019 Procurement & Supplier Receiving Database Suite (0.403378ms)
+  Error: DATABASE_URL is required. Refusing to select an implicit database target for migrations.
+      at resolveDatabaseUrl (file:///workspace/scratch/aebb2511f878/review/subject/packages/database/dist/connection.js:28:15)
+      at getPool (file:///workspace/scratch/aebb2511f878/review/subject/packages/database/dist/connection.js:40:37)
+      at SuiteContext.<anonymous> (file:///workspace/scratch/aebb2511f878/review/subject/packages/database/dist/procurement.test.js:18:18)
+      at Suite.runInAsyncScope (node:async_hooks:227:14)
+      at Suite.createBuild (node:internal/test_runner/test:1809:13)
+      at new Suite (node:internal/test_runner/test:1773:28)
+      at Test.createSubtest (node:internal/test_runner/test:1038:18)
+      at run (node:internal/test_runner/harness:393:28)
+      at test (node:internal/test_runner/harness:407:12)
+      at file:///workspace/scratch/aebb2511f878/review/subject/packages/database/dist/procurement.test.js:17:1
+
+test at dist/sync.test.js:18:1
+✖ TRIDENTPOS WP-013 Cloud Sync Repositories & RLS Suite (0.772534ms)
+  Error: DATABASE_URL is required. Refusing to select an implicit database target for migrations.
+      at resolveDatabaseUrl (file:///workspace/scratch/aebb2511f878/review/subject/packages/database/dist/connection.js:28:15)
+      at getPool (file:///workspace/scratch/aebb2511f878/review/subject/packages/database/dist/connection.js:40:37)
+      at SuiteContext.<anonymous> (file:///workspace/scratch/aebb2511f878/review/subject/packages/database/dist/sync.test.js:19:18)
+      at Suite.runInAsyncScope (node:async_hooks:227:14)
+      at Suite.createBuild (node:internal/test_runner/test:1809:13)
+      at new Suite (node:internal/test_runner/test:1773:28)
+      at Test.createSubtest (node:internal/test_runner/test:1038:18)
+      at run (node:internal/test_runner/harness:393:28)
+      at test (node:internal/test_runner/harness:407:12)
+      at file:///workspace/scratch/aebb2511f878/review/subject/packages/database/dist/sync.test.js:18:1
+npm error Lifecycle script `test` failed with error:
+npm error code 1
+npm error path /workspace/scratch/aebb2511f878/review/subject/packages/database
+npm error workspace @trident/database@0.1.0
+npm error location /workspace/scratch/aebb2511f878/review/subject/packages/database
+npm error command failed
+npm error command sh -c node --test --test-concurrency=1 dist/index.test.js dist/outbox.test.js dist/sync.test.js dist/inventory.test.js dist/procurement.test.js dist/finance.test.js dist/billing.test.js

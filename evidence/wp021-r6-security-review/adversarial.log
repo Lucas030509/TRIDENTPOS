@@ -1,0 +1,5 @@
+A1 REPRODUCED: changed original fiscal complement Monto=100 to 999999 accepted
+A2 REPRODUCED: malformed XML missing attribute separator and raw ampersand accepted
+A3 REPRODUCED: restore invokes EXTERNAL handler twice, both SQL inbox transactions roll back; no durable external idempotency
+A4 REPRODUCED: ordinary redelivery suppresses missing SQL effect when verifyEffect omitted
+A5 PASS: opaque sanitizer removes JSON/JWT/multiline/PEM canaries

@@ -1,0 +1,14 @@
+{
+  "WP021_R6_SECURITY_GATE.md": "5038f48033fae131a4b308840832ac7390c4e8910d554380dd3bb8750f2cf8d3",
+  "REPRODUCE.md": "e29a54ea5cc138785d530474c2c2d2665b6f4858c81f0837a2d41253fe56a542",
+  "adversarial.mjs": "967d097b535b67cdce13e21f17471fe5b9de4b4b0364e8873e9d4eb45ef0b2a1",
+  "adversarial.log": "f5f02d702bd279af7f9c6dbdfe1f3782def33417582cf9ef0d099b1c3e10bc58",
+  "mechanical.json": "c605a0d9bab44222d7bd81f9c8d536d477c06a8ae5974d072fc9a1e911d46212",
+  "build.log": "d927d9441092d61d1e7520ea7835ab683534dc5e98d574f475c416d197f92196",
+  "billing.log": "69e7cca0e7f9173a4d1263f979bf70adccef54d220e0aa1911f20bbe1fe5281d",
+  "canonical-unit.log": "a56acc9e68307b39bff14c9800201daef38a8c6d5a55de9a710aa38935936b15",
+  "sql.log": "8f7f02c63e78808898c144c10edb0d5b1757ddbfdc00ec980b6bc7d7e3142a85",
+  "cloud-native.log": "fcc323a643a5e939b7c500e35e7f04fd72dcc1a423f4d0f656e8a3865bd0ef5b",
+  "database-native.log": "59e34ee2a23e5d65695f967b9e2c09636f61d8948821dcfc3a5bfa6a7fe53b52",
+  "sql-runtime/adapter.mjs": "684d884c27fb8f69f10cbd1c6e77c300c0c85b1745accab1e7df6f3faa95fbfe"
+}

@@ -1,0 +1,183 @@
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm.
+
+> @trident/cloud-server@0.1.0 test
+> node --test --test-concurrency=1 dist/index.test.js dist/billing.test.js
+
+▶ TRIDENTPOS WP-021 Cloud Server Billing & Fiscal Invoicing Engine Suite
+  ✖ WP021-CS-01: Create and retrieve Tax Schemes with exact scale-4 precision
+  ✖ WP021-CS-02: Configure Emisor Fiscal with SAT validation and vault reference
+  ✖ WP021-CS-03: Create Draft Invoice with multi-item tax calculation
+  ✖ WP021-CS-04: Stamp Fiscal Invoice with Cadena Original, XML and Outbox Event
+  ✖ WP021-CS-05: Stamping is strictly idempotent upon retries
+  ✖ WP021-CS-06: Cancel Fiscal Invoice with Motivo and Outbox Event
+  ✖ WP021-CS-07: Motivo 01 requires uuidSustitucion
+  ✖ WP021-CS-08: PAC Connector Timeout creates durable retry state without corrupting DB
+  ✖ WP021-CS-09: OQ-ARCH-02 Batch Candidate Query and Global Invoice Batch creation
+  ✖ WP021-SEC-01: SEC-VAL-05 Missing vault or key fails closed without mock signature
+  ✖ WP021-SEC-02: Default composition without PAC connector fails closed
+  ✖ WP021-SEC-03: Conflicting semantic idempotency key reuse fails closed
+  ✖ WP021-SEC-04: Private key is never persisted or exposed in outbox or returned DTO
+  ✖ WP021-EVENT: Fiscal outbox carries version and semantic identity
+  ✖ WP021-CONSUMER: Missing evidence cannot mark inbox processed during restore
+  ✖ WP021-SEC-HIGH-04: Structural XML Validation rejects corrupt or missing TimbreFiscalDigital
+  ✖ WP021-SEC-MED-01: Error Sanitizer strips sensitive credentials before database persistence
+✖ TRIDENTPOS WP-021 Cloud Server Billing & Fiscal Invoicing Engine Suite (1.109394ms)
+✖ TRIDENTPOS WP-017 Cloud Server Composition & Transaction Boundary Suite (0.450936ms)
+✖ TRIDENTPOS WP-018 Cloud Server Composition, Kárdex & KDS Depletion Suite (0.085408ms)
+✖ TRIDENTPOS WP-019 Cloud Server Procurement & Supplier Receiving Suite (0.046519ms)
+✖ TRIDENTPOS WP-020 Cloud Server Finance, AP, AR & Cash Reconciliation Suite (0.042093ms)
+ℹ tests 17
+ℹ suites 5
+ℹ pass 0
+ℹ fail 0
+ℹ cancelled 17
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 304.932989
+
+✖ failing tests:
+
+test at dist/billing.test.js:93:5
+✖ WP021-CS-01: Create and retrieve Tax Schemes with exact scale-4 precision
+  'test did not finish before its parent and was cancelled'
+
+test at dist/billing.test.js:124:5
+✖ WP021-CS-02: Configure Emisor Fiscal with SAT validation and vault reference
+  'test did not finish before its parent and was cancelled'
+
+test at dist/billing.test.js:156:5
+✖ WP021-CS-03: Create Draft Invoice with multi-item tax calculation
+  'test did not finish before its parent and was cancelled'
+
+test at dist/billing.test.js:197:5
+✖ WP021-CS-04: Stamp Fiscal Invoice with Cadena Original, XML and Outbox Event
+  'test did not finish before its parent and was cancelled'
+
+test at dist/billing.test.js:247:5
+✖ WP021-CS-05: Stamping is strictly idempotent upon retries
+  'test did not finish before its parent and was cancelled'
+
+test at dist/billing.test.js:283:5
+✖ WP021-CS-06: Cancel Fiscal Invoice with Motivo and Outbox Event
+  'test did not finish before its parent and was cancelled'
+
+test at dist/billing.test.js:344:5
+✖ WP021-CS-07: Motivo 01 requires uuidSustitucion
+  'test did not finish before its parent and was cancelled'
+
+test at dist/billing.test.js:385:5
+✖ WP021-CS-08: PAC Connector Timeout creates durable retry state without corrupting DB
+  'test did not finish before its parent and was cancelled'
+
+test at dist/billing.test.js:432:5
+✖ WP021-CS-09: OQ-ARCH-02 Batch Candidate Query and Global Invoice Batch creation
+  'test did not finish before its parent and was cancelled'
+
+test at dist/billing.test.js:463:5
+✖ WP021-SEC-01: SEC-VAL-05 Missing vault or key fails closed without mock signature
+  'test did not finish before its parent and was cancelled'
+
+test at dist/billing.test.js:503:5
+✖ WP021-SEC-02: Default composition without PAC connector fails closed
+  'test did not finish before its parent and was cancelled'
+
+test at dist/billing.test.js:544:5
+✖ WP021-SEC-03: Conflicting semantic idempotency key reuse fails closed
+  'test did not finish before its parent and was cancelled'
+
+test at dist/billing.test.js:602:5
+✖ WP021-SEC-04: Private key is never persisted or exposed in outbox or returned DTO
+  'test did not finish before its parent and was cancelled'
+
+test at dist/billing.test.js:649:5
+✖ WP021-EVENT: Fiscal outbox carries version and semantic identity
+  'test did not finish before its parent and was cancelled'
+
+test at dist/billing.test.js:693:5
+✖ WP021-CONSUMER: Missing evidence cannot mark inbox processed during restore
+  'test did not finish before its parent and was cancelled'
+
+test at dist/billing.test.js:703:5
+✖ WP021-SEC-HIGH-04: Structural XML Validation rejects corrupt or missing TimbreFiscalDigital
+  'test did not finish before its parent and was cancelled'
+
+test at dist/billing.test.js:737:5
+✖ WP021-SEC-MED-01: Error Sanitizer strips sensitive credentials before database persistence
+  'test did not finish before its parent and was cancelled'
+
+test at dist/billing.test.js:17:1
+✖ TRIDENTPOS WP-021 Cloud Server Billing & Fiscal Invoicing Engine Suite (1.109394ms)
+  Error: DATABASE_URL is required. Refusing to select an implicit database target for migrations.
+      at resolveDatabaseUrl (file:///workspace/scratch/aebb2511f878/review/subject/packages/database/dist/connection.js:28:15)
+      at getPool (file:///workspace/scratch/aebb2511f878/review/subject/packages/database/dist/connection.js:40:37)
+      at SuiteContext.<anonymous> (file:///workspace/scratch/aebb2511f878/review/subject/packages/cloud-server/dist/billing.test.js:33:16)
+      at TestHook.runInAsyncScope (node:async_hooks:227:14)
+      at TestHook.run (node:internal/test_runner/test:1382:25)
+      at TestHook.run (node:internal/test_runner/test:1726:18)
+      at TestHook.run (node:internal/util:581:20)
+      at Suite.runHook (node:internal/test_runner/test:1269:20)
+      at Suite.run (node:internal/test_runner/test:1863:18)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3)
+
+test at dist/index.test.js:23:1
+✖ TRIDENTPOS WP-017 Cloud Server Composition & Transaction Boundary Suite (0.450936ms)
+  Error: DATABASE_URL is required. Refusing to select an implicit database target for migrations.
+      at resolveDatabaseUrl (file:///workspace/scratch/aebb2511f878/review/subject/packages/database/dist/connection.js:28:15)
+      at getPool (file:///workspace/scratch/aebb2511f878/review/subject/packages/database/dist/connection.js:40:37)
+      at SuiteContext.<anonymous> (file:///workspace/scratch/aebb2511f878/review/subject/packages/cloud-server/dist/index.test.js:24:18)
+      at Suite.runInAsyncScope (node:async_hooks:227:14)
+      at Suite.createBuild (node:internal/test_runner/test:1809:13)
+      at new Suite (node:internal/test_runner/test:1773:28)
+      at Test.createSubtest (node:internal/test_runner/test:1038:18)
+      at run (node:internal/test_runner/harness:393:28)
+      at test (node:internal/test_runner/harness:407:12)
+      at file:///workspace/scratch/aebb2511f878/review/subject/packages/cloud-server/dist/index.test.js:23:1
+
+test at dist/index.test.js:295:1
+✖ TRIDENTPOS WP-018 Cloud Server Composition, Kárdex & KDS Depletion Suite (0.085408ms)
+  Error: DATABASE_URL is required. Refusing to select an implicit database target for migrations.
+      at resolveDatabaseUrl (file:///workspace/scratch/aebb2511f878/review/subject/packages/database/dist/connection.js:28:15)
+      at getPool (file:///workspace/scratch/aebb2511f878/review/subject/packages/database/dist/connection.js:40:37)
+      at SuiteContext.<anonymous> (file:///workspace/scratch/aebb2511f878/review/subject/packages/cloud-server/dist/index.test.js:296:18)
+      at Suite.runInAsyncScope (node:async_hooks:227:14)
+      at Suite.createBuild (node:internal/test_runner/test:1809:13)
+      at new Suite (node:internal/test_runner/test:1773:28)
+      at Test.createSubtest (node:internal/test_runner/test:1038:18)
+      at run (node:internal/test_runner/harness:393:28)
+      at test (node:internal/test_runner/harness:407:12)
+      at file:///workspace/scratch/aebb2511f878/review/subject/packages/cloud-server/dist/index.test.js:295:1
+
+test at dist/index.test.js:1287:1
+✖ TRIDENTPOS WP-019 Cloud Server Procurement & Supplier Receiving Suite (0.046519ms)
+  Error: DATABASE_URL is required. Refusing to select an implicit database target for migrations.
+      at resolveDatabaseUrl (file:///workspace/scratch/aebb2511f878/review/subject/packages/database/dist/connection.js:28:15)
+      at getPool (file:///workspace/scratch/aebb2511f878/review/subject/packages/database/dist/connection.js:40:37)
+      at SuiteContext.<anonymous> (file:///workspace/scratch/aebb2511f878/review/subject/packages/cloud-server/dist/index.test.js:1288:18)
+      at Suite.runInAsyncScope (node:async_hooks:227:14)
+      at Suite.createBuild (node:internal/test_runner/test:1809:13)
+      at new Suite (node:internal/test_runner/test:1773:28)
+      at Test.createSubtest (node:internal/test_runner/test:1038:18)
+      at run (node:internal/test_runner/harness:393:28)
+      at test (node:internal/test_runner/harness:407:12)
+      at file:///workspace/scratch/aebb2511f878/review/subject/packages/cloud-server/dist/index.test.js:1287:1
+
+test at dist/index.test.js:2253:1
+✖ TRIDENTPOS WP-020 Cloud Server Finance, AP, AR & Cash Reconciliation Suite (0.042093ms)
+  Error: DATABASE_URL is required. Refusing to select an implicit database target for migrations.
+      at resolveDatabaseUrl (file:///workspace/scratch/aebb2511f878/review/subject/packages/database/dist/connection.js:28:15)
+      at getPool (file:///workspace/scratch/aebb2511f878/review/subject/packages/database/dist/connection.js:40:37)
+      at SuiteContext.<anonymous> (file:///workspace/scratch/aebb2511f878/review/subject/packages/cloud-server/dist/index.test.js:2254:18)
+      at Suite.runInAsyncScope (node:async_hooks:227:14)
+      at Suite.createBuild (node:internal/test_runner/test:1809:13)
+      at new Suite (node:internal/test_runner/test:1773:28)
+      at Test.createSubtest (node:internal/test_runner/test:1038:18)
+      at run (node:internal/test_runner/harness:393:28)
+      at test (node:internal/test_runner/harness:407:12)
+      at file:///workspace/scratch/aebb2511f878/review/subject/packages/cloud-server/dist/index.test.js:2253:1
+npm error Lifecycle script `test` failed with error:
+npm error code 1
+npm error path /workspace/scratch/aebb2511f878/review/subject/packages/cloud-server
+npm error workspace @trident/cloud-server@0.1.0
+npm error location /workspace/scratch/aebb2511f878/review/subject/packages/cloud-server
+npm error command failed
+npm error command sh -c node --test --test-concurrency=1 dist/index.test.js dist/billing.test.js
