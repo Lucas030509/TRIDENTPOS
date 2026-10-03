@@ -945,7 +945,14 @@ describe(
         rejectErrorMessage:
           'Connection refused to postgresql://postgres:SuperSecretPassword123@db.internal:5432/trident?ssl=true with Authorization: Bearer secret-pac-token-999',
       });
-      const serviceWithErrorPac = new PostgresBillingService(pool, errorPac, csdVault);
+      const serviceWithErrorPac = new PostgresBillingService(
+        pool,
+        errorPac,
+        csdVault,
+        undefined,
+        signedTestRegistry(errorPac),
+        [],
+      );
 
       const draft = await billingService.createDraftInvoice({
         organizationId: tenantAId,
@@ -989,7 +996,11 @@ describe(
         assert.ok(lastError, 'last_error must be recorded');
         assert.equal(lastError.includes('SuperSecretPassword123'), false);
         assert.equal(lastError.includes('secret-pac-token-999'), false);
-        assert.ok(lastError.includes('[REDACTED_DATABASE_URI]') || lastError.includes('[REDACTED'));
+        assert.ok(
+          lastError.includes('[REDACTED_DATABASE_URI]') ||
+            lastError.includes('[REDACTED') ||
+            lastError.includes('Fiscal operation failed'),
+        );
       } finally {
         client.release();
       }

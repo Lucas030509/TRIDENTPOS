@@ -6651,6 +6651,7 @@ export interface DurableFiscalReplayEvent {
   semanticEventId: string;
   eventKind: string;
   eventContractVersion: string;
+  effectMode?: 'TRANSACTIONAL_SQL' | 'EXTERNAL';
   payload: Record<string, unknown>;
 }
 
@@ -6726,7 +6727,8 @@ export class ConsumerInboxService {
       throw new EventContractIncompatibleError('Invalid fiscal event identity or tenant');
     }
     const details = typeof options === 'object' ? options : undefined;
-    if (details?.effectMode !== 'TRANSACTIONAL_SQL') {
+    const effectMode = details?.effectMode ?? 'TRANSACTIONAL_SQL';
+    if (effectMode !== 'TRANSACTIONAL_SQL') {
       throw new EventContractIncompatibleError(
         'BLOCKED BY CONTRACT: external durable idempotency not established',
       );
@@ -6885,6 +6887,11 @@ export class ConsumerInboxService {
     }
     // Validate the entire source before applying any event; acknowledgments cannot replace payloads.
     for (const event of snapshot.events) {
+      if (event.effectMode && event.effectMode !== 'TRANSACTIONAL_SQL') {
+        throw new EventContractIncompatibleError(
+          'BLOCKED BY CONTRACT: external durable idempotency not established',
+        );
+      }
       assertSubscriberCompatibility(event.eventContractVersion, event.payload, {
         subscriberName: consumerContext,
         supportedMajors: [1],
@@ -6908,6 +6915,12 @@ export class ConsumerInboxService {
     }
     let reconciledCount = 0;
     for (const event of snapshot.events) {
+      const effectMode = event.effectMode ?? 'TRANSACTIONAL_SQL';
+      if (effectMode !== 'TRANSACTIONAL_SQL') {
+        throw new EventContractIncompatibleError(
+          'BLOCKED BY CONTRACT: external durable idempotency not established',
+        );
+      }
       const result = await this.processEventWithInbox(
         organizationId,
         consumerContext,
@@ -6917,7 +6930,7 @@ export class ConsumerInboxService {
         {
           eventContractVersion: event.eventContractVersion,
           payload: event.payload,
-          effectMode: 'TRANSACTIONAL_SQL',
+          effectMode,
           verifyEffect: (client) => plan.verifyEffect(client, event),
         },
       );

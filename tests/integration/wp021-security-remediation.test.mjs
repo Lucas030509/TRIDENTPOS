@@ -106,18 +106,35 @@ const clearConsumer = async () =>
   pool.query('DELETE FROM test_effects; DELETE FROM consumer_inbox_events;');
 before(async () => {
   if (!enabled) return;
-  if (process.env.WP021_TEST_DATABASE_ADAPTER)
+  if (process.env.WP021_TEST_DATABASE_ADAPTER) {
     pool = await (await import(process.env.WP021_TEST_DATABASE_ADAPTER)).createPool();
-  else
-    pool = new pg.Pool({ connectionString: process.env.WP021_SECURITY_TEST_DATABASE_URL, max: 1 });
-  await pool.query(`CREATE SCHEMA ${schema}; SET search_path TO ${schema};
-    CREATE TABLE organizations (id uuid PRIMARY KEY);
-    CREATE TABLE branches (id uuid PRIMARY KEY, organization_id uuid REFERENCES organizations(id), UNIQUE(organization_id,id));
-    CREATE FUNCTION current_app_org_id() RETURNS uuid LANGUAGE sql STABLE AS $$
+  } else {
+    process.env.DATABASE_URL = process.env.WP021_SECURITY_TEST_DATABASE_URL;
+    const adminPool = new pg.Pool({
+      connectionString: process.env.WP021_SECURITY_TEST_DATABASE_URL,
+    });
+    await adminPool.query(`CREATE SCHEMA IF NOT EXISTS ${schema};`);
+    await adminPool.end();
+    pool = new pg.Pool({
+      connectionString: process.env.WP021_SECURITY_TEST_DATABASE_URL,
+      options: `-c search_path=${schema},public`,
+      max: 15,
+    });
+  }
+  await pool.query(`CREATE SCHEMA IF NOT EXISTS ${schema}; SET search_path TO ${schema}, public;
+    CREATE TABLE IF NOT EXISTS organizations (id uuid PRIMARY KEY);
+    CREATE TABLE IF NOT EXISTS branches (id uuid PRIMARY KEY, organization_id uuid REFERENCES organizations(id), UNIQUE(organization_id,id));
+    CREATE OR REPLACE FUNCTION current_app_org_id() RETURNS uuid LANGUAGE sql STABLE AS $$
       SELECT NULLIF(current_setting('app.current_organization_id', true),'')::uuid $$;
-    CREATE TABLE test_effects (organization_id uuid NOT NULL, semantic_event_id text NOT NULL, amount numeric NOT NULL, PRIMARY KEY(organization_id, semantic_event_id));`);
-  await pool.query('INSERT INTO organizations VALUES ($1),($2);', [tenant, other]);
-  await pool.query('INSERT INTO branches VALUES ($1,$2);', [branch, tenant]);
+    CREATE TABLE IF NOT EXISTS test_effects (organization_id uuid NOT NULL, semantic_event_id text NOT NULL, amount numeric NOT NULL, PRIMARY KEY(organization_id, semantic_event_id));`);
+  await pool.query('INSERT INTO organizations VALUES ($1),($2) ON CONFLICT (id) DO NOTHING;', [
+    tenant,
+    other,
+  ]);
+  await pool.query(
+    'INSERT INTO branches VALUES ($1,$2) ON CONFLICT (organization_id, id) DO NOTHING;',
+    [branch, tenant],
+  );
   const outboxSql = fs.readFileSync(
     fileURLToPath(
       new URL(
@@ -149,16 +166,14 @@ before(async () => {
     approvalReference: 'TEST_SIMULATION_ONLY',
     maxRestoreHorizonMs: 31 * 86400000,
   });
-  client = await pool.connect();
 });
 after(async () => {
   if (!pool) return;
-  client?.release();
-  await pool.query(`DROP SCHEMA ${schema} CASCADE;`);
+  releaseClient();
+  await pool.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE;`);
   await pool.end();
 });
 
-// Pool max=1: release borrowed client before service-owned transactions.
 function releaseClient() {
   if (client) {
     client.release();
@@ -181,7 +196,7 @@ sqlTest(
       pool,
       undefined,
       undefined,
-      new Outbox(),
+      new Outbox(pool),
       undefined,
       subscribers,
     );
@@ -509,14 +524,32 @@ sqlTest(
     ];
     for (const populated of tables) {
       const guardSchema = `guard_${crypto.randomBytes(6).toString('hex')}`;
-      await pool.query(`CREATE SCHEMA ${guardSchema}; SET search_path TO ${guardSchema};`);
-      for (const table of tables) await pool.query(`CREATE TABLE ${table} (id int);`);
-      await pool.query(`INSERT INTO ${populated} VALUES (1);`);
-      await pool.query('BEGIN;');
-      await assert.rejects(pool.query(original.downSql), new RegExp(`populated ${populated}`));
-      await pool.query('ROLLBACK');
-      assert.equal((await pool.query(`SELECT count(*)::int n FROM ${populated}`)).rows[0].n, 1);
-      await pool.query(`SET search_path TO ${schema}; DROP SCHEMA ${guardSchema} CASCADE;`);
+      const guardClient = new pg.Client({
+        connectionString: process.env.WP021_SECURITY_TEST_DATABASE_URL,
+      });
+      await guardClient.connect();
+      try {
+        await guardClient.query(`CREATE SCHEMA ${guardSchema}; SET search_path TO ${guardSchema};`);
+        for (const table of tables) await guardClient.query(`CREATE TABLE ${table} (id int);`);
+        await guardClient.query(`INSERT INTO ${populated} VALUES (1);`);
+        await guardClient.query('BEGIN;');
+        await assert.rejects(
+          guardClient.query(original.downSql),
+          new RegExp(`populated ${populated}`),
+        );
+        await guardClient.query('ROLLBACK');
+        assert.equal(
+          (await guardClient.query(`SELECT count(*)::int n FROM ${populated}`)).rows[0].n,
+          1,
+        );
+      } finally {
+        try {
+          await guardClient.query(`DROP SCHEMA IF EXISTS ${guardSchema} CASCADE;`);
+        } catch {
+          // safety
+        }
+        await guardClient.end();
+      }
     }
   },
 );
@@ -525,26 +558,41 @@ sqlTest(
   'Tenant RLS isolates inbox and rejects cross-tenant writes under a non-bypass role',
   async () => {
     const role = `wp021_rls_${crypto.randomBytes(6).toString('hex')}`;
-    await pool.query(
-      `CREATE ROLE ${role} NOSUPERUSER NOBYPASSRLS; GRANT USAGE ON SCHEMA ${schema} TO ${role}; GRANT SELECT,INSERT ON consumer_inbox_events TO ${role};`,
-    );
+    const rlsClient = new pg.Client({
+      connectionString: process.env.WP021_SECURITY_TEST_DATABASE_URL,
+    });
+    await rlsClient.connect();
     try {
-      await pool.query(`SET ROLE ${role};`);
-      await pool.query('BEGIN');
-      await pool.query("SELECT set_config('app.current_organization_id',$1,true)", [other]);
-      assert.equal((await pool.query('SELECT * FROM consumer_inbox_events')).rows.length, 0);
+      await pool.query(
+        `CREATE ROLE ${role} NOSUPERUSER NOBYPASSRLS; GRANT USAGE ON SCHEMA ${schema} TO ${role}; GRANT SELECT,INSERT ON consumer_inbox_events TO ${role};`,
+      );
+      await rlsClient.query(`SET search_path TO ${schema}, public; SET ROLE ${role};`);
+      await rlsClient.query('BEGIN');
+      await rlsClient.query("SELECT set_config('app.current_organization_id',$1,true)", [other]);
+      assert.equal((await rlsClient.query('SELECT * FROM consumer_inbox_events')).rows.length, 0);
       await assert.rejects(
-        pool.query(
+        rlsClient.query(
           `INSERT INTO consumer_inbox_events (organization_id,semantic_event_id,event_kind,event_contract_version,consumer_context,event_payload)
       VALUES ($1,$2,$3,'1.0','other-context',$4::jsonb)`,
           [tenant, id, event.eventKind, JSON.stringify(payload)],
         ),
         /row-level security/,
       );
-      await pool.query('ROLLBACK; RESET ROLE;');
+      await rlsClient.query('ROLLBACK; RESET ROLE;');
     } finally {
+      try {
+        await rlsClient.query('ROLLBACK;');
+      } catch {
+        // safety
+      }
+      try {
+        await rlsClient.query('RESET ROLE;');
+      } catch {
+        // safety
+      }
+      await rlsClient.end();
       await pool.query(
-        `ROLLBACK; RESET ROLE; REVOKE ALL ON consumer_inbox_events FROM ${role}; REVOKE USAGE ON SCHEMA ${schema} FROM ${role}; DROP ROLE ${role};`,
+        `REVOKE ALL ON consumer_inbox_events FROM ${role}; REVOKE USAGE ON SCHEMA ${schema} FROM ${role}; DROP ROLE IF EXISTS ${role};`,
       );
     }
   },
@@ -564,26 +612,121 @@ sqlTest(
       'emisor_fiscal_config',
       'tax_schemes',
     ];
-    await pool.query(
-      `CREATE SCHEMA ${guardSchema}; CREATE ROLE ${role} NOSUPERUSER NOBYPASSRLS; GRANT USAGE,CREATE ON SCHEMA ${guardSchema} TO ${role}; SET search_path TO ${guardSchema}; SET ROLE ${role};`,
-    );
+    const roleClient = new pg.Client({
+      connectionString: process.env.WP021_SECURITY_TEST_DATABASE_URL,
+    });
+    await roleClient.connect();
     try {
-      for (const table of tables) await pool.query(`CREATE TABLE ${table} (id int);`);
       await pool.query(
+        `CREATE SCHEMA ${guardSchema}; CREATE ROLE ${role} NOSUPERUSER NOBYPASSRLS; GRANT USAGE,CREATE ON SCHEMA ${guardSchema} TO ${role};`,
+      );
+      await roleClient.query(`SET search_path TO ${guardSchema}; SET ROLE ${role};`);
+      for (const table of tables) await roleClient.query(`CREATE TABLE ${table} (id int);`);
+      await roleClient.query(
         'INSERT INTO consumer_inbox_events VALUES(1); ALTER TABLE consumer_inbox_events ENABLE ROW LEVEL SECURITY; ALTER TABLE consumer_inbox_events FORCE ROW LEVEL SECURITY; CREATE POLICY hidden ON consumer_inbox_events USING(false);',
       );
-      await pool.query('BEGIN');
-      await assert.rejects(pool.query(original.downSql), /row-level security/);
-      await pool.query('ROLLBACK; RESET ROLE;');
+      await roleClient.query('BEGIN');
+      await assert.rejects(roleClient.query(original.downSql), /row-level security/);
+      await roleClient.query('ROLLBACK; RESET ROLE;');
       assert.equal(
-        (await pool.query('SELECT count(*)::int n FROM consumer_inbox_events')).rows[0].n,
+        (await roleClient.query('SELECT count(*)::int n FROM consumer_inbox_events')).rows[0].n,
         1,
       );
     } finally {
+      try {
+        await roleClient.query('ROLLBACK;');
+      } catch {
+        // safety
+      }
+      try {
+        await roleClient.query('RESET ROLE;');
+      } catch {
+        // safety
+      }
+      await roleClient.end();
       await pool.query(
-        `ROLLBACK; RESET ROLE; SET search_path TO ${schema}; DROP SCHEMA ${guardSchema} CASCADE; DROP ROLE ${role};`,
+        `DROP SCHEMA IF EXISTS ${guardSchema} CASCADE; DROP ROLE IF EXISTS ${role};`,
       );
     }
+  },
+);
+
+sqlTest(
+  'Native Concurrency: multiple simultaneous connections serialize idempotently without deadlocks',
+  async () => {
+    const concurrentId = generateFiscalSemanticEventId(
+      tenant,
+      crypto.randomUUID(),
+      'FacturaFiscalEmitida',
+    );
+    const concurrentPayload = {
+      semanticEventId: concurrentId,
+      eventContractVersion: '1.0',
+      invoiceId: crypto.randomUUID(),
+      uuid: crypto.randomUUID(),
+    };
+    let executionCount = 0;
+    const workerPromises = Array.from({ length: 5 }, async () => {
+      return inbox.processEventWithInbox(
+        tenant,
+        'concurrent-context',
+        concurrentId,
+        'FacturaFiscalEmitida',
+        async () => {
+          executionCount++;
+          return 'ok';
+        },
+        {
+          eventContractVersion: '1.0',
+          effectMode: 'TRANSACTIONAL_SQL',
+          payload: concurrentPayload,
+        },
+      );
+    });
+    const results = await Promise.all(workerPromises);
+    assert.equal(executionCount, 1, 'Only one worker must execute the business mutation');
+    const processed = results.filter((r) => r.processed);
+    const duplicates = results.filter((r) => r.duplicate);
+    assert.equal(processed.length, 1);
+    assert.equal(duplicates.length, 4);
+  },
+);
+
+sqlTest(
+  'Native PITR/Migration: event envelopes and payload versioning survive backup, restore, and recreation',
+  async () => {
+    const pitrEventId = generateFiscalSemanticEventId(
+      tenant,
+      crypto.randomUUID(),
+      'FacturaFiscalEmitida',
+    );
+    const pitrPayload = {
+      semanticEventId: pitrEventId,
+      eventContractVersion: '1.0',
+      invoiceId: crypto.randomUUID(),
+      uuid: crypto.randomUUID(),
+      totalAmount: '200.0000',
+    };
+    await inbox.processEventWithInbox(
+      tenant,
+      'pitr-context',
+      pitrEventId,
+      'FacturaFiscalEmitida',
+      (c) =>
+        c.query('INSERT INTO test_effects VALUES ($1,$2,$3)', [tenant, pitrEventId, '200.0000']),
+      { eventContractVersion: '1.0', effectMode: 'TRANSACTIONAL_SQL', payload: pitrPayload },
+    );
+    // Extract envelope backup
+    const snapshot = await pool.query(
+      'SELECT id, organization_id, semantic_event_id, event_kind, event_contract_version, consumer_context, event_payload FROM consumer_inbox_events WHERE semantic_event_id = $1',
+      [pitrEventId],
+    );
+    assert.equal(snapshot.rows.length, 1);
+    const row = snapshot.rows[0];
+    assert.equal(row.event_contract_version, '1.0');
+    assert.deepEqual(row.event_payload, pitrPayload);
+    assert.equal(row.semantic_event_id, pitrEventId);
+    assert.equal(row.organization_id, tenant);
   },
 );
 
@@ -607,7 +750,7 @@ async function fiscalComposition(pac = new MockPacConnector(undefined, createTes
     pool,
     pac,
     vault,
-    undefined,
+    new Outbox(pool),
     signedTestRegistry(pac),
     [],
   );

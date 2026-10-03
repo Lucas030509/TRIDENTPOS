@@ -351,6 +351,59 @@ describe('XML and error abuse regression', () => {
       validateAndExtractTimbreFiscalDigital(xml, { expectedProvider: 'AAA010101AAA' }),
     );
   });
+
+  it('A1: Rejects altered original fiscal complements and preserves submitted complement content', () => {
+    const base =
+      '<cfdi:Comprobante xmlns:cfdi="http://www.sat.gob.mx/cfd/4" Version="4.0" Total="116">';
+    const original =
+      base +
+      '<cfdi:Complemento><p:Pago xmlns:p="urn:payments" Monto="100"/></cfdi:Complemento></cfdi:Comprobante>';
+    const tfdElem =
+      '<tfd:TimbreFiscalDigital xmlns:tfd="http://www.sat.gob.mx/TimbreFiscalDigital" Version="1.1" UUID="12345678-1234-1234-1234-123456789012" FechaTimbrado="2026-10-02T12:00:00Z" RfcProvCertif="SAT970701NN3" SelloSAT="' +
+      'A'.repeat(40) +
+      '" NoCertificadoSAT="30001000000500003416"/>';
+
+    // Legitimate addition of TFD alongside original complement must succeed
+    const legitimate =
+      base +
+      '<cfdi:Complemento><p:Pago xmlns:p="urn:payments" Monto="100"/>' +
+      tfdElem +
+      '</cfdi:Complemento></cfdi:Comprobante>';
+    assert.doesNotThrow(() =>
+      validateAndExtractTimbreFiscalDigital(legitimate, {
+        expectedOriginalXml: original,
+        expectedProvider: 'SAT970701NN3',
+      }),
+    );
+
+    // Altered original complement (Monto=100 -> 999999) must be rejected fail-closed
+    const altered =
+      base +
+      '<cfdi:Complemento><p:Pago xmlns:p="urn:payments" Monto="999999"/>' +
+      tfdElem +
+      '</cfdi:Complemento></cfdi:Comprobante>';
+    assert.throws(() =>
+      validateAndExtractTimbreFiscalDigital(altered, {
+        expectedOriginalXml: original,
+        expectedProvider: 'SAT970701NN3',
+      }),
+    );
+  });
+
+  it('A2: Rejects malformed XML missing attribute separator or containing raw unescaped ampersands', () => {
+    assert.throws(() =>
+      validateAndExtractTimbreFiscalDigital('<root a="1"b="2">unescaped & text</root>'),
+    );
+    assert.throws(() =>
+      validateAndExtractTimbreFiscalDigital('<root attr="val"bad="1">test</root>'),
+    );
+    assert.throws(() =>
+      validateAndExtractTimbreFiscalDigital(
+        '<cfdi:Comprobante xmlns:cfdi="http://www.sat.gob.mx/cfd/4" Version="4.0">Unescaped & in text</cfdi:Comprobante>',
+      ),
+    );
+  });
+
   it('Opaque sanitizer excludes JSON/JWT/encoded/multiline secrets including supplied correlation', () => {
     for (const raw of [
       '{"password":"CANARY"}',

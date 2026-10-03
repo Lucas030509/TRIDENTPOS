@@ -59,11 +59,17 @@ export function parseXmlStructure(xmlText: string): XmlNode {
     const attrs: Record<string, string> = Object.create(null) as Record<string, string>;
     let idx = 0;
     const attrLen = attrString.length;
+    let hasSeenAttr = false;
 
     while (idx < attrLen) {
       // Skip whitespace
+      const wsStart = idx;
       while (idx < attrLen && /\s/.test(attrString[idx]!)) idx++;
       if (idx >= attrLen) break;
+
+      if (hasSeenAttr && idx === wsStart) {
+        throw new FiscalSuccessValidationError('Missing whitespace separating XML attributes');
+      }
 
       // Extract attribute name
       const nameStart = idx;
@@ -103,8 +109,12 @@ export function parseXmlStructure(xmlText: string): XmlNode {
       }
       const rawVal = attrString.slice(valStart, idx);
       idx++; // skip closing quote
+      hasSeenAttr = true;
 
-      if (rawVal.includes('<') || /&(?!amp;|lt;|gt;|quot;|apos;)/.test(rawVal)) {
+      if (
+        rawVal.includes('<') ||
+        /&(?!amp;|lt;|gt;|quot;|apos;|#\d+;|#x[0-9a-fA-F]+;)/.test(rawVal)
+      ) {
         throw new FiscalSuccessValidationError('Unsupported XML attribute entity');
       }
       // Decode XML entities
@@ -215,7 +225,19 @@ export function parseXmlStructure(xmlText: string): XmlNode {
 
       const text = sanitized.slice(pos, nextOpen).trim();
       if (text) {
-        node.content = (node.content ? node.content + ' ' : '') + text;
+        if (
+          text.includes('<') ||
+          /&(?!amp;|lt;|gt;|quot;|apos;|#\d+;|#x[0-9a-fA-F]+;)/.test(text)
+        ) {
+          throw new FiscalSuccessValidationError('Invalid XML text content or unescaped entity');
+        }
+        const decodedText = text
+          .replace(/&amp;/g, '&')
+          .replace(/&lt;/g, '<')
+          .replace(/&gt;/g, '>')
+          .replace(/&quot;/g, '"')
+          .replace(/&apos;/g, "'");
+        node.content = (node.content ? node.content + ' ' : '') + decodedText;
       }
       pos = nextOpen;
 
@@ -327,15 +349,42 @@ export function validateAndExtractTimbreFiscalDigital(
   }
   if (options?.expectedOriginalXml) {
     const original = parseXmlStructure(options.expectedOriginalXml);
-    const normalize = (n: XmlNode): unknown => [
-      n.name,
-      n.namespaceUri,
-      Object.entries(n.attributes)
-        .filter(([k]) => !k.startsWith('xmlns'))
-        .sort(),
-      n.content ?? '',
-      n.children.filter((c) => c.name !== 'Complemento').map(normalize),
-    ];
+    const normalize = (n: XmlNode): unknown => {
+      let children = n.children;
+      if (n.name === 'Comprobante') {
+        children = children.filter((c) => {
+          if (c.name === 'Complemento') {
+            const nonTfdChildren = c.children.filter(
+              (tc) =>
+                !(
+                  tc.name === 'TimbreFiscalDigital' &&
+                  tc.namespaceUri === 'http://www.sat.gob.mx/TimbreFiscalDigital'
+                ),
+            );
+            return nonTfdChildren.length > 0;
+          }
+          return true;
+        });
+      }
+      if (n.name === 'Complemento') {
+        children = children.filter(
+          (c) =>
+            !(
+              c.name === 'TimbreFiscalDigital' &&
+              c.namespaceUri === 'http://www.sat.gob.mx/TimbreFiscalDigital'
+            ),
+        );
+      }
+      return [
+        n.name,
+        n.namespaceUri ?? '',
+        Object.entries(n.attributes)
+          .filter(([k]) => !k.startsWith('xmlns'))
+          .sort(([a], [b]) => a.localeCompare(b)),
+        n.content ?? '',
+        children.map(normalize),
+      ];
+    };
     if (JSON.stringify(normalize(root)) !== JSON.stringify(normalize(original))) {
       throw new FiscalSuccessValidationError('Certified XML differs from submitted invoice');
     }
