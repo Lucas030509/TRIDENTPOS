@@ -7,12 +7,12 @@
   "preferred_evidence_backend": "GIT_SIDECAR",
   "allowed_evidence_backends": ["GIT_SIDECAR", "GITHUB_ATTESTATION", "CI_ARTIFACT"],
   "risk_policy": {
-    "default_class": "RC3",
+    "default_class": "RC2",
     "fast_track_enabled": true
   },
   "execution_budget": {
     "max_builder_iterations": 3,
-    "max_review_cycles": 3,
+    "max_review_cycles": 2,
     "max_same_blocker_recurrence": 1,
     "max_same_cause_ci_failures": 2,
     "max_architecture_reopens": 1,
