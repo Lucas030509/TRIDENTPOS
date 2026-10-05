@@ -63,7 +63,9 @@ Forced RC3/RC4 signals defined by EAAF v1.3 continue to apply; this profile only
 ### 2.3 CI is the primary evidence
 
 - Required CI checks (build, lint, typecheck, unit/integration tests, graph enforcement, security scan, migration dry-run) constitute Builder execution evidence. A green CI run on the PR head SHA replaces hand-written Builder evidence documents.
-- SHA binding is provided by the PR head SHA and the CI run ID. Reviewer verdicts are recorded as **PR reviews/comments** on that SHA (allowed backend `GITHUB_ATTESTATION` / `CI_ARTIFACT`); separate `evidence/*` sidecar branches become optional, not mandatory.
+- SHA binding is provided by the PR head SHA and the CI run ID.
+- Every reviewer verdict MUST be persisted in an allowed **immutable** EAAF v1.3 evidence backend (`GIT_SIDECAR`, `GITHUB_ATTESTATION` or `CI_ARTIFACT`) as a verdict artifact containing at least: subject SHA, reviewer agent ID, verdict, finding IDs and the SHA-256 digest of the artifact. A PR review or comment is a **notification only** and must link to that artifact; it is never evidence by itself.
+- One verdict artifact per reviewer per round (no per-finding or per-step sidecar commits).
 - One evidence summary per Work Package (`evidence/WP-XXX_SUMMARY.md`), written once at merge.
 
 ### 2.4 Blocking rule: "no reproducible defect, no block"
@@ -79,7 +81,8 @@ Evidence that cannot be produced in the Builder environment (e.g. physical PITR,
 ### 2.5 Review budget
 
 - Maximum **2** review rounds per WP (`max_review_cycles = 2`).
-- After round 2, any remaining non-reproduced finding becomes Governance Debt or an Advisory; a reproduced defect gets one targeted fix verified by the **same** reviewer only on the diff.
+- Round 2 verifies **only the diff** addressing round-1 findings, by the same reviewers.
+- After round 2, any remaining non-reproduced finding becomes Governance Debt or an Advisory. Any reproduced defect still open after round 2 stops the cycle with `DECISION REQUIRED` to the Product Owner; no further fix or review round occurs without an explicit, recorded human decision.
 - A canonical (merged) artifact is not re-reviewed unless a regression is demonstrated.
 - Historical accounting reconstruction (missing past fingerprints/ledgers) is closed as `ACCEPTED_UNVERIFIABLE`; counters restart cleanly under this profile from the canonical base above.
 

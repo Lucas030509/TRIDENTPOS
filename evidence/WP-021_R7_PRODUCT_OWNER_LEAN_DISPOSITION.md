@@ -29,7 +29,7 @@ Out of scope: PITR physical tests, populated native migration rehearsal, PAC sel
 |---|---|---|---|
 | GD-001 | SEC-WP021-R4-HIGH-02 | Fiscal stamping flag ON in any environment; Production Gate | Envelope/version preserved across native populated migration and physical PITR restore |
 | GD-002 | SEC-WP021-R4-HIGH-03 | Any DOWN migration in installed env; Production Gate | Native PostgreSQL multi-connection lock/RLS guard test on populated fiscal tables |
-| GD-003 | SEC-WP021-R4-HIGH-07 | Production Gate | Native REQ-75..92 suite incl. concurrency and PITR, all PASS |
+| GD-003 | SEC-WP021-R4-HIGH-07 | Fiscal stamping flag ON in any environment; Production Gate | Native REQ-75..92 suite incl. concurrency and PITR, all PASS |
 
 Eligibility (GOVERNANCE_DEBT.md §Eligibility): acceptance criteria are met with stamping disabled; limitations explicit in R6 evidence; no invariant requires immediate resolution because fiscal stamping is unreachable (flag OFF, no PAC, no production); dependent capabilities are explicitly blocked above.
 

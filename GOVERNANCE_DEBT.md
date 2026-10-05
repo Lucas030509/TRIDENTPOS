@@ -47,7 +47,7 @@ Governance Debt is not a substitute for PASS and cannot hide a mandatory gate fa
 - evidence: evidence/wp021-r6-security-review/WP021_R6_SECURITY_GATE.md
 - impact: production accreditation of fiscal recovery unproven
 - affected capabilities: WP-021 fiscal engine
-- blocking targets: Production Gate
+- blocking targets: fiscal stamping flag ON in any environment; Production Gate
 - non-blocking targets: merge of WP-021 to main with fiscal stamping flag OFF
 - owner: Product Owner; executor 09_QA_Test_Architect
 - exit criteria: native REQ-75..92 suite incl. concurrency and PITR all PASS
