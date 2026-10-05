@@ -133,9 +133,15 @@ import {
   CancellationPendingApprovalError,
   PacTimeoutError,
   EventContractIncompatibleError,
+  FiscalStampingDisabledError,
 } from '@trident/billing';
 
-import { getPool, withTenantTransaction, CloudIntegrationOutboxService } from '@trident/database';
+import {
+  getPool,
+  withTenantTransaction,
+  CloudIntegrationOutboxService,
+  CloudAuditLogger,
+} from '@trident/database';
 
 export interface CloudBillingCompositionService {
   createTaxScheme(command: CreateTaxSchemeCommand): Promise<TaxScheme>;
@@ -4599,6 +4605,8 @@ export class PostgresFinanceService implements CloudFinanceCompositionService {
 
 export class PostgresBillingService implements CloudBillingCompositionService {
   private readonly outboxService: CloudIntegrationOutboxService;
+  private readonly auditLogger: CloudAuditLogger;
+  private readonly isFiscalStampingEnabled: boolean;
 
   constructor(
     private readonly pool: pg.Pool = getPool(),
@@ -4607,8 +4615,21 @@ export class PostgresBillingService implements CloudBillingCompositionService {
     outboxService?: CloudIntegrationOutboxService,
     private readonly authorizationRegistry?: PacAuthorizationRegistry,
     private readonly fiscalSubscribers?: SubscriberDeclaration[],
+    fiscalStampingEnabled?: string | boolean,
+    auditLogger?: CloudAuditLogger,
   ) {
     this.outboxService = outboxService ?? new CloudIntegrationOutboxService();
+    this.auditLogger = auditLogger ?? new CloudAuditLogger(this.pool);
+
+    const configVal =
+      fiscalStampingEnabled !== undefined
+        ? fiscalStampingEnabled
+        : typeof process !== 'undefined'
+          ? process.env?.FISCAL_STAMPING_ENABLED
+          : undefined;
+
+    // OFF by default and fail-closed: must be strictly boolean true or string "true"
+    this.isFiscalStampingEnabled = configVal === true || configVal === 'true';
   }
 
   async createTaxScheme(command: CreateTaxSchemeCommand): Promise<TaxScheme> {
@@ -5271,6 +5292,28 @@ export class PostgresBillingService implements CloudBillingCompositionService {
             [command.organizationId, existingOp.id],
           );
         } else {
+          if (!this.isFiscalStampingEnabled) {
+            await this.auditLogger
+              .logAuditEvent({
+                organizationId: command.organizationId,
+                eventType: 'SECURITY_ALERT',
+                severity: 'WARN',
+                action: 'FISCAL_STAMPING_REJECTED',
+                entityName: 'FiscalInvoice',
+                entityId: command.invoiceId,
+                source: 'CLOUD',
+                metadata: {
+                  reason: 'FISCAL_STAMPING_DISABLED',
+                  killSwitch: 'OFF',
+                  operation: 'STAMP',
+                },
+              })
+              .catch(() => {});
+            throw new FiscalStampingDisabledError(
+              'FISCAL_STAMPING_DISABLED: Direct fiscal stamping is disabled by configuration (kill switch OFF)',
+            );
+          }
+
           const insertRes = await client.query<{ id: string }>(
             `INSERT INTO fiscal_stamping_operations (
                id, organization_id, branch_id, invoice_id, operation_type, idempotency_key, semantic_idempotency_key, request_hash, status, attempt_count
@@ -5930,6 +5973,28 @@ export class PostgresBillingService implements CloudBillingCompositionService {
             [command.organizationId, existingOp.id],
           );
         } else {
+          if (!this.isFiscalStampingEnabled) {
+            await this.auditLogger
+              .logAuditEvent({
+                organizationId: command.organizationId,
+                eventType: 'SECURITY_ALERT',
+                severity: 'WARN',
+                action: 'FISCAL_STAMPING_REJECTED',
+                entityName: 'FiscalInvoice',
+                entityId: command.invoiceId,
+                source: 'CLOUD',
+                metadata: {
+                  reason: 'FISCAL_STAMPING_DISABLED',
+                  killSwitch: 'OFF',
+                  operation: 'CANCEL',
+                },
+              })
+              .catch(() => {});
+            throw new FiscalStampingDisabledError(
+              'FISCAL_STAMPING_DISABLED: Direct fiscal cancellation is disabled by configuration (kill switch OFF)',
+            );
+          }
+
           const insertRes = await client.query<{ id: string }>(
             `INSERT INTO fiscal_stamping_operations (
                id, organization_id, branch_id, invoice_id, operation_type, idempotency_key, semantic_idempotency_key, request_hash, target_uuid, status, attempt_count
@@ -7138,5 +7203,6 @@ export {
   EventContractIncompatibleError,
   ConsumerRestoreDomainError,
   DestructiveDownMigrationError,
+  FiscalStampingDisabledError,
   SanitizedBillingError,
 } from '@trident/billing';

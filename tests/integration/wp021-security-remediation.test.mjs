@@ -942,6 +942,7 @@ async function fiscalComposition(pac = new MockPacConnector(undefined, createTes
     new Outbox(pool),
     signedTestRegistry(pac),
     [],
+    'true',
   );
   await service.configureEmisorFiscal({
     organizationId: tenant,

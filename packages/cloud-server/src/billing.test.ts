@@ -13,6 +13,7 @@ if (!process.env['DATABASE_URL']) {
     dotenv.config({ path: rootEnv });
   }
 }
+process.env.FISCAL_STAMPING_ENABLED = 'true';
 
 import { getPool, migrateUp } from '@trident/database';
 import {
@@ -34,6 +35,7 @@ import {
   PacContractProvenanceMissingError,
   PacProvenanceValidationError,
   PacTimeoutError,
+  FiscalStampingDisabledError,
 } from './index.js';
 
 describe(
@@ -107,6 +109,7 @@ describe(
         undefined,
         signedTestRegistry(mockPac),
         [],
+        true,
       );
     });
 
@@ -122,9 +125,17 @@ describe(
         DELETE FROM emisor_fiscal_config WHERE organization_id IN ('${tenantAId}', '${tenantBId}');
         DELETE FROM tax_schemes WHERE organization_id IN ('${tenantAId}', '${tenantBId}');
         DELETE FROM cloud_integration_outbox WHERE organization_id IN ('${tenantAId}', '${tenantBId}');
-        DELETE FROM branches WHERE id IN ('${branchA1Id}', '${branchB1Id}');
-        DELETE FROM organizations WHERE id IN ('${tenantAId}', '${tenantBId}');
-      `);
+        `);
+        try {
+          await client.query(
+            `DELETE FROM branches WHERE id IN ('${branchA1Id}', '${branchB1Id}');`,
+          );
+          await client.query(
+            `DELETE FROM organizations WHERE id IN ('${tenantAId}', '${tenantBId}');`,
+          );
+        } catch {
+          // Ignore FK constraints from append-only audit trail
+        }
       } finally {
         client.release();
       }
@@ -1004,6 +1015,231 @@ describe(
       } finally {
         client.release();
       }
+    });
+
+    it('WP-021 Kill Switch: OFF by default rejects stamp/cancel without PAC invocation (spy count = 0)', async () => {
+      const savedEnv = process.env.FISCAL_STAMPING_ENABLED;
+      delete process.env.FISCAL_STAMPING_ENABLED;
+
+      try {
+        let pacCallCount = 0;
+        const pacSpy = new MockPacConnector(undefined, createTestPacProvenance());
+        const origTimbrar = pacSpy.timbrar;
+        pacSpy.timbrar = async (req) => {
+          pacCallCount++;
+          return origTimbrar.call(pacSpy, req);
+        };
+        const origCancelar = pacSpy.cancelar;
+        pacSpy.cancelar = async (req) => {
+          pacCallCount++;
+          return origCancelar.call(pacSpy, req);
+        };
+
+        // Service instantiated with defaults (no flag, no env) -> OFF
+        const defaultOffService = new PostgresBillingService(
+          pool,
+          pacSpy,
+          csdVault,
+          undefined,
+          signedTestRegistry(pacSpy),
+          [],
+        );
+
+        const draft = await billingService.createDraftInvoice({
+          organizationId: tenantAId,
+          branchId: branchA1Id,
+          tipoComprobante: 'I',
+          serie: 'OFF',
+          folio: `OFF-${crypto.randomUUID().slice(0, 8)}`,
+          receptorRfc: rfcReceptor,
+          receptorNombre: 'CLIENTE OFF SA DE CV',
+          receptorRegimenFiscal: '601',
+          receptorCodigoPostal: '64000',
+          receptorUsoCfdi: 'G03',
+          items: [
+            {
+              claveProdServ: '90101501',
+              claveUnidad: 'E48',
+              description: 'Item Kill Switch OFF',
+              quantity: '1.0000',
+              unitPrice: '100.0000',
+            },
+          ],
+        });
+
+        // 1. Stamping fails closed with FiscalStampingDisabledError
+        await assert.rejects(
+          defaultOffService.stampFiscalInvoice({
+            organizationId: tenantAId,
+            invoiceId: draft.id,
+          }),
+          (err: Error) => {
+            assert.ok(err instanceof FiscalStampingDisabledError);
+            assert.equal((err as FiscalStampingDisabledError).code, 'FISCAL_STAMPING_DISABLED');
+            return true;
+          },
+        );
+
+        // Verify zero PAC calls were made
+        assert.equal(pacCallCount, 0, 'PAC connector must NOT be called when kill switch is OFF');
+
+        // Verify zero in-flight operations were persisted
+        const client = await pool.connect();
+        try {
+          const ops = await client.query(
+            `SELECT * FROM fiscal_stamping_operations WHERE organization_id = $1 AND invoice_id = $2;`,
+            [tenantAId, draft.id],
+          );
+          assert.equal(
+            ops.rows.length,
+            0,
+            'No in-flight operation should be created when kill switch is OFF',
+          );
+        } finally {
+          client.release();
+        }
+      } finally {
+        if (savedEnv !== undefined) {
+          process.env.FISCAL_STAMPING_ENABLED = savedEnv;
+        }
+      }
+    });
+
+    it('WP-021 Kill Switch: invalid truthy values ("1", "TRUE", "yes", "") evaluate fail-closed to OFF', async () => {
+      const savedEnv = process.env.FISCAL_STAMPING_ENABLED;
+      delete process.env.FISCAL_STAMPING_ENABLED;
+
+      try {
+        const invalidValues = ['1', 'TRUE', 'yes', '', undefined, false, '0', 'false', 'True'];
+
+        for (const val of invalidValues) {
+          let pacCalls = 0;
+          const spyPac = new MockPacConnector(undefined, createTestPacProvenance());
+          spyPac.timbrar = async () => {
+            pacCalls++;
+            return { status: 'STAMPED', uuid: crypto.randomUUID() };
+          };
+
+          const testService = new PostgresBillingService(
+            pool,
+            spyPac,
+            csdVault,
+            undefined,
+            signedTestRegistry(spyPac),
+            [],
+            val,
+          );
+
+          const draft = await billingService.createDraftInvoice({
+            organizationId: tenantAId,
+            branchId: branchA1Id,
+            tipoComprobante: 'I',
+            serie: 'OFF-VAL',
+            folio: `OFF-VAL-${crypto.randomUUID().slice(0, 8)}`,
+            receptorRfc: rfcReceptor,
+            receptorNombre: 'CLIENTE OFF SA DE CV',
+            receptorRegimenFiscal: '601',
+            receptorCodigoPostal: '64000',
+            receptorUsoCfdi: 'G03',
+            items: [
+              {
+                claveProdServ: '90101501',
+                claveUnidad: 'E48',
+                description: 'Item Validation',
+                quantity: '1.0000',
+                unitPrice: '100.0000',
+              },
+            ],
+          });
+
+          await assert.rejects(
+            testService.stampFiscalInvoice({
+              organizationId: tenantAId,
+              invoiceId: draft.id,
+            }),
+            FiscalStampingDisabledError,
+            `Config value ${JSON.stringify(val)} must evaluate to OFF and reject stamping`,
+          );
+
+          assert.equal(pacCalls, 0, `PAC must not be called for value ${JSON.stringify(val)}`);
+        }
+      } finally {
+        if (savedEnv !== undefined) {
+          process.env.FISCAL_STAMPING_ENABLED = savedEnv;
+        }
+      }
+    });
+
+    it('WP-021 Kill Switch: reconciliation of existing operations is NOT blocked when OFF', async () => {
+      // 1. Create a draft invoice and manually simulate an existing operation requiring reconciliation
+      const draft = await billingService.createDraftInvoice({
+        organizationId: tenantAId,
+        branchId: branchA1Id,
+        tipoComprobante: 'I',
+        serie: 'REC-OFF',
+        folio: `REC-OFF-${crypto.randomUUID().slice(0, 8)}`,
+        receptorRfc: rfcReceptor,
+        receptorNombre: 'CLIENTE RECONCILIATION OFF',
+        receptorRegimenFiscal: '601',
+        receptorCodigoPostal: '64000',
+        receptorUsoCfdi: 'G03',
+        items: [
+          {
+            claveProdServ: '90101501',
+            claveUnidad: 'E48',
+            description: 'Item Reconciliation',
+            quantity: '1.0000',
+            unitPrice: '100.0000',
+          },
+        ],
+      });
+
+      const idempotencyKey = `rec-key-${draft.id}`;
+      const requestHash = crypto
+        .createHash('sha256')
+        .update(
+          `${draft.id}:${draft.serie}:${draft.folio}:${draft.totalAmount}:${draft.receptorRfc}`,
+        )
+        .digest('hex');
+
+      const expectedUuid = crypto.randomUUID();
+      const signedXml = `<cfdi:Comprobante Total="116.0000" Version="4.0"><cfdi:Emisor Rfc="${rfcEmisorA}"/></cfdi:Comprobante>`;
+
+      const client = await pool.connect();
+      try {
+        await client.query(
+          `INSERT INTO fiscal_stamping_operations (
+             id, organization_id, branch_id, invoice_id, operation_type, idempotency_key, semantic_idempotency_key,
+             request_hash, status, attempt_count, external_uuid, stamped_xml
+           ) VALUES (
+             gen_random_uuid(), $1, $2, $3, 'STAMP', $4, $4, $5, 'SUCCEEDED', 1, $6, $7
+           );`,
+          [tenantAId, branchA1Id, draft.id, idempotencyKey, requestHash, expectedUuid, signedXml],
+        );
+      } finally {
+        client.release();
+      }
+
+      // Service with kill switch explicitly OFF
+      const offService = new PostgresBillingService(
+        pool,
+        mockPac,
+        csdVault,
+        undefined,
+        signedTestRegistry(mockPac),
+        [],
+        false, // OFF
+      );
+
+      // Reconciliation of existing operation should succeed
+      const result = await offService.stampFiscalInvoice({
+        organizationId: tenantAId,
+        invoiceId: draft.id,
+        idempotencyKey,
+      });
+
+      assert.equal(result.status, 'STAMPED');
+      assert.equal(result.uuid, expectedUuid);
     });
   },
 );

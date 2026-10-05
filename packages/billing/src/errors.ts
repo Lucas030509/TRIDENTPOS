@@ -267,6 +267,16 @@ export class CancellationPendingApprovalError extends BillingError {
   }
 }
 
+export class FiscalStampingDisabledError extends BillingError {
+  public readonly code: string = 'FISCAL_STAMPING_DISABLED';
+  constructor(
+    message: string = 'FISCAL_STAMPING_DISABLED: Direct fiscal stamping is disabled by configuration (kill switch OFF)',
+  ) {
+    super(message);
+    this.name = 'FiscalStampingDisabledError';
+  }
+}
+
 export class SanitizedBillingError extends BillingError {
   public readonly sanitizedMessage: string;
   public readonly errorCode: string;
