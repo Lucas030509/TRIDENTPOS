@@ -13,7 +13,8 @@
     }
   },
   "dependencies": {
-    "@trident/core": "*"
+    "@trident/core": "*",
+    "saxes": "6.0.0"
   },
   "scripts": {
     "build": "tsc -b",

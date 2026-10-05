@@ -187,3 +187,46 @@ jobs:
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/tridentpos_test
           WP021_SECURITY_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/tridentpos_test
+
+  native-postgres:
+    name: native-postgres
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Ensure PostgreSQL 16 binaries in PATH
+        run: |
+          if [ -d /usr/lib/postgresql/16/bin ]; then
+            echo "/usr/lib/postgresql/16/bin" >> $GITHUB_PATH
+          elif which initdb >/dev/null 2>&1; then
+            echo "PostgreSQL binaries already present in PATH"
+          else
+            sudo apt-get update && sudo apt-get install -y postgresql-16 postgresql-client-16
+            echo "/usr/lib/postgresql/16/bin" >> $GITHUB_PATH
+          fi
+
+      - name: Setup Node.js runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24.20.0'
+          cache: 'npm'
+
+      - name: Deterministic dependency install
+        run: npm ci
+
+      - name: Build monorepo packages
+        run: npm run build
+
+      - name: Run native physical PITR test
+        run: npm run test:native:pitr
+        env:
+          REQUIRE_NATIVE_PG: '1'
+
+      - name: Run native multi-connection concurrency test
+        run: npm run test:native:concurrency
+        env:
+          REQUIRE_NATIVE_PG: '1'
+

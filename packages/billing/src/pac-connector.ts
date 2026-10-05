@@ -578,15 +578,20 @@ export class MockPacConnector implements IPacConnector {
       .digest('base64');
     const noCertificadoSat = '30001000000500003416';
 
-    const stampedXml = this.behavior.simulateCorruptedStampXml
-      ? '<corrupted_xml_without_tfd></corrupted_xml_without_tfd>'
-      : xml.replace(
-          '</cfdi:Comprobante>',
-          `  <cfdi:Complemento>
-    <tfd:TimbreFiscalDigital xmlns:tfd="http://www.sat.gob.mx/TimbreFiscalDigital" xsi:schemaLocation="http://www.sat.gob.mx/TimbreFiscalDigital http://www.sat.gob.mx/sitio_internet/cfd/TimbreFiscalDigital/TimbreFiscalDigitalv11.xsd" Version="1.1" UUID="${stampedXmlUuid}" FechaTimbrado="${nowIso}" RfcProvCertif="SAT970701NN3" SelloCFD="mockSelloCfd" NoCertificadoSAT="${noCertificadoSat}" SelloSAT="${selloSat}"/>
-  </cfdi:Complemento>
-</cfdi:Comprobante>`,
-        );
+    let stampedXml: string;
+    if (this.behavior.simulateCorruptedStampXml) {
+      stampedXml = '<corrupted_xml_without_tfd></corrupted_xml_without_tfd>';
+    } else if (xml.includes('</cfdi:Complemento>')) {
+      stampedXml = xml.replace(
+        '</cfdi:Complemento>',
+        `<tfd:TimbreFiscalDigital xmlns:tfd="http://www.sat.gob.mx/TimbreFiscalDigital" xsi:schemaLocation="http://www.sat.gob.mx/TimbreFiscalDigital http://www.sat.gob.mx/sitio_internet/cfd/TimbreFiscalDigital/TimbreFiscalDigitalv11.xsd" Version="1.1" UUID="${stampedXmlUuid}" FechaTimbrado="${nowIso}" RfcProvCertif="SAT970701NN3" SelloCFD="mockSelloCfd" NoCertificadoSAT="${noCertificadoSat}" SelloSAT="${selloSat}"/></cfdi:Complemento>`,
+      );
+    } else {
+      stampedXml = xml.replace(
+        '</cfdi:Comprobante>',
+        `<cfdi:Complemento><tfd:TimbreFiscalDigital xmlns:tfd="http://www.sat.gob.mx/TimbreFiscalDigital" xsi:schemaLocation="http://www.sat.gob.mx/TimbreFiscalDigital http://www.sat.gob.mx/sitio_internet/cfd/TimbreFiscalDigital/TimbreFiscalDigitalv11.xsd" Version="1.1" UUID="${stampedXmlUuid}" FechaTimbrado="${nowIso}" RfcProvCertif="SAT970701NN3" SelloCFD="mockSelloCfd" NoCertificadoSAT="${noCertificadoSat}" SelloSAT="${selloSat}"/></cfdi:Complemento></cfdi:Comprobante>`,
+      );
+    }
 
     const result: PacStampResult = {
       status: 'STAMPED',

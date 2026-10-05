@@ -1,10 +1,12 @@
 /**
  * TRIDENTPOS Billing: Structural XML Parser and CFDI 4.0 Timbre Fiscal Digital Validator
- * Governed by ACR-2026-020 and SEC-WP021-R4-HIGH-04.
+ * Governed by ACR-2026-020, SEC-WP021-R4-HIGH-04, and EAAF Lean Delivery Profile.
  *
- * Implements full structural XML parsing without superficial regex/string.includes checks.
+ * Implements strict XML 1.0 compliant parsing with namespaces using saxes,
+ * ensuring zero-tolerance for malformed constructs, unescaped entities, or unbound prefixes.
  */
 
+import { SaxesParser } from 'saxes';
 import { FiscalSuccessValidationError } from './errors.js';
 
 export interface XmlNode {
@@ -15,6 +17,7 @@ export interface XmlNode {
   children: XmlNode[];
   content?: string;
   namespaceUri?: string;
+  orderedChildren?: Array<XmlNode | { text: string }>;
 }
 
 export interface TimbreFiscalDigitalData {
@@ -28,246 +31,109 @@ export interface TimbreFiscalDigitalData {
 }
 
 /**
- * Basic recursive-descent structural XML parser.
- * Validates well-formedness, tag nesting, attribute quotes, and namespace prefixes.
+ * Parses XML text into a structured AST using strict XML 1.0 saxes parser.
+ * Validates well-formedness, tag nesting, attribute quotes, entity encodings, and namespace bindings.
  */
 export function parseXmlStructure(xmlText: string): XmlNode {
   if (!xmlText || typeof xmlText !== 'string' || xmlText.trim().length === 0) {
     throw new FiscalSuccessValidationError('XML input is empty or not a string');
   }
 
-  if (Buffer.byteLength(xmlText, 'utf8') > 1024 * 1024 || /<!|<\?(?!xml\s)/.test(xmlText)) {
-    throw new FiscalSuccessValidationError('Unsupported XML construct or size limit');
-  }
-  // Strip XML declaration <?xml ...?> and comments <!-- ... -->
-  let sanitized = xmlText.trim();
-  if (sanitized.startsWith('<?xml')) {
-    const declEnd = sanitized.indexOf('?>');
-    if (declEnd === -1) {
-      throw new FiscalSuccessValidationError('Malformed XML declaration');
-    }
-    sanitized = sanitized.slice(declEnd + 2).trim();
+  if (Buffer.byteLength(xmlText, 'utf8') > 1024 * 1024) {
+    throw new FiscalSuccessValidationError('XML payload exceeds maximum size limit (1MB)');
   }
 
-  // Remove XML comments
-  sanitized = sanitized.replace(/<!--[\s\S]*?-->/g, '').trim();
-
-  let pos = 0;
-  const len = sanitized.length;
-
-  function parseAttributes(attrString: string): Record<string, string> {
-    const attrs: Record<string, string> = Object.create(null) as Record<string, string>;
-    let idx = 0;
-    const attrLen = attrString.length;
-    let hasSeenAttr = false;
-
-    while (idx < attrLen) {
-      // Skip whitespace
-      const wsStart = idx;
-      while (idx < attrLen && /\s/.test(attrString[idx]!)) idx++;
-      if (idx >= attrLen) break;
-
-      if (hasSeenAttr && idx === wsStart) {
-        throw new FiscalSuccessValidationError('Missing whitespace separating XML attributes');
-      }
-
-      // Extract attribute name
-      const nameStart = idx;
-      while (idx < attrLen && /[a-zA-Z0-9_:.-]/.test(attrString[idx]!)) idx++;
-      const attrName = attrString.slice(nameStart, idx);
-      if (
-        !attrName ||
-        !/^[A-Za-z_][A-Za-z0-9_.:-]*$/.test(attrName) ||
-        Object.prototype.hasOwnProperty.call(attrs, attrName)
-      ) {
-        throw new FiscalSuccessValidationError('Invalid or duplicate XML attribute');
-      }
-
-      // Skip whitespace around '='
-      while (idx < attrLen && /\s/.test(attrString[idx]!)) idx++;
-      if (idx >= attrLen || attrString[idx] !== '=') {
-        throw new FiscalSuccessValidationError('Invalid fiscal XML structure or identity');
-      }
-      idx++; // skip '='
-      while (idx < attrLen && /\s/.test(attrString[idx]!)) idx++;
-      if (idx >= attrLen) {
-        throw new FiscalSuccessValidationError('Invalid fiscal XML structure or identity');
-      }
-
-      const quote = attrString[idx];
-      if (quote !== '"' && quote !== "'") {
-        throw new FiscalSuccessValidationError('Invalid fiscal XML structure or identity');
-      }
-      idx++; // skip opening quote
-
-      const valStart = idx;
-      while (idx < attrLen && attrString[idx] !== quote) {
-        idx++;
-      }
-      if (idx >= attrLen) {
-        throw new FiscalSuccessValidationError('Invalid fiscal XML structure or identity');
-      }
-      const rawVal = attrString.slice(valStart, idx);
-      idx++; // skip closing quote
-      hasSeenAttr = true;
-
-      if (
-        rawVal.includes('<') ||
-        /&(?!amp;|lt;|gt;|quot;|apos;|#\d+;|#x[0-9a-fA-F]+;)/.test(rawVal)
-      ) {
-        throw new FiscalSuccessValidationError('Unsupported XML attribute entity');
-      }
-      // Decode XML entities
-      attrs[attrName] = rawVal
-        .replace(/&amp;/g, '&')
-        .replace(/&lt;/g, '<')
-        .replace(/&gt;/g, '>')
-        .replace(/&quot;/g, '"')
-        .replace(/&apos;/g, "'");
-    }
-
-    return attrs;
+  // Reject DTDs, external entity references, or forbidden processing instructions
+  if (/<!DOCTYPE|<!ENTITY|<\?xml-stylesheet/i.test(xmlText)) {
+    throw new FiscalSuccessValidationError('Unsupported XML construct or DTD reference');
   }
 
-  function parseNode(parentNamespaces: Record<string, string> = {}, depth = 0): XmlNode {
-    if (depth > 64) throw new FiscalSuccessValidationError('XML depth limit');
-    // Skip whitespace
-    while (pos < len && /\s/.test(sanitized[pos]!)) pos++;
-    if (pos >= len || sanitized[pos] !== '<') {
-      throw new FiscalSuccessValidationError('Invalid fiscal XML structure or identity');
+  const parser = new SaxesParser({
+    xmlns: true,
+    position: true,
+    fileName: 'cfdi.xml',
+  });
+
+  let root: XmlNode | null = null;
+  const stack: XmlNode[] = [];
+  let rootCount = 0;
+  let parseError: Error | null = null;
+
+  parser.on('error', (err: Error) => {
+    if (!parseError) {
+      parseError = err;
+    }
+  });
+
+  parser.on('opentag', (tag) => {
+    if (parseError) return;
+
+    const attributes: Record<string, string> = Object.create(null);
+    for (const [attrName, attrObj] of Object.entries(tag.attributes)) {
+      attributes[attrName] = attrObj.value;
     }
 
-    pos++; // skip '<'
-    if (pos < len && sanitized[pos] === '/') {
-      throw new FiscalSuccessValidationError('Invalid fiscal XML structure or identity');
-    }
-
-    // Read tag name and attributes
-    const tagContentStart = pos;
-    let inQuotes: string | null = null;
-    while (pos < len) {
-      const ch = sanitized[pos]!;
-      if (inQuotes) {
-        if (ch === inQuotes) inQuotes = null;
-      } else {
-        if (ch === '"' || ch === "'") inQuotes = ch;
-        else if (ch === '>') break;
-      }
-      pos++;
-    }
-
-    if (pos >= len) {
-      throw new FiscalSuccessValidationError('Unterminated XML tag');
-    }
-
-    const tagContent = sanitized.slice(tagContentStart, pos).trim();
-    pos++; // skip '>'
-
-    const isSelfClosing = tagContent.endsWith('/');
-    const cleanTagContent = isSelfClosing ? tagContent.slice(0, -1).trim() : tagContent;
-
-    const spaceIdx = cleanTagContent.search(/\s/);
-    let fullTagName: string;
-    let attrStr = '';
-    if (spaceIdx === -1) {
-      fullTagName = cleanTagContent;
-    } else {
-      fullTagName = cleanTagContent.slice(0, spaceIdx);
-      attrStr = cleanTagContent.slice(spaceIdx);
-    }
-
-    if (!/^[A-Za-z_][A-Za-z0-9_.-]*(?::[A-Za-z_][A-Za-z0-9_.-]*)?$/.test(fullTagName)) {
-      throw new FiscalSuccessValidationError('Invalid XML element name');
-    }
-    const prefixMatch = fullTagName.match(/^([a-zA-Z0-9_-]+):([a-zA-Z0-9_-]+)$/);
-    const prefix = prefixMatch ? prefixMatch[1] : undefined;
-    const name = prefixMatch ? prefixMatch[2]! : fullTagName;
-
-    const attributes = parseAttributes(attrStr);
-    const namespaces: Record<string, string> = { ...parentNamespaces };
-    for (const [key, value] of Object.entries(attributes)) {
-      if (key === 'xmlns') namespaces[''] = value;
-      else if (key.startsWith('xmlns:')) namespaces[key.slice(6)] = value;
-    }
-    if (prefix && !namespaces[prefix]) throw new FiscalSuccessValidationError('Unbound XML prefix');
-    const expandedAttributes = new Set<string>();
-    for (const key of Object.keys(attributes)) {
-      if (key === 'xmlns' || key.startsWith('xmlns:')) continue;
-      const parts = key.split(':');
-      if (parts.length > 2 || (parts.length === 2 && !namespaces[parts[0]!])) {
-        throw new FiscalSuccessValidationError('Invalid XML attribute namespace');
-      }
-      const expanded = parts.length === 2 ? `${namespaces[parts[0]!]}:${parts[1]}` : key;
-      if (expandedAttributes.has(expanded))
-        throw new FiscalSuccessValidationError('Duplicate expanded attribute');
-      expandedAttributes.add(expanded);
-    }
     const node: XmlNode = {
-      tag: fullTagName,
-      namespaceUri: namespaces[prefix ?? ''],
-      name,
-      prefix,
+      tag: tag.name,
+      name: tag.local,
+      prefix: tag.prefix ? tag.prefix : undefined,
+      namespaceUri: tag.uri ? tag.uri : undefined,
       attributes,
       children: [],
+      orderedChildren: [],
     };
 
-    if (isSelfClosing) {
-      return node;
+    if (stack.length === 0) {
+      rootCount++;
+      if (rootCount > 1) {
+        parseError = new Error('Multiple root elements detected');
+        return;
+      }
+      root = node;
+    } else {
+      const parent = stack[stack.length - 1]!;
+      parent.children.push(node);
+      parent.orderedChildren!.push(node);
     }
 
-    // Parse children or text content until closing tag
-    while (pos < len) {
-      // Check for closing tag
-      const nextOpen = sanitized.indexOf('<', pos);
-      if (nextOpen === -1) {
-        throw new FiscalSuccessValidationError('Invalid fiscal XML structure or identity');
-      }
+    stack.push(node);
+  });
 
-      const text = sanitized.slice(pos, nextOpen).trim();
-      if (text) {
-        if (
-          text.includes('<') ||
-          /&(?!amp;|lt;|gt;|quot;|apos;|#\d+;|#x[0-9a-fA-F]+;)/.test(text)
-        ) {
-          throw new FiscalSuccessValidationError('Invalid XML text content or unescaped entity');
-        }
-        const decodedText = text
-          .replace(/&amp;/g, '&')
-          .replace(/&lt;/g, '<')
-          .replace(/&gt;/g, '>')
-          .replace(/&quot;/g, '"')
-          .replace(/&apos;/g, "'");
-        node.content = (node.content ? node.content + ' ' : '') + decodedText;
-      }
-      pos = nextOpen;
-
-      if (sanitized.slice(pos).startsWith('</')) {
-        pos += 2;
-        const closeEnd = sanitized.indexOf('>', pos);
-        if (closeEnd === -1) {
-          throw new FiscalSuccessValidationError('Invalid fiscal XML structure or identity');
-        }
-        const closingTag = sanitized.slice(pos, closeEnd).trim();
-        if (closingTag !== fullTagName) {
-          throw new FiscalSuccessValidationError('Invalid fiscal XML structure or identity');
-        }
-        pos = closeEnd + 1;
-        return node;
-      }
-
-      // Parse child node
-      const child = parseNode(namespaces, depth + 1);
-      node.children.push(child);
+  const handleText = (text: string) => {
+    if (parseError || stack.length === 0) return;
+    const current = stack[stack.length - 1]!;
+    current.content = (current.content ? current.content : '') + text;
+    const ordered = current.orderedChildren!;
+    const last = ordered[ordered.length - 1];
+    if (last && 'text' in last) {
+      last.text += text;
+    } else {
+      ordered.push({ text });
     }
+  };
 
-    throw new FiscalSuccessValidationError('Invalid fiscal XML structure or identity');
+  parser.on('text', handleText);
+  parser.on('cdata', handleText);
+
+  parser.on('closetag', () => {
+    if (parseError) return;
+    stack.pop();
+  });
+
+  try {
+    parser.write(xmlText).close();
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new FiscalSuccessValidationError(`Invalid fiscal XML structure or identity: ${message}`);
   }
 
-  const root = parseNode();
+  if (parseError) {
+    throw new FiscalSuccessValidationError(
+      `Invalid fiscal XML structure or identity: ${(parseError as Error).message}`,
+    );
+  }
 
-  // Ensure no trailing unparsed tags
-  while (pos < len && /\s/.test(sanitized[pos]!)) pos++;
-  if (pos < len) {
+  if (!root || stack.length > 0 || rootCount !== 1) {
     throw new FiscalSuccessValidationError('Invalid fiscal XML structure or identity');
   }
 
@@ -294,8 +160,67 @@ export function findNodesByName(root: XmlNode, name: string): XmlNode[] {
 const UUID_REGEX = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
 /**
+ * Produces a canonical tree representation comparing elements, attributes, namespaces,
+ * and the exact ordered sequence of children (elements and text nodes, including mixed content).
+ */
+function canonicalizeNode(
+  node: XmlNode,
+  isStamped: boolean,
+  originalHadComplement: boolean,
+): unknown {
+  const canonicalOrdered: unknown[] = [];
+  const ordered = node.orderedChildren ?? node.children;
+
+  for (const item of ordered) {
+    if ('text' in item) {
+      canonicalOrdered.push(['#text', item.text]);
+    } else {
+      const child = item as XmlNode;
+      // When canonicalizing stamped document, strip the authoritative TimbreFiscalDigital
+      if (
+        isStamped &&
+        child.name === 'TimbreFiscalDigital' &&
+        child.namespaceUri === 'http://www.sat.gob.mx/TimbreFiscalDigital'
+      ) {
+        continue;
+      }
+
+      // If the original document had no Complemento element and removing the TFD leaves
+      // the stamped Complemento empty of element children, omit the added Complemento container.
+      if (
+        isStamped &&
+        child.name === 'Complemento' &&
+        child.namespaceUri === 'http://www.sat.gob.mx/cfd/4' &&
+        !originalHadComplement
+      ) {
+        const nonTfdChildren = child.children.filter(
+          (c) =>
+            !(
+              c.name === 'TimbreFiscalDigital' &&
+              c.namespaceUri === 'http://www.sat.gob.mx/TimbreFiscalDigital'
+            ),
+        );
+        if (nonTfdChildren.length === 0) {
+          continue;
+        }
+      }
+
+      canonicalOrdered.push(canonicalizeNode(child, isStamped, originalHadComplement));
+    }
+  }
+
+  // Sort attributes deterministically by namespace URI and local name, excluding xmlns declarations
+  const sortedAttributes = Object.entries(node.attributes)
+    .filter(([k]) => !k.startsWith('xmlns'))
+    .sort(([a], [b]) => a.localeCompare(b));
+
+  return [node.name, node.namespaceUri ?? '', sortedAttributes, canonicalOrdered];
+}
+
+/**
  * Validates that stamped XML is structurally valid, contains a valid CFDI 4.0 Comprobante
- * and authoritative TimbreFiscalDigital, and extracts verified metadata.
+ * and authoritative TimbreFiscalDigital, compares byte-for-byte structural fidelity against
+ * expectedOriginalXml (allowing only the insertion of 1 valid TFD), and extracts verified metadata.
  */
 export function validateAndExtractTimbreFiscalDigital(
   stampedXml: string,
@@ -311,7 +236,7 @@ export function validateAndExtractTimbreFiscalDigital(
 
   const root = parseXmlStructure(stampedXml);
 
-  // 1. Root must be Comprobante
+  // 1. Root must be Comprobante in CFDI 4.0 namespace
   if (root.name !== 'Comprobante' || root.namespaceUri !== 'http://www.sat.gob.mx/cfd/4') {
     throw new FiscalSuccessValidationError('Invalid fiscal XML structure or identity');
   }
@@ -339,56 +264,32 @@ export function validateAndExtractTimbreFiscalDigital(
   const complements = root.children.filter(
     (n) => n.name === 'Complemento' && n.namespaceUri === 'http://www.sat.gob.mx/cfd/4',
   );
+
   if (
-    complements.length !== 1 ||
-    !complements[0]!.children.includes(timbre) ||
+    complements.length === 0 ||
+    !complements.some((comp) => comp.children.includes(timbre)) ||
     timbre.name !== 'TimbreFiscalDigital' ||
     timbre.namespaceUri !== 'http://www.sat.gob.mx/TimbreFiscalDigital'
   ) {
     throw new FiscalSuccessValidationError('Invalid TFD namespace or placement');
   }
+
+  // 3. Complete structural comparison against expectedOriginalXml
   if (options?.expectedOriginalXml) {
     const original = parseXmlStructure(options.expectedOriginalXml);
-    const normalize = (n: XmlNode): unknown => {
-      let children = n.children;
-      if (n.name === 'Comprobante') {
-        children = children.filter((c) => {
-          if (c.name === 'Complemento') {
-            const nonTfdChildren = c.children.filter(
-              (tc) =>
-                !(
-                  tc.name === 'TimbreFiscalDigital' &&
-                  tc.namespaceUri === 'http://www.sat.gob.mx/TimbreFiscalDigital'
-                ),
-            );
-            return nonTfdChildren.length > 0;
-          }
-          return true;
-        });
-      }
-      if (n.name === 'Complemento') {
-        children = children.filter(
-          (c) =>
-            !(
-              c.name === 'TimbreFiscalDigital' &&
-              c.namespaceUri === 'http://www.sat.gob.mx/TimbreFiscalDigital'
-            ),
-        );
-      }
-      return [
-        n.name,
-        n.namespaceUri ?? '',
-        Object.entries(n.attributes)
-          .filter(([k]) => !k.startsWith('xmlns'))
-          .sort(([a], [b]) => a.localeCompare(b)),
-        n.content ?? '',
-        children.map(normalize),
-      ];
-    };
-    if (JSON.stringify(normalize(root)) !== JSON.stringify(normalize(original))) {
+    const originalHasComplement = original.children.some(
+      (c) => c.name === 'Complemento' && c.namespaceUri === 'http://www.sat.gob.mx/cfd/4',
+    );
+
+    const canonicalStamped = canonicalizeNode(root, true, originalHasComplement);
+    const canonicalOriginal = canonicalizeNode(original, false, originalHasComplement);
+
+    if (JSON.stringify(canonicalStamped) !== JSON.stringify(canonicalOriginal)) {
       throw new FiscalSuccessValidationError('Certified XML differs from submitted invoice');
     }
   }
+
+  // 4. Validate TimbreFiscalDigital attributes
   const uuid = timbre.attributes['UUID'] ?? timbre.attributes['uuid'];
   const fechaTimbrado = timbre.attributes['FechaTimbrado'] ?? timbre.attributes['fechaTimbrado'];
   const rfcProvCertif = timbre.attributes['RfcProvCertif'] ?? timbre.attributes['rfcProvCertif'];
@@ -399,7 +300,11 @@ export function validateAndExtractTimbreFiscalDigital(
     timbre.attributes['noCertificadoSAT'] ??
     timbre.attributes['noCertificadoSat'];
   const version = timbre.attributes['Version'];
-  if (version !== '1.1') throw new FiscalSuccessValidationError('TFD version must be 1.1');
+
+  if (version !== '1.1') {
+    throw new FiscalSuccessValidationError('TFD version must be 1.1');
+  }
+
   const selloCfd = timbre.attributes['SelloCFD'] ?? timbre.attributes['selloCFD'];
 
   if (!uuid || !UUID_REGEX.test(uuid)) {

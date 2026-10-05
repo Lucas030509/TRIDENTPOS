@@ -5305,10 +5305,20 @@ export class PostgresBillingService implements CloudBillingCompositionService {
                 metadata: {
                   reason: 'FISCAL_STAMPING_DISABLED',
                   killSwitch: 'OFF',
-                  operation: 'STAMP',
                 },
               })
-              .catch(() => {});
+              .catch((err: unknown) => {
+                process.stderr.write(
+                  JSON.stringify({
+                    level: 'error',
+                    event: 'FISCAL_KILL_SWITCH_AUDIT_FAILED',
+                    operation: 'STAMP',
+                    organizationId: command.organizationId,
+                    invoiceId: command.invoiceId,
+                    error: err instanceof Error ? err.message : String(err),
+                  }) + '\n',
+                );
+              });
             throw new FiscalStampingDisabledError(
               'FISCAL_STAMPING_DISABLED: Direct fiscal stamping is disabled by configuration (kill switch OFF)',
             );
@@ -5986,10 +5996,20 @@ export class PostgresBillingService implements CloudBillingCompositionService {
                 metadata: {
                   reason: 'FISCAL_STAMPING_DISABLED',
                   killSwitch: 'OFF',
-                  operation: 'CANCEL',
                 },
               })
-              .catch(() => {});
+              .catch((err: unknown) => {
+                process.stderr.write(
+                  JSON.stringify({
+                    level: 'error',
+                    event: 'FISCAL_KILL_SWITCH_AUDIT_FAILED',
+                    operation: 'CANCEL',
+                    organizationId: command.organizationId,
+                    invoiceId: command.invoiceId,
+                    error: err instanceof Error ? err.message : String(err),
+                  }) + '\n',
+                );
+              });
             throw new FiscalStampingDisabledError(
               'FISCAL_STAMPING_DISABLED: Direct fiscal cancellation is disabled by configuration (kill switch OFF)',
             );

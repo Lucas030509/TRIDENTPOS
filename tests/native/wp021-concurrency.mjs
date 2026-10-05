@@ -11,8 +11,15 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const rootDir = path.resolve(__dirname, '..', '..');
 
-// Ensure PATH includes Homebrew binaries
-const extraPaths = ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin'];
+// Ensure PATH includes common PostgreSQL 16 locations (Linux package & Homebrew)
+const extraPaths = [
+  '/usr/lib/postgresql/16/bin',
+  '/opt/homebrew/opt/postgresql@16/bin',
+  '/opt/homebrew/bin',
+  '/usr/local/bin',
+  '/usr/bin',
+  '/bin',
+];
 for (const p of extraPaths) {
   if (fs.existsSync(p) && !process.env.PATH?.includes(p)) {
     process.env.PATH = `${p}:${process.env.PATH || ''}`;
@@ -39,6 +46,12 @@ const requiredBinaries = ['initdb', 'pg_ctl', 'psql'];
 const missingBinaries = requiredBinaries.filter((b) => !findBinary(b));
 
 if (missingBinaries.length > 0) {
+  if (process.env.REQUIRE_NATIVE_PG === '1') {
+    console.error(
+      `FATAL: Missing required PostgreSQL binaries for native concurrency test (REQUIRE_NATIVE_PG=1): ${missingBinaries.join(', ')}`,
+    );
+    process.exit(1);
+  }
   console.log(`NOT EXECUTED: Missing required PostgreSQL binaries: ${missingBinaries.join(', ')}`);
   process.exit(0);
 }

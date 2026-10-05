@@ -12,6 +12,7 @@ import {
   assertEventContractEvolution,
   generateFiscalSemanticEventId,
   validateAndExtractTimbreFiscalDigital,
+  parseXmlStructure,
   FiscalErrorSanitizer,
   type PacContractProvenance,
   type PacCapabilityName,
@@ -401,6 +402,50 @@ describe('XML and error abuse regression', () => {
       validateAndExtractTimbreFiscalDigital(
         '<cfdi:Comprobante xmlns:cfdi="http://www.sat.gob.mx/cfd/4" Version="4.0">Unescaped & in text</cfdi:Comprobante>',
       ),
+    );
+  });
+
+  it('SEC-PR61-R1-HIGH-04: Enforces strict XML 1.0 well-formedness and rejects mixed content tampering (5 repro cases)', () => {
+    const root = '<cfdi:Comprobante xmlns:cfdi="http://www.sat.gob.mx/cfd/4" Version="4.0">';
+    const tfd =
+      '<tfd:TimbreFiscalDigital xmlns:tfd="http://www.sat.gob.mx/TimbreFiscalDigital" Version="1.1" UUID="12345678-1234-4123-a123-123456789abc" FechaTimbrado="2026-10-05T10:00:00" RfcProvCertif="AAA010101AAA" SelloSAT="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" NoCertificadoSAT="12345678901234567890"/>';
+    const original = root + '</cfdi:Comprobante>';
+
+    // Case 1 (control): valid CFDI + TFD with expectedOriginalXml -> ACCEPTED
+    const controlXml = root + '<cfdi:Complemento>' + tfd + '</cfdi:Complemento></cfdi:Comprobante>';
+    assert.doesNotThrow(() =>
+      validateAndExtractTimbreFiscalDigital(controlXml, { expectedOriginalXml: original }),
+    );
+
+    // Case 2 (malformed_certified): whitespace between < and tag name in certified XML -> REJECTED
+    const malformedCertified =
+      root.replace('<cfdi:', '< cfdi:') +
+      '<cfdi:Complemento>' +
+      tfd +
+      '</cfdi:Complemento></cfdi:Comprobante>';
+    assert.throws(() =>
+      validateAndExtractTimbreFiscalDigital(malformedCertified, {
+        expectedOriginalXml: original,
+      }),
+    );
+
+    // Case 3 (malformed_input numeric null entity &#0;) -> REJECTED
+    assert.throws(() => parseXmlStructure('<Root a="&#0;"/>'));
+
+    // Case 4 (malformed_input space after open angle bracket < Root/>) -> REJECTED
+    assert.throws(() => parseXmlStructure('< Root/>'));
+
+    // Case 5 (mixed_content_relocation): relocated mixed text around child element -> REJECTED
+    const before =
+      root +
+      '<cfdi:Complemento><p:Data xmlns:p="urn:example">before<p:Child/>after</p:Data></cfdi:Complemento></cfdi:Comprobante>';
+    const after =
+      root +
+      '<cfdi:Complemento><p:Data xmlns:p="urn:example">before after<p:Child/></p:Data>' +
+      tfd +
+      '</cfdi:Complemento></cfdi:Comprobante>';
+    assert.throws(() =>
+      validateAndExtractTimbreFiscalDigital(after, { expectedOriginalXml: before }),
     );
   });
 
