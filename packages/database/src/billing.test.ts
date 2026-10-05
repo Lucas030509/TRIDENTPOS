@@ -76,7 +76,12 @@ describe('TRIDENTPOS WP-021 Billing & Fiscal Invoicing Database Suite', { concur
       await initClient.query(`
         DROP TABLE IF EXISTS consumer_restore_pending_markers, consumer_inbox_events, fiscal_stamping_operations, lotes_facturacion_global, fiscal_invoice_items, fiscal_invoices, emisor_fiscal_config, tax_schemes CASCADE;
         DROP FUNCTION IF EXISTS protect_fiscal_event_envelope, protect_fiscal_outbox_envelope CASCADE;
-        DELETE FROM _migrations WHERE id IN ('20260905030000','20261001000000','20261002000000') OR name = 'billing_fiscal_invoicing';
+        DO $$
+        BEGIN
+          IF to_regclass('_migrations') IS NOT NULL THEN
+            DELETE FROM _migrations WHERE id IN ('20260905030000','20261001000000','20261002000000') OR name = 'billing_fiscal_invoicing';
+          END IF;
+        END $$;
       `);
     } finally {
       initClient.release();
