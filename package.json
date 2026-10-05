@@ -17,6 +17,8 @@
     "typecheck": "turbo run typecheck",
     "lint": "turbo run lint",
     "test:integration": "node --test tests/integration/**/*.test.mjs",
+    "test:native:pitr": "node tests/native/wp021-pitr.mjs",
+    "test:native:concurrency": "node tests/native/wp021-concurrency.mjs",
     "test": "turbo run test && npm run test:integration",
     "db:migrate": "npm run --workspace=@trident/database migrate",
     "db:migrate:down": "npm run --workspace=@trident/database migrate:down",
