@@ -69,6 +69,7 @@ describe('TRIDENTPOS WP-012 Cloud Transactional Outbox & Ingested Idempotency En
       if (!orgCheck.rows[0]?.reg) {
         await prepClient.query(`
           DROP TABLE IF EXISTS
+            consumer_restore_pending_markers,
             consumer_inbox_events,
             fiscal_stamping_operations,
             lotes_facturacion_global,

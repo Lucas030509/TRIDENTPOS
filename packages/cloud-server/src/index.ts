@@ -6644,6 +6644,7 @@ export interface ProcessEventWithInboxOptions {
   requiredFields?: string[];
   effectMode?: 'TRANSACTIONAL_SQL' | 'EXTERNAL';
   verifyEffect?: (client: pg.PoolClient) => Promise<boolean>;
+  isReconciliation?: boolean;
 }
 
 export interface DurableFiscalReplayEvent {
@@ -6694,6 +6695,87 @@ export class ConsumerInboxService {
     private readonly pool: pg.Pool = getPool(),
     private readonly restorePolicy?: ConsumerRestorePolicy,
   ) {}
+
+  async markConsumerRestorePending(
+    organizationId: string,
+    consumerContext: string,
+    client?: pg.PoolClient,
+  ): Promise<void> {
+    if (
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(organizationId) ||
+      !consumerContext ||
+      consumerContext.length > 100
+    ) {
+      throw new EventContractIncompatibleError('Invalid consumer restore identity');
+    }
+    const run = async (c: pg.PoolClient) => {
+      await c.query(
+        `INSERT INTO consumer_restore_pending_markers
+         (organization_id, consumer_context, created_at)
+         VALUES ($1, $2, NOW())
+         ON CONFLICT (organization_id, consumer_context) DO NOTHING;`,
+        [organizationId, consumerContext],
+      );
+    };
+    if (client) {
+      await run(client);
+    } else {
+      await withTenantTransaction(this.pool, organizationId, run);
+    }
+  }
+
+  async clearConsumerRestorePending(
+    organizationId: string,
+    consumerContext: string,
+    client?: pg.PoolClient,
+  ): Promise<void> {
+    if (
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(organizationId) ||
+      !consumerContext ||
+      consumerContext.length > 100
+    ) {
+      throw new EventContractIncompatibleError('Invalid consumer restore identity');
+    }
+    const run = async (c: pg.PoolClient) => {
+      await c.query(
+        `DELETE FROM consumer_restore_pending_markers
+         WHERE organization_id = $1 AND consumer_context = $2;`,
+        [organizationId, consumerContext],
+      );
+    };
+    if (client) {
+      await run(client);
+    } else {
+      await withTenantTransaction(this.pool, organizationId, run);
+    }
+  }
+
+  async hasConsumerRestorePending(
+    organizationId: string,
+    consumerContext: string,
+    client?: pg.PoolClient,
+  ): Promise<boolean> {
+    if (
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(organizationId) ||
+      !consumerContext ||
+      consumerContext.length > 100
+    ) {
+      return false;
+    }
+    const run = async (c: pg.PoolClient) => {
+      const res = await c.query(
+        `SELECT 1 FROM consumer_restore_pending_markers
+         WHERE organization_id = $1 AND consumer_context = $2;`,
+        [organizationId, consumerContext],
+      );
+      return res.rows.length > 0;
+    };
+    if (client) {
+      return run(client);
+    } else {
+      return withTenantTransaction(this.pool, organizationId, run);
+    }
+  }
 
   async processEventWithInbox<T>(
     organizationId: string,
@@ -6766,6 +6848,19 @@ export class ConsumerInboxService {
       ],
     });
     return withTenantTransaction(this.pool, organizationId, async (client) => {
+      if (!details?.isReconciliation) {
+        const markerCheck = await client.query(
+          `SELECT 1 FROM consumer_restore_pending_markers
+           WHERE organization_id = $1 AND consumer_context = $2;`,
+          [organizationId, consumerContext],
+        );
+        if (markerCheck.rows.length > 0) {
+          throw new EventContractIncompatibleError(
+            'BLOCKED: consumer restore reconciliation pending',
+          );
+        }
+      }
+
       // Insert before mutation: the unique key serializes concurrent duplicate deliveries.
       // This reservation is rolled back together with any failed handler.
       const reservation = await client.query(
@@ -6932,10 +7027,21 @@ export class ConsumerInboxService {
           payload: event.payload,
           effectMode,
           verifyEffect: (client) => plan.verifyEffect(client, event),
+          isReconciliation: true,
         },
       );
       if (result.processed) reconciledCount++;
     }
+
+    // Clear pending restore marker only after successful verification of all events in the interval
+    await withTenantTransaction(this.pool, organizationId, async (client) => {
+      await client.query(
+        `DELETE FROM consumer_restore_pending_markers
+         WHERE organization_id = $1 AND consumer_context = $2;`,
+        [organizationId, consumerContext],
+      );
+    });
+
     return { reconciledCount };
   }
 }

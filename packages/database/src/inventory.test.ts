@@ -77,6 +77,7 @@ describe('TRIDENTPOS WP-017 Inventory & Recipes Database Suite', () => {
       if (!orgCheck.rows[0]?.reg) {
         await prepClient.query(`
           DROP TABLE IF EXISTS
+            consumer_restore_pending_markers,
             consumer_inbox_events,
             fiscal_stamping_operations,
             lotes_facturacion_global,

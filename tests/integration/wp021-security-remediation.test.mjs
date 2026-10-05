@@ -70,6 +70,14 @@ const additive = parseMigrationFile(
     ),
   ),
 );
+const restoreMarkerMigration = parseMigrationFile(
+  fileURLToPath(
+    new URL(
+      '../../packages/database/migrations/20261002000000_wp021_consumer_restore_marker.sql',
+      import.meta.url,
+    ),
+  ),
+);
 const source = {
   async readInterval() {
     return {
@@ -103,7 +111,9 @@ const plan = () => ({
 const count = async () =>
   Number((await pool.query('SELECT count(*)::int AS n FROM test_effects')).rows[0].n);
 const clearConsumer = async () =>
-  pool.query('DELETE FROM test_effects; DELETE FROM consumer_inbox_events;');
+  pool.query(
+    'DELETE FROM test_effects; DELETE FROM consumer_inbox_events; DELETE FROM consumer_restore_pending_markers;',
+  );
 before(async () => {
   if (!enabled) return;
   if (process.env.WP021_TEST_DATABASE_ADAPTER) {
@@ -152,6 +162,7 @@ before(async () => {
   );
   await pool.query(original.upSql);
   await pool.query(additive.upSql);
+  await pool.query(restoreMarkerMigration.upSql);
   await pool.query(
     `INSERT INTO fiscal_invoices (id,organization_id,branch_id,series,folio,customer_tax_id,customer_name,customer_regimen_fiscal,customer_postal_code,cfdi_use,payment_method,payment_way,subtotal,tax_total,total_amount,status)
     VALUES ($1,$2,$3,'F','1','AAA010101AAA','Customer','601','06000','G03','PUE','01',100,16,116,'STAMPED');`,
@@ -431,6 +442,184 @@ sqlTest(
     );
     assert.equal(called, false);
     assert.equal(await inbox.getProcessedEventCount(tenant, context), 0);
+  },
+);
+
+sqlTest(
+  'A4: active restore pending marker blocks processEventWithInbox fail-closed and prevents handler execution',
+  async () => {
+    await clearConsumer();
+    await inbox.markConsumerRestorePending(tenant, context);
+    assert.equal(await inbox.hasConsumerRestorePending(tenant, context), true);
+
+    let handlerCalled = false;
+    await assert.rejects(
+      inbox.processEventWithInbox(
+        tenant,
+        context,
+        id,
+        event.eventKind,
+        async (c) => {
+          handlerCalled = true;
+          return handler(c, event);
+        },
+        { eventContractVersion: '1.0', effectMode: 'TRANSACTIONAL_SQL', payload },
+      ),
+      /BLOCKED: consumer restore reconciliation pending/,
+    );
+    assert.equal(handlerCalled, false);
+    assert.equal(await count(), 0);
+    assert.equal(await inbox.isEventProcessed(tenant, context, id), false);
+    await clearConsumer();
+  },
+);
+
+sqlTest(
+  'A4: successful reconcileConsumerRestore clears pending marker, proves effect, and subsequent delivery returns duplicate=true',
+  async () => {
+    await clearConsumer();
+    // Simulate consumer restore condition: mark restore pending
+    await inbox.markConsumerRestorePending(tenant, context);
+    assert.equal(await inbox.hasConsumerRestorePending(tenant, context), true);
+
+    // Normal processing blocked while marker active
+    await assert.rejects(
+      inbox.processEventWithInbox(tenant, context, id, event.eventKind, (c) => handler(c, event), {
+        eventContractVersion: '1.0',
+        effectMode: 'TRANSACTIONAL_SQL',
+        payload,
+      }),
+      /BLOCKED: consumer restore reconciliation pending/,
+    );
+
+    // Reconcile consumer restore with verifyEffect
+    const result = await inbox.reconcileConsumerRestore(tenant, context, [event], plan());
+    assert.equal(result.reconciledCount, 1);
+    assert.equal(await inbox.hasConsumerRestorePending(tenant, context), false);
+    assert.equal(await count(), 1);
+
+    // Subsequent re-delivery with cleared marker returns duplicate: true without executing mutation again
+    let duplicateMutationCalled = false;
+    const replayResult = await inbox.processEventWithInbox(
+      tenant,
+      context,
+      id,
+      event.eventKind,
+      async (c) => {
+        duplicateMutationCalled = true;
+        return handler(c, event);
+      },
+      { eventContractVersion: '1.0', effectMode: 'TRANSACTIONAL_SQL', payload },
+    );
+    assert.equal(replayResult.duplicate, true);
+    assert.equal(replayResult.processed, false);
+    assert.equal(duplicateMutationCalled, false);
+    assert.equal(await count(), 1);
+    await clearConsumer();
+  },
+);
+
+sqlTest(
+  'A4: multi-tenant isolation ensures pending restore marker on Org A does not block Org B',
+  async () => {
+    await clearConsumer();
+    const otherContext = 'finance-other-context';
+    const otherId = generateFiscalSemanticEventId(
+      other,
+      crypto.randomUUID(),
+      'FacturaFiscalEmitida',
+    );
+    const otherInvoice = crypto.randomUUID();
+    const otherPayload = {
+      semanticEventId: otherId,
+      eventContractVersion: '1.0',
+      invoiceId: otherInvoice,
+      uuid: crypto.randomUUID(),
+      totalAmount: '250.0000',
+    };
+    const otherEvent = {
+      organizationId: other,
+      semanticEventId: otherId,
+      eventKind: 'FacturaFiscalEmitida',
+      eventContractVersion: '1.0',
+      effectMode: 'TRANSACTIONAL_SQL',
+      payload: otherPayload,
+    };
+
+    // Mark Org A as restore pending
+    await inbox.markConsumerRestorePending(tenant, context);
+    assert.equal(await inbox.hasConsumerRestorePending(tenant, context), true);
+    assert.equal(await inbox.hasConsumerRestorePending(other, otherContext), false);
+
+    // Org A is blocked
+    await assert.rejects(
+      inbox.processEventWithInbox(tenant, context, id, event.eventKind, (c) => handler(c, event), {
+        eventContractVersion: '1.0',
+        effectMode: 'TRANSACTIONAL_SQL',
+        payload,
+      }),
+      /BLOCKED: consumer restore reconciliation pending/,
+    );
+
+    // Org B processes normally without hindrance
+    const orgBResult = await inbox.processEventWithInbox(
+      other,
+      otherContext,
+      otherId,
+      otherEvent.eventKind,
+      (c) => handler(c, otherEvent),
+      { eventContractVersion: '1.0', effectMode: 'TRANSACTIONAL_SQL', payload: otherPayload },
+    );
+    assert.equal(orgBResult.processed, true);
+    assert.equal(orgBResult.duplicate, false);
+
+    // Verify Org B effect is present and Org A has no effects
+    const orgBEffect = await pool.query(
+      'SELECT amount FROM test_effects WHERE organization_id = $1 AND semantic_event_id = $2',
+      [other, otherId],
+    );
+    assert.equal(orgBEffect.rows.length, 1);
+    assert.equal(orgBEffect.rows[0].amount, '250.0000');
+
+    await clearConsumer();
+  },
+);
+
+sqlTest(
+  'A4: failed reconciliation preserves pending marker fail-closed and prevents normal delivery',
+  async () => {
+    await clearConsumer();
+    // Simulate inbox row exists but effect is missing (consumer-only restore defect)
+    await inbox.processEventWithInbox(
+      tenant,
+      context,
+      id,
+      event.eventKind,
+      (c) => handler(c, event),
+      { eventContractVersion: '1.0', effectMode: 'TRANSACTIONAL_SQL', payload },
+    );
+    await pool.query('DELETE FROM test_effects;'); // Effect lost
+    await inbox.markConsumerRestorePending(tenant, context);
+
+    // Reconcile fails because verifyEffect fails (effect missing)
+    await assert.rejects(
+      inbox.reconcileConsumerRestore(tenant, context, [event], plan()),
+      /restore inconsistency/,
+    );
+
+    // Marker MUST remain active
+    assert.equal(await inbox.hasConsumerRestorePending(tenant, context), true);
+
+    // Normal processing remains blocked fail-closed
+    await assert.rejects(
+      inbox.processEventWithInbox(tenant, context, id, event.eventKind, (c) => handler(c, event), {
+        eventContractVersion: '1.0',
+        effectMode: 'TRANSACTIONAL_SQL',
+        payload,
+      }),
+      /BLOCKED: consumer restore reconciliation pending/,
+    );
+    await clearConsumer();
   },
 );
 sqlTest(

@@ -74,9 +74,9 @@ describe('TRIDENTPOS WP-021 Billing & Fiscal Invoicing Database Suite', { concur
     const initClient = await pool.connect();
     try {
       await initClient.query(`
-        DROP TABLE IF EXISTS consumer_inbox_events, fiscal_stamping_operations, lotes_facturacion_global, fiscal_invoice_items, fiscal_invoices, emisor_fiscal_config, tax_schemes CASCADE;
+        DROP TABLE IF EXISTS consumer_restore_pending_markers, consumer_inbox_events, fiscal_stamping_operations, lotes_facturacion_global, fiscal_invoice_items, fiscal_invoices, emisor_fiscal_config, tax_schemes CASCADE;
         DROP FUNCTION IF EXISTS protect_fiscal_event_envelope, protect_fiscal_outbox_envelope CASCADE;
-        DELETE FROM _migrations WHERE id IN ('20260905030000','20261001000000') OR name = 'billing_fiscal_invoicing';
+        DELETE FROM _migrations WHERE id IN ('20260905030000','20261001000000','20261002000000') OR name = 'billing_fiscal_invoicing';
       `);
     } finally {
       initClient.release();
@@ -413,6 +413,8 @@ describe('TRIDENTPOS WP-021 Billing & Fiscal Invoicing Database Suite', { concur
       DELETE FROM consumer_inbox_events;
     `);
 
+    const restoreMarkerDown = await migrateDown(pool, { allowDestructiveDown: true });
+    assert.equal(restoreMarkerDown.reverted, '20261002000000_wp021_consumer_restore_marker');
     const envelopeDown = await migrateDown(pool, { allowDestructiveDown: true });
     assert.equal(envelopeDown.reverted, '20261001000000_wp021_security_event_integrity');
     const downResult = await migrateDown(pool, { allowDestructiveDown: true });
