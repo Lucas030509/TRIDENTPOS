@@ -49,7 +49,11 @@ describe('TRIDENTPOS WP-015: EscPosPrinterClient', () => {
     // "out of paper" application-level reply.
     const server = net.createServer((socket) => {
       socket.on('data', () => {
-        socket.resetAndDestroy ? socket.resetAndDestroy() : socket.destroy();
+        if (socket.resetAndDestroy) {
+          socket.resetAndDestroy();
+        } else {
+          socket.destroy();
+        }
       });
     });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
