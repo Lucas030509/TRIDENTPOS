@@ -45,7 +45,7 @@ TRIDENTPOS adopts the framework module `framework/LEAN_DELIVERY_PROFILE.md` (EAA
 - Server-side authorization, tenant isolation (RLS / FORCE RLS), no secrets in code/logs/frontend.
 - Idempotency for retryable critical writes; append-only ledgers; audit for critical actions.
 - Protected `main`, PR required, CI required checks, secret/dependency/security scanning.
-- Production Gate (`04_PRODUCTION_GATE`) before any staging or production enablement.
+- `STAGING_GATE` before staging enablement and Production Gate (`04_PRODUCTION_GATE`) before production enablement, including RC4 staging/runtime evidence.
 - Builder ≠ Reviewer independence for RC3/RC4.
 - `DECISION REQUIRED` / `SECURITY BLOCK` stop conditions for real architecture or security breaks.
 
@@ -76,7 +76,10 @@ A reviewer may issue BLOCK/HOLD only for:
 2. a violated non-negotiable invariant (§2.1) demonstrable from code, or
 3. a missing test for an explicit acceptance criterion of the WP.
 
-Evidence that cannot be produced in the Builder environment (e.g. physical PITR, native multi-node concurrency, real PAC behavior) is recorded as `NOT EXECUTED` and routed to **Governance Debt with a blocking target at the Production Gate**, not as a merge blocker — provided the capability ships disabled (feature flag OFF) or is not reachable in production.
+Evidence not yet executed follows profile §5:
+
+- **Pending evidence never declared blocking by a Gate** may become Governance Debt targeting the later Gate that requires it (`STAGING_GATE`/`PRODUCTION_GATE`), only with the capability disabled and a named exit test.
+- **Evidence a Gate already declared blocking** (`HOLD`/`BLOCK`) cannot be converted to debt by the Product Owner or the Orchestrator. It stops blocking merge only if the same Gate closes or re-scopes it in a new verdict on a new SHA, or through formal human risk acceptance under `HUMAN_DECISION_GATES.md` acknowledged by that Gate. Containment controls alone never lift a `HOLD`.
 
 ### 2.5 Review budget
 
@@ -92,7 +95,7 @@ An ACR is required only when changing an approved decision (ADR, data contract, 
 
 ### 2.7 Roadmap re-sequencing
 
-1. Close WP-021 under the bounded R7 disposition (separate evidence record) and merge with fiscal stamping kill switch **OFF**.
+1. Close WP-021 through an independent Security Gate PASS on the R7 candidate (bounded disposition, separate evidence record) and merge with fiscal stamping kill switch **OFF**.
 2. **WP-026A → 026B → 026C → 026D** (Native POS UI: shell, salón/orden, KDS, caja/cobro) over the existing canonical backend — first end-to-end usable flow.
 3. WP-016 (cash/shifts) as required by 026D.
 4. WP-022 (CRM), WP-023 (Delivery), WP-024 (Backoffice), WP-025 (Comandero) after the first usable flow, in that order unless the Product Owner reprioritizes.
@@ -128,7 +131,7 @@ If any critical escaped defect appears in RC3/RC4 areas, the Product Owner may r
 ## 5. Consequences
 
 - Positive: fewer cycles, parallel reviews, CI-based evidence, earliest usable product.
-- Negative: some production-grade evidence (native PITR, real PAC) moves from merge time to the Production Gate. Mitigated by feature flags OFF and the Production Gate remaining unchanged.
+- Negative: evidence that no Gate has declared blocking (e.g. real PAC behavior) may move from merge time to `STAGING_GATE`/`PRODUCTION_GATE` (profile §5.A). Evidence a Gate already declared blocking stays blocking until that Gate closes or re-scopes it (§5.B). Mitigated by feature flags OFF and both Gates remaining unchanged.
 - Neutral: framework, ADRs and architecture untouched.
 
 ## 6. Formal status
