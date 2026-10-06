@@ -1,0 +1,32 @@
+▶ TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Integration Suite (DEC-017)
+  ✔ WP016-INT-01: Full REST Lifecycle: Apertura -> Operadores -> Movimientos -> Arqueo Ciego -> Corte Z (con identidad enrolled) (115.983604ms)
+  ✔ WP016-INT-02 (BLK-05): Double close blocked by OCC: two closes against same version -> one 200, second 409 OCC without second corte or event (11.141619ms)
+  ✔ WP016-INT-03 (BLK-04): Simulated real crash during Corte Z transaction with DB reopen guarantees all-or-nothing atomicity (4.088031ms)
+  ✔ WP016-INT-04 (BLK-03): Fail-closed: sin stationId enrolado rechaza con 400 y no acepta stationId del body (5.192641ms)
+  ✔ WP016-INT-04B (ADV-01 & BLK-03): Foreign tenant/station identities rejected with 403 without leaking enrolled IDs in messages (4.826312ms)
+  ✔ WP016-INT-07 (BLK-01): Operator PIN is MANDATORY on each movement/charge: missing or invalid PIN -> 401 rejection with 0 movements persisted (6.066004ms)
+  ✔ WP016-INT-08 (BLK-02): Instance enrolled in Station A cannot operate or view a shift of Station B (returns 404 SHIFT_NOT_FOUND, zero existence leaked) (6.209058ms)
+  ✔ WP016-INT-09 (BLK Data): Simultaneous shifts: max ONE active shift per station; SQLite partial unique index + service check enforce one 201 and one 409 (6.576851ms)
+  ✔ WP016-INT-10 (ADV-02): Arqueo Ciego secrecy: blind count does not disclose calculated cash total prior to registering declared cash (5.779793ms)
+  ✔ WP016-INT-05: El esquema de outbox_queue y audit_trail es canónico sin importar orden de inicialización (3.742502ms)
+  ✔ WP016-INT-06: ADR-012: Monto mayor a 2^53 / 10^4 sobrevive ida y vuelta en SQLite sin pérdida de precisión (2.270291ms)
+✔ TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Integration Suite (DEC-017) (173.47508ms)
+▶ TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Domain Suite (DEC-017)
+  ✔ WP016-DOM-00: Fail-closed when tenant identity (organizationId or branchId) is missing (1.137329ms)
+  ✔ WP016-DOM-01: Abre turno con fondo inicial y asignación compartida (DEC-017) (1.519703ms)
+  ✔ WP016-DOM-02: Agrega operadores participantes a turno compartido (DEC-017) (0.355965ms)
+  ✔ WP016-DOM-03: Rechaza movimientos de operador no participante (0.380952ms)
+  ✔ WP016-DOM-04: Cálculo exacto de cuadre de caja con desglose por operador (ADR-012) (0.661934ms)
+  ✔ WP016-DOM-05: Arqueo Ciego captura efectivo declarado antes de calcular descuadre (0.386551ms)
+  ✔ WP016-DOM-06: Corte Z congela el turno permanentemente y previene doble cierre o mutación (0.75899ms)
+  ✔ WP016-DOM-07: OCC Conflict detection on stale versions (0.307762ms)
+  ✔ WP016-DOM-08: Mandatory operator PIN validation when validator is configured (0.476797ms)
+✔ TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Domain Suite (DEC-017) (7.141109ms)
+ℹ tests 20
+ℹ suites 2
+ℹ pass 20
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 372.130272
