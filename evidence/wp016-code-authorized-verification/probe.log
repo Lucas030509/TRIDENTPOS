@@ -1,0 +1,3 @@
+PASS constructor rejects missing/null pinValidator
+PASS all six routes reject unconfigured service
+PASS real adapter wiring delegates IAM; missing/empty/invalid PIN -> 401, zero movements
