@@ -4,7 +4,7 @@
  * Enforces canonical fixed-four-decimal transport format and OCC conflict resolution.
  */
 
-import Fastify, { FastifyInstance } from 'fastify';
+import Fastify, { FastifyInstance, FastifyReply } from 'fastify';
 import {
   decimalStringToScaledBigInt,
   isValidUuidV4,
@@ -38,6 +38,7 @@ export interface FastifyAppOptions {
   readonly outbox: EdgeOutboxPersistence;
   readonly organizationId: string;
   readonly branchId: string;
+  readonly stationId?: string;
   readonly cashShiftRepository?: CashShiftRepositoryPort;
   readonly cashShiftService?: CashShiftDomainService;
   readonly shiftAssignmentStrategy?: ShiftAssignmentStrategy;
@@ -487,12 +488,54 @@ export async function createPosFastifyApp(options: FastifyAppOptions): Promise<F
   // Cash Management & Shifts API (WP-016 / DEC-017)
   // ==========================================
 
+  function validateEnrolledTenantAndStation(
+    body: { organizationId?: string; branchId?: string; stationId?: string } | undefined,
+    reply: FastifyReply,
+  ): boolean {
+    const enrolledOrgId = options.organizationId;
+    const enrolledBranchId = options.branchId;
+
+    if (!enrolledOrgId || !enrolledBranchId) {
+      reply.status(400).send({
+        error: 'MISSING_TENANT_IDENTITY',
+        message: 'Missing mandatory enrolled tenant identity: organizationId, branchId',
+      });
+      return false;
+    }
+
+    if (body?.organizationId && body.organizationId !== enrolledOrgId) {
+      reply.status(403).send({
+        error: 'TENANT_MISMATCH',
+        message: `organizationId '${body.organizationId}' does not match enrolled edge tenant '${enrolledOrgId}'`,
+      });
+      return false;
+    }
+
+    if (body?.branchId && body.branchId !== enrolledBranchId) {
+      reply.status(403).send({
+        error: 'TENANT_MISMATCH',
+        message: `branchId '${body.branchId}' does not match enrolled edge branch '${enrolledBranchId}'`,
+      });
+      return false;
+    }
+
+    if (options.stationId && body?.stationId && body.stationId !== options.stationId) {
+      reply.status(403).send({
+        error: 'STATION_MISMATCH',
+        message: `stationId '${body.stationId}' does not match enrolled edge station '${options.stationId}'`,
+      });
+      return false;
+    }
+
+    return true;
+  }
+
   // POST /turnos/apertura
   app.post('/turnos/apertura', async (req, reply) => {
     const body = req.body as {
       organizationId?: string;
       branchId?: string;
-      stationId: string;
+      stationId?: string;
       responsibleUserId: string;
       openedByUserId?: string;
       openingCashFloat: string; // Scale-4 DecimalString (e.g. "500.0000")
@@ -500,17 +543,18 @@ export async function createPosFastifyApp(options: FastifyAppOptions): Promise<F
       operatorPin?: string;
     };
 
-    const organizationId = body?.organizationId ?? options.organizationId;
-    const branchId = body?.branchId ?? options.branchId;
-
-    if (!organizationId || !branchId) {
-      return reply.status(400).send({
-        error: 'MISSING_TENANT_IDENTITY',
-        message: 'Missing mandatory tenant identity: organizationId, branchId',
-      });
+    if (!validateEnrolledTenantAndStation(body, reply)) {
+      return;
     }
 
-    if (!body?.stationId || !body?.responsibleUserId || body?.openingCashFloat === undefined) {
+    const organizationId = options.organizationId;
+    const branchId = options.branchId;
+
+    // TODO(WP-026A): Station enrolled identity is bound at edge startup in WP-026A (session in main).
+    // If options.stationId is exposed by the edge, enforce and use it; otherwise fallback to body.stationId.
+    const stationId = options.stationId ?? body?.stationId;
+
+    if (!stationId || !body?.responsibleUserId || body?.openingCashFloat === undefined) {
       return reply.status(400).send({
         error: 'MISSING_FIELDS',
         message: 'Missing mandatory fields: stationId, responsibleUserId, openingCashFloat',
@@ -522,7 +566,7 @@ export async function createPosFastifyApp(options: FastifyAppOptions): Promise<F
     const turno = await shiftService.abrirTurno({
       organizationId,
       branchId,
-      stationId: body.stationId,
+      stationId,
       responsibleUserId: body.responsibleUserId,
       openedByUserId: body.openedByUserId,
       openingCashFloat,
@@ -539,12 +583,19 @@ export async function createPosFastifyApp(options: FastifyAppOptions): Promise<F
   app.post('/turnos/:id/operadores', async (req, reply) => {
     const { id } = req.params as { id: string };
     const body = req.body as {
+      organizationId?: string;
+      branchId?: string;
+      stationId?: string;
       operatorUserId: string;
       addedByUserId: string;
       expectedVersion: number;
       operatorPin?: string;
       requestingPin?: string;
     };
+
+    if (!validateEnrolledTenantAndStation(body, reply)) {
+      return;
+    }
 
     if (
       !id ||
@@ -576,6 +627,9 @@ export async function createPosFastifyApp(options: FastifyAppOptions): Promise<F
   app.post('/turnos/:id/movimientos', async (req, reply) => {
     const { id } = req.params as { id: string };
     const body = req.body as {
+      organizationId?: string;
+      branchId?: string;
+      stationId?: string;
       operatorUserId: string;
       movementType: MovimientoCaja['movementType'];
       amount: string; // Scale-4 DecimalString
@@ -584,6 +638,10 @@ export async function createPosFastifyApp(options: FastifyAppOptions): Promise<F
       expectedVersion: number;
       operatorPin?: string;
     };
+
+    if (!validateEnrolledTenantAndStation(body, reply)) {
+      return;
+    }
 
     if (
       !id ||
@@ -623,9 +681,16 @@ export async function createPosFastifyApp(options: FastifyAppOptions): Promise<F
   app.post('/turnos/:id/corte-x', async (req, reply) => {
     const { id } = req.params as { id: string };
     const body = req.body as {
+      organizationId?: string;
+      branchId?: string;
+      stationId?: string;
       requestedByUserId: string;
       requestedByPin?: string;
     };
+
+    if (!validateEnrolledTenantAndStation(body, reply)) {
+      return;
+    }
 
     if (!id || !body?.requestedByUserId) {
       return reply.status(400).send({
@@ -649,11 +714,18 @@ export async function createPosFastifyApp(options: FastifyAppOptions): Promise<F
   app.post('/turnos/:id/arqueo', async (req, reply) => {
     const { id } = req.params as { id: string };
     const body = req.body as {
+      organizationId?: string;
+      branchId?: string;
+      stationId?: string;
       performedByUserId: string;
       declaredCash: string; // Scale-4 DecimalString
       expectedVersion: number;
       performedByPin?: string;
     };
+
+    if (!validateEnrolledTenantAndStation(body, reply)) {
+      return;
+    }
 
     if (
       !id ||
@@ -687,10 +759,17 @@ export async function createPosFastifyApp(options: FastifyAppOptions): Promise<F
   app.post('/turnos/:id/corte-z', async (req, reply) => {
     const { id } = req.params as { id: string };
     const body = req.body as {
+      organizationId?: string;
+      branchId?: string;
+      stationId?: string;
       closedByUserId: string;
       expectedVersion: number;
       closedByPin?: string;
     };
+
+    if (!validateEnrolledTenantAndStation(body, reply)) {
+      return;
+    }
 
     if (!id || !body?.closedByUserId || body.expectedVersion === undefined) {
       return reply.status(400).send({

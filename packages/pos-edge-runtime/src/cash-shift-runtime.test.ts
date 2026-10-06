@@ -377,6 +377,96 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Integration S
     );
   });
 
+  it('WP016-INT-04B: Tenant & Station Mismatch: foreign identities rejected with 403 and zero side-effects; missing identity uses enrolled', async () => {
+    const app = await createPosFastifyApp({
+      edgeDb,
+      outbox,
+      organizationId: 'ORG_ENROLLED',
+      branchId: 'BRANCH_ENROLLED',
+      stationId: 'STATION_ENROLLED',
+    });
+
+    // 1. Body with foreign organizationId -> 403 TENANT_MISMATCH, zero shift created
+    const resForeignOrg = await app.inject({
+      method: 'POST',
+      url: '/turnos/apertura',
+      payload: {
+        organizationId: 'ORG_ATTACKER',
+        branchId: 'BRANCH_ENROLLED',
+        stationId: 'STATION_ENROLLED',
+        responsibleUserId: 'USER_01',
+        openingCashFloat: '100.0000',
+      },
+    });
+    assert.equal(resForeignOrg.statusCode, 403);
+    const bodyForeignOrg = JSON.parse(resForeignOrg.body);
+    assert.equal(bodyForeignOrg.error, 'TENANT_MISMATCH');
+
+    const shiftsCountAfterOrg = edgeDb.queryRowSafe<{ count: number | bigint }>(
+      'SELECT count(*) AS count FROM turnos_caja;',
+    );
+    assert.equal(BigInt(shiftsCountAfterOrg?.count ?? 0), 0n);
+
+    // 2. Body with foreign branchId -> 403 TENANT_MISMATCH, zero shift created
+    const resForeignBranch = await app.inject({
+      method: 'POST',
+      url: '/turnos/apertura',
+      payload: {
+        organizationId: 'ORG_ENROLLED',
+        branchId: 'BRANCH_ATTACKER',
+        stationId: 'STATION_ENROLLED',
+        responsibleUserId: 'USER_01',
+        openingCashFloat: '100.0000',
+      },
+    });
+    assert.equal(resForeignBranch.statusCode, 403);
+    const bodyForeignBranch = JSON.parse(resForeignBranch.body);
+    assert.equal(bodyForeignBranch.error, 'TENANT_MISMATCH');
+
+    // 3. Body with foreign stationId -> 403 STATION_MISMATCH, zero shift created
+    const resForeignStation = await app.inject({
+      method: 'POST',
+      url: '/turnos/apertura',
+      payload: {
+        stationId: 'STATION_ATTACKER',
+        responsibleUserId: 'USER_01',
+        openingCashFloat: '100.0000',
+      },
+    });
+    assert.equal(resForeignStation.statusCode, 403);
+    const bodyForeignStation = JSON.parse(resForeignStation.body);
+    assert.equal(bodyForeignStation.error, 'STATION_MISMATCH');
+
+    // 4. Body without organizationId / branchId / stationId -> uses enrolled identity successfully
+    const resEnrolled = await app.inject({
+      method: 'POST',
+      url: '/turnos/apertura',
+      payload: {
+        responsibleUserId: 'USER_01',
+        openingCashFloat: '100.0000',
+      },
+    });
+    assert.equal(resEnrolled.statusCode, 201);
+    const shiftData = JSON.parse(resEnrolled.body).turno;
+    assert.equal(shiftData.organizationId, 'ORG_ENROLLED');
+    assert.equal(shiftData.branchId, 'BRANCH_ENROLLED');
+    assert.equal(shiftData.stationId, 'STATION_ENROLLED');
+
+    // 5. Subsequent shift endpoint (/operadores) rejects foreign organizationId with 403
+    const resOpMismatch = await app.inject({
+      method: 'POST',
+      url: `/turnos/${shiftData.id}/operadores`,
+      payload: {
+        organizationId: 'ORG_ATTACKER',
+        operatorUserId: 'USER_02',
+        addedByUserId: 'USER_01',
+        expectedVersion: shiftData.version,
+      },
+    });
+    assert.equal(resOpMismatch.statusCode, 403);
+    assert.equal(JSON.parse(resOpMismatch.body).error, 'TENANT_MISMATCH');
+  });
+
   it('WP016-INT-05: El esquema de outbox_queue y audit_trail es canónico sin importar orden de inicialización', async () => {
     // Orden A: Inicializar caja repo antes que edge outbox
     const tmpDirA = fs.mkdtempSync(path.join(os.tmpdir(), 'wp016-order-a-'));
