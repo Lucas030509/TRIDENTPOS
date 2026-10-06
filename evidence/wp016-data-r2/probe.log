@@ -1,0 +1,7 @@
+PASS concurrent HTTP openings: [ 201, 409 ]
+PASS concurrent HTTP closes: [ 200, 409 ] one corte, one event
+PASS SIGKILL/reopen shift {"version":2,"counts":[0,0,0]}
+PASS SIGKILL/reopen corte {"version":2,"counts":[0,0,0]}
+PASS SIGKILL/reopen audit {"version":2,"counts":[0,0,0]}
+PASS SIGKILL/reopen outbox {"version":2,"counts":[0,0,0]}
+PASS SIGKILL/reopen committed {"version":3,"counts":[1,1,1]}
