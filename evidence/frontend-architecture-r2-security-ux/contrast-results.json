@@ -1,0 +1,121 @@
+{
+  "document_sha256": "e0fc12f330fbb85e016d393ef54ef6b50c1b73891dfb975d66949ea280517179",
+  "results": [
+    {
+      "theme": "light",
+      "state": "success",
+      "soft": "#E3F0E8",
+      "strong": "#166534",
+      "ratio": 6.076196615621051,
+      "on_surface": 7.130310076434003
+    },
+    {
+      "theme": "light",
+      "state": "warning",
+      "soft": "#F6EAE1",
+      "strong": "#92400E",
+      "ratio": 6.001199887161795,
+      "on_surface": 7.090048300172369
+    },
+    {
+      "theme": "light",
+      "state": "danger",
+      "soft": "#F7E4E4",
+      "strong": "#991B1B",
+      "ratio": 6.795436804494025,
+      "on_surface": 8.310050481211189
+    },
+    {
+      "theme": "light",
+      "state": "info",
+      "soft": "#E4EAFA",
+      "strong": "#1E40AF",
+      "ratio": 7.247222272266464,
+      "on_surface": 8.722410784954462
+    },
+    {
+      "theme": "light",
+      "state": "brand",
+      "soft": "#E2ECEE",
+      "strong": "#0C4A5A",
+      "ratio": 8.151340725510982,
+      "on_surface": 9.800346806683828
+    },
+    {
+      "theme": "dark",
+      "state": "success",
+      "soft": "#1A3338",
+      "strong": "#86EFAC",
+      "ratio": 9.498526667060633,
+      "on_surface": 12.107188696358365
+    },
+    {
+      "theme": "dark",
+      "state": "warning",
+      "soft": "#30302D",
+      "strong": "#FDE68A",
+      "ratio": 10.62959745643007,
+      "on_surface": 13.650357081113231
+    },
+    {
+      "theme": "dark",
+      "state": "danger",
+      "soft": "#2F2636",
+      "strong": "#FECACA",
+      "ratio": 10.000978274314019,
+      "on_surface": 11.750394314006504
+    },
+    {
+      "theme": "dark",
+      "state": "info",
+      "soft": "#232E47",
+      "strong": "#C7D7FE",
+      "ratio": 9.386611779350433,
+      "on_surface": 11.802623084724742
+    },
+    {
+      "theme": "dark",
+      "state": "brand",
+      "soft": "#1B3043",
+      "strong": "#A5E8F3",
+      "ratio": 9.956396946910102,
+      "on_surface": 12.49636282184228
+    },
+    {
+      "theme": "light",
+      "border": "#64748B",
+      "bg": "#FFFFFF",
+      "ratio": 4.758842787868665
+    },
+    {
+      "theme": "light",
+      "border": "#64748B",
+      "bg": "#F8FAFC",
+      "ratio": 4.548363604249586
+    },
+    {
+      "theme": "light",
+      "border": "#64748B",
+      "bg": "#F1F5F9",
+      "ratio": 4.343923406321175
+    },
+    {
+      "theme": "dark",
+      "border": "#7C8BA1",
+      "bg": "#141C2E",
+      "ratio": 4.909511259884544
+    },
+    {
+      "theme": "dark",
+      "border": "#7C8BA1",
+      "bg": "#0B1220",
+      "ratio": 5.407149135092853
+    },
+    {
+      "theme": "dark",
+      "border": "#7C8BA1",
+      "bg": "#1E293B",
+      "ratio": 4.224708667827112
+    }
+  ]
+}
