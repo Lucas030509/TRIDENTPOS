@@ -3,13 +3,20 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { spawnSync } from 'node:child_process';
 import {
   EdgeDatabaseService,
   EdgeOutboxPersistence,
   LocalAuditTrailPersistence,
 } from '@trident/edge';
-import { DomainError, ShiftAlreadyOpenError } from '@trident/pos';
+import { DomainError, OCCConflictError, ShiftAlreadyOpenError } from '@trident/pos';
 import { createPosFastifyApp, SqliteCashShiftRepository } from './index.js';
+
+const defaultTestPinValidator = {
+  validatePin: async (_userId: string, pin: string, _stationId?: string) => {
+    return pin === '1234' || pin === '4321';
+  },
+};
 
 describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Integration Suite (DEC-017)', () => {
   let tmpDir: string;
@@ -49,6 +56,7 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Integration S
       branchId: 'BRANCH_REAL_01',
       stationId: 'POS_TERMINAL_01',
       cashDrawerPort: drawerMock,
+      pinValidator: defaultTestPinValidator,
     });
 
     // 1. POST /turnos/apertura
@@ -57,6 +65,7 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Integration S
       url: '/turnos/apertura',
       payload: {
         responsibleUserId: 'MGR_JUAN',
+        operatorPin: '1234',
         openingCashFloat: '500.0000',
         shiftNumber: 1,
       },
@@ -81,6 +90,8 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Integration S
         operatorUserId: 'CASHIER_ANA',
         addedByUserId: 'MGR_JUAN',
         expectedVersion: openData.turno.version,
+        operatorPin: '1234',
+        requestingPin: '1234',
       },
     });
 
@@ -95,6 +106,7 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Integration S
       url: `/turnos/${shiftId}/movimientos`,
       payload: {
         operatorUserId: 'CASHIER_ANA',
+        operatorPin: '1234',
         movementType: 'VENTA_EFECTIVO',
         amount: '350.5000',
         reason: 'Cobro comanda 101',
@@ -113,6 +125,7 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Integration S
       url: `/turnos/${shiftId}/movimientos`,
       payload: {
         operatorUserId: 'MGR_JUAN',
+        operatorPin: '1234',
         movementType: 'EGRESO',
         amount: '50.0000',
         reason: 'Pago de propinas / gastos menores',
@@ -130,6 +143,7 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Integration S
       url: `/turnos/${shiftId}/corte-x`,
       payload: {
         requestedByUserId: 'MGR_JUAN',
+        requestedByPin: '1234',
       },
     });
 
@@ -147,6 +161,7 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Integration S
       url: `/turnos/${shiftId}/arqueo`,
       payload: {
         performedByUserId: 'CASHIER_ANA',
+        performedByPin: '1234',
         declaredCash: '795.5000',
         expectedVersion: movData2.turno.version,
       },
@@ -166,6 +181,7 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Integration S
       url: `/turnos/${shiftId}/corte-z`,
       payload: {
         closedByUserId: 'MGR_JUAN',
+        closedByPin: '1234',
         expectedVersion: arqueoData.turno.version,
       },
     });
@@ -219,6 +235,7 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Integration S
       organizationId: 'ORG_01',
       branchId: 'BRANCH_01',
       stationId: 'POS_STATION_OCC',
+      pinValidator: defaultTestPinValidator,
     });
 
     const openRes = await app.inject({
@@ -226,6 +243,7 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Integration S
       url: '/turnos/apertura',
       payload: {
         responsibleUserId: 'USER_MGR',
+        operatorPin: '1234',
         openingCashFloat: '100.0000',
       },
     });
@@ -238,6 +256,7 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Integration S
       url: `/turnos/${shiftId}/arqueo`,
       payload: {
         performedByUserId: 'USER_MGR',
+        performedByPin: '1234',
         declaredCash: '100.0000',
         expectedVersion: 1,
       },
@@ -250,6 +269,7 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Integration S
       url: `/turnos/${shiftId}/corte-z`,
       payload: {
         closedByUserId: 'USER_MGR',
+        closedByPin: '1234',
         expectedVersion: 2,
       },
     });
@@ -261,6 +281,7 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Integration S
       url: `/turnos/${shiftId}/corte-z`,
       payload: {
         closedByUserId: 'USER_MGR',
+        closedByPin: '1234',
         expectedVersion: 2,
       },
     });
@@ -284,16 +305,15 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Integration S
     assert.equal(outboxEvents.length, 1);
   });
 
-  it('WP016-INT-03 (BLK-04): Simulated real crash during Corte Z transaction with DB reopen guarantees all-or-nothing atomicity', async () => {
+  it('WP016-INT-03 (BLK-04): Real child process crash (SIGKILL inside transaction) during Corte Z with DB reopen guarantees all-or-nothing atomicity', async () => {
     const crashTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wp016-crash-test-'));
     const crashDbPath = path.join(crashTmpDir, 'crash.db');
 
-    let dbInstance: EdgeDatabaseService | null = new EdgeDatabaseService({
-      databasePath: crashDbPath,
-    });
-    const repo = new SqliteCashShiftRepository(dbInstance);
+    // 1. Initial setup in main process: create DB, bootstrap schema and save shift in CERRADO_ARQUEO
+    const initDb = new EdgeDatabaseService({ databasePath: crashDbPath });
+    const initRepo = new SqliteCashShiftRepository(initDb);
 
-    const shift = repo.saveShiftSync(
+    const shift = initRepo.saveShiftSync(
       {
         id: 'SHIFT_CRASH_TEST',
         organizationId: 'ORG_CRASH',
@@ -317,63 +337,91 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Integration S
       0,
     );
 
-    // Simulate crash inside transaction by executing partial writes and throwing before commit
-    assert.throws(() => {
-      dbInstance!.runInTransaction(() => {
-        dbInstance!.executeMutation(
-          `INSERT INTO cortes_caja (
-            id, turno_caja_id, tipo_corte, generated_by_user_id, opening_cash_float,
-            total_ingresos, total_egresos, total_ventas_efectivo, total_calculado,
-            total_declarado, diferencia, desglose_operadores_json, generated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
-          'CORTE_PARTIAL_CRASH',
-          shift.id,
-          'CORTE_Z',
-          'MGR_CRASH',
-          1000000n,
-          0n,
-          0n,
-          0n,
-          1000000n,
-          1000000n,
-          0n,
-          '[]',
-          new Date().toISOString(),
-        );
+    initDb.close();
 
-        // Crash simulation: unhandled error / abrupt termination inside transaction
-        throw new Error('SIMULATED_POWER_FAILURE_MID_TRANSACTION');
+    const corteId = 'CORTE_CRASH_TEST_ID';
+
+    // 2. Spawn a child process to execute real saveCorteZSync and crash with SIGKILL inside the transaction
+    const childScript = `
+      import { EdgeDatabaseService } from '@trident/edge';
+      import { SqliteCashShiftRepository } from ${JSON.stringify(path.resolve(import.meta.dirname, 'index.js'))};
+
+      const db = new EdgeDatabaseService({ databasePath: process.argv[1] });
+      const repo = new SqliteCashShiftRepository(db, {
+        onBeforeCorteZCommit: () => {
+          // Send SIGKILL to self inside the transaction before COMMIT occurs
+          process.kill(process.pid, 'SIGKILL');
+        },
       });
-    });
 
-    // Close the crashed DB connection
-    dbInstance.close();
-    dbInstance = null;
+      const shift = repo.getShiftByIdSync(process.argv[2]);
+      if (!shift) {
+        process.exit(1);
+      }
 
-    // Reopen the DB from disk and verify clean recovery
+      const corte = {
+        id: process.argv[3],
+        turnoCajaId: shift.id,
+        tipoCorte: 'CORTE_Z',
+        generatedByUserId: 'MGR_CRASH',
+        openingCashFloat: shift.openingCashFloat,
+        totalIngresos: 0n,
+        totalEgresos: 0n,
+        totalVentasEfectivo: 0n,
+        totalCalculado: shift.openingCashFloat,
+        totalDeclarado: shift.openingCashFloat,
+        diferencia: 0n,
+        desgloseOperadores: [],
+        generatedAt: new Date().toISOString(),
+      };
+
+      const updatedShift = {
+        ...shift,
+        status: 'CORTE_Z_EMITIDO',
+        closedAt: new Date().toISOString(),
+        version: shift.version + 1,
+        updatedAt: new Date().toISOString(),
+      };
+
+      repo.saveCorteZSync(corte, updatedShift, shift.version);
+    `;
+
+    const child = spawnSync(
+      process.execPath,
+      ['--input-type=module', '-e', childScript, crashDbPath, shift.id, corteId],
+      { stdio: 'pipe' },
+    );
+
+    // Verify child process was indeed killed by SIGKILL
+    assert.equal(
+      child.signal,
+      'SIGKILL',
+      `Expected child to be killed with SIGKILL, got ${child.status}/${child.signal}`,
+    );
+
+    // 3. Reopen SQLite database in parent process
     const recoveredDb = new EdgeDatabaseService({ databasePath: crashDbPath });
     try {
       const recoveredRepo = new SqliteCashShiftRepository(recoveredDb);
 
-      // Verify shift remains intact in CERRADO_ARQUEO status with version 2
+      // Verify all-or-nothing invariants:
+      // Turno remains in CERRADO_ARQUEO status with version 2 (not marked closed/CORTE_Z_EMITIDO)
       const current = recoveredRepo.getShiftByIdSync(shift.id);
       assert.equal(current?.status, 'CERRADO_ARQUEO');
       assert.equal(current?.version, 2);
 
-      // Verify ZERO partial records in cortes_caja or outbox_queue
-      const cortes = recoveredDb.queryRowsSafe(
-        'SELECT * FROM cortes_caja WHERE id = ?;',
-        'CORTE_PARTIAL_CRASH',
-      );
+      // Verify ZERO records in cortes_caja for corteId
+      const cortes = recoveredDb.queryRowsSafe('SELECT * FROM cortes_caja WHERE id = ?;', corteId);
       assert.equal(cortes.length, 0);
 
+      // Verify ZERO outbox events in outbox_queue for corteId
       const outboxRows = recoveredDb.queryRowsSafe(
-        'SELECT * FROM outbox_queue WHERE aggregate_id = ?;',
-        shift.id,
+        "SELECT * FROM outbox_queue WHERE aggregate_id = ? AND aggregate_type = 'CORTE_Z';",
+        corteId,
       );
       assert.equal(outboxRows.length, 0);
 
-      // Now complete the Corte Z successfully on the recovered DB
+      // 4. Complete Corte Z successfully on the recovered DB to verify full functionality post-recovery
       const successfulCorte = {
         id: 'CORTE_SUCCESS_RECOVERY',
         turnoCajaId: shift.id,
@@ -390,27 +438,32 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Integration S
         generatedAt: new Date().toISOString(),
       };
 
-      recoveredRepo.saveCorteZSync(
-        successfulCorte,
-        { ...shift, status: 'CORTE_Z_EMITIDO', closedAt: new Date().toISOString(), version: 3 },
-        2,
-      );
+      const finalShift = {
+        ...current!,
+        status: 'CORTE_Z_EMITIDO' as const,
+        closedAt: new Date().toISOString(),
+        version: current!.version + 1,
+        updatedAt: new Date().toISOString(),
+      };
 
-      // Post-recovery verification: both corte and outbox event are complete and durable
-      const finishedShift = recoveredRepo.getShiftByIdSync(shift.id);
-      assert.equal(finishedShift?.status, 'CORTE_Z_EMITIDO');
-      assert.equal(finishedShift?.version, 3);
+      recoveredRepo.saveCorteZSync(successfulCorte, finalShift, current!.version);
 
-      const finalCortes = recoveredDb.queryRowsSafe(
+      // Verify committed Corte Z on recovered DB
+      const committedShift = recoveredRepo.getShiftByIdSync(shift.id);
+      assert.equal(committedShift?.status, 'CORTE_Z_EMITIDO');
+      assert.equal(committedShift?.version, 3);
+
+      const recoveredCortes = recoveredDb.queryRowsSafe(
         'SELECT * FROM cortes_caja WHERE id = ?;',
-        'CORTE_SUCCESS_RECOVERY',
+        successfulCorte.id,
       );
-      assert.equal(finalCortes.length, 1);
+      assert.equal(recoveredCortes.length, 1);
 
-      const finalOutbox = recoveredDb.queryRowsSafe(
-        "SELECT * FROM outbox_queue WHERE aggregate_type = 'CORTE_Z' AND action = 'CorteZGenerado';",
+      const recoveredOutbox = recoveredDb.queryRowsSafe(
+        "SELECT * FROM outbox_queue WHERE aggregate_id = ? AND aggregate_type = 'CORTE_Z';",
+        successfulCorte.id,
       );
-      assert.equal(finalOutbox.length, 1);
+      assert.equal(recoveredOutbox.length, 1);
     } finally {
       recoveredDb.close();
       fs.rmSync(crashTmpDir, { recursive: true, force: true });
@@ -424,6 +477,7 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Integration S
       outbox,
       organizationId: 'ORG_VALID',
       branchId: 'BRANCH_VALID',
+      pinValidator: defaultTestPinValidator,
       // stationId omitted
     });
 
@@ -433,6 +487,7 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Integration S
       payload: {
         stationId: 'STATION_IN_BODY_SHOULD_BE_IGNORED',
         responsibleUserId: 'USER_01',
+        operatorPin: '1234',
         openingCashFloat: '100.0000',
       },
     });
@@ -488,6 +543,7 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Integration S
       organizationId: 'ORG_ENROLLED_SECRET_ID',
       branchId: 'BRANCH_ENROLLED_SECRET_ID',
       stationId: 'STATION_ENROLLED_SECRET_ID',
+      pinValidator: defaultTestPinValidator,
     });
 
     // 1. Body with foreign organizationId -> 403 TENANT_MISMATCH
@@ -497,6 +553,7 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Integration S
       payload: {
         organizationId: 'ORG_ATTACKER_ID',
         responsibleUserId: 'USER_01',
+        operatorPin: '1234',
         openingCashFloat: '100.0000',
       },
     });
@@ -517,6 +574,7 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Integration S
       payload: {
         branchId: 'BRANCH_ATTACKER_ID',
         responsibleUserId: 'USER_01',
+        operatorPin: '1234',
         openingCashFloat: '100.0000',
       },
     });
@@ -536,6 +594,7 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Integration S
       payload: {
         stationId: 'STATION_ATTACKER_ID',
         responsibleUserId: 'USER_01',
+        operatorPin: '1234',
         openingCashFloat: '100.0000',
       },
     });
@@ -554,6 +613,7 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Integration S
       url: '/turnos/apertura',
       payload: {
         responsibleUserId: 'USER_01',
+        operatorPin: '1234',
         openingCashFloat: '100.0000',
       },
     });
@@ -689,6 +749,7 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Integration S
       organizationId: 'ORG_MAIN',
       branchId: 'BRANCH_MAIN',
       stationId: 'STATION_A',
+      pinValidator: defaultTestPinValidator,
     });
 
     // Attempt /turnos/:id/operadores -> 404
@@ -699,6 +760,8 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Integration S
         operatorUserId: 'OPERATOR_A',
         addedByUserId: 'OPERATOR_B',
         expectedVersion: 1,
+        operatorPin: '1234',
+        requestingPin: '1234',
       },
     });
     assert.equal(resOp.statusCode, 404);
@@ -710,6 +773,7 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Integration S
       url: `/turnos/${shiftB.id}/movimientos`,
       payload: {
         operatorUserId: 'OPERATOR_A',
+        operatorPin: '1234',
         movementType: 'VENTA_EFECTIVO',
         amount: '100.0000',
         reason: 'Attempt on other station shift',
@@ -725,6 +789,7 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Integration S
       url: `/turnos/${shiftB.id}/corte-x`,
       payload: {
         requestedByUserId: 'OPERATOR_A',
+        requestedByPin: '1234',
       },
     });
     assert.equal(resCorteX.statusCode, 404);
@@ -736,6 +801,7 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Integration S
       url: `/turnos/${shiftB.id}/arqueo`,
       payload: {
         performedByUserId: 'OPERATOR_A',
+        performedByPin: '1234',
         declaredCash: '300.0000',
         expectedVersion: 1,
       },
@@ -749,6 +815,7 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Integration S
       url: `/turnos/${shiftB.id}/corte-z`,
       payload: {
         closedByUserId: 'OPERATOR_A',
+        closedByPin: '1234',
         expectedVersion: 1,
       },
     });
@@ -768,6 +835,7 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Integration S
       organizationId: 'ORG_CONCURRENT',
       branchId: 'BRANCH_CONCURRENT',
       stationId: 'STATION_CONCURRENT_01',
+      pinValidator: defaultTestPinValidator,
     });
 
     // First opening -> 201 Created
@@ -776,6 +844,7 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Integration S
       url: '/turnos/apertura',
       payload: {
         responsibleUserId: 'USER_01',
+        operatorPin: '1234',
         openingCashFloat: '100.0000',
       },
     });
@@ -787,6 +856,7 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Integration S
       url: '/turnos/apertura',
       payload: {
         responsibleUserId: 'USER_02',
+        operatorPin: '1234',
         openingCashFloat: '200.0000',
       },
     });
@@ -834,6 +904,7 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Integration S
       organizationId: 'ORG_BLIND',
       branchId: 'BRANCH_BLIND',
       stationId: 'STATION_BLIND',
+      pinValidator: defaultTestPinValidator,
     });
 
     const openRes = await app.inject({
@@ -841,6 +912,7 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Integration S
       url: '/turnos/apertura',
       payload: {
         responsibleUserId: 'CASHIER_01',
+        operatorPin: '1234',
         openingCashFloat: '500.0000',
       },
     });
@@ -852,6 +924,7 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Integration S
       url: `/turnos/${shift.id}/movimientos`,
       payload: {
         operatorUserId: 'CASHIER_01',
+        operatorPin: '1234',
         movementType: 'VENTA_EFECTIVO',
         amount: '200.0000',
         reason: 'Sale 1',
@@ -866,6 +939,7 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Integration S
       url: `/turnos/${shift.id}/arqueo`,
       payload: {
         performedByUserId: 'CASHIER_01',
+        performedByPin: '1234',
         expectedVersion: updatedShift.version,
       },
     });
@@ -877,6 +951,7 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Integration S
       url: `/turnos/${shift.id}/arqueo`,
       payload: {
         performedByUserId: 'CASHIER_01',
+        performedByPin: '1234',
         declaredCash: '690.0000',
         expectedVersion: updatedShift.version,
       },
@@ -887,6 +962,81 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Integration S
     assert.equal(arqueoData.arqueo.declaredCash, '690.0000');
     assert.equal(arqueoData.arqueo.calculatedCash, '700.0000');
     assert.equal(arqueoData.arqueo.difference, '-10.0000');
+  });
+
+  it('WP016-INT-11 (Data Architect Advisory Concurrency Probe): Concurrent operations against SQLite repository under OCC guarantee zero lost updates and exact outbox consistency', async () => {
+    const probeTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wp016-probe-'));
+    const probeDbPath = path.join(probeTmpDir, 'probe.db');
+    const probeDb = new EdgeDatabaseService({ databasePath: probeDbPath });
+    try {
+      const repo = new SqliteCashShiftRepository(probeDb);
+
+      const shift = repo.saveShiftSync(
+        {
+          id: 'SHIFT_PROBE_01',
+          organizationId: 'ORG_PROBE',
+          branchId: 'BRANCH_PROBE',
+          stationId: 'STATION_PROBE',
+          responsibleUserId: 'MGR_PROBE',
+          openedByUserId: 'MGR_PROBE',
+          shiftNumber: 1,
+          openingCashFloat: 1000000n,
+          closingDeclaredCash: null,
+          calculatedCashTotal: null,
+          cashDifference: null,
+          status: 'ABIERTO',
+          assignmentStrategy: 'COMPARTIDO',
+          participatingOperators: ['MGR_PROBE'],
+          openedAt: new Date().toISOString(),
+          closedAt: null,
+          version: 1,
+          updatedAt: new Date().toISOString(),
+        },
+        0,
+      );
+
+      // 5 concurrent clients attempt to add movement against version 1
+      const attempts = Array.from({ length: 5 }, (_, i) => ({
+        id: `MOV_PROBE_${i}`,
+        turnoCajaId: shift.id,
+        operatorUserId: 'MGR_PROBE',
+        movementType: 'VENTA_EFECTIVO' as const,
+        amount: 100000n,
+        reason: `Probe movement ${i}`,
+        referenceId: null,
+        createdAt: new Date().toISOString(),
+      }));
+
+      const results = await Promise.allSettled(
+        attempts.map((mov) =>
+          Promise.resolve().then(() =>
+            repo.addMovementSync(
+              mov,
+              { ...shift, version: 2, updatedAt: new Date().toISOString() },
+              1,
+            ),
+          ),
+        ),
+      );
+
+      const fulfilled = results.filter((r) => r.status === 'fulfilled');
+      const rejected = results.filter((r) => r.status === 'rejected');
+
+      assert.equal(fulfilled.length, 1, 'Exactly one concurrent mutation must succeed');
+      assert.equal(rejected.length, 4, 'Remaining concurrent mutations must be rejected by OCC');
+      for (const rej of rejected) {
+        assert.ok((rej as PromiseRejectedResult).reason instanceof OCCConflictError);
+      }
+
+      // Verify DB version is exactly 2 and exactly 1 movement exists
+      const currentShift = repo.getShiftByIdSync(shift.id);
+      assert.equal(currentShift?.version, 2);
+      const movements = repo.listMovementsSync(shift.id);
+      assert.equal(movements.length, 1);
+    } finally {
+      probeDb.close();
+      fs.rmSync(probeTmpDir, { recursive: true, force: true });
+    }
   });
 
   it('WP016-INT-05: El esquema de outbox_queue y audit_trail es canónico sin importar orden de inicialización', async () => {
@@ -973,10 +1123,6 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Integration S
   it('WP016-INT-06: ADR-012: Monto mayor a 2^53 / 10^4 sobrevive ida y vuelta en SQLite sin pérdida de precisión', async () => {
     const repo = new SqliteCashShiftRepository(edgeDb);
 
-    // 2^53 = 9_007_199_254_740_992.
-    // 2^53 / 10^4 = 900_719_925_474.0992
-    // Un monto escala-4 mayor a 2^53 (e.g. 50_000_000_000_000_0000n = $5,000,000,000,000.0000 = $5 Trillions)
-    // 50_000_000_000_000_0000n > 9_007_199_254_740_992n (excede 2^53 por más de 5500x)
     const hugeOpeningCashFloat = 50_000_000_000_000_0000n;
     const hugeMovementAmount = 12_345_678_901_234_5678n;
     const expectedTotal = hugeOpeningCashFloat + hugeMovementAmount; // 62_345_678_901_234_5678n

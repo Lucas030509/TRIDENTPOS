@@ -4,6 +4,7 @@ import {
   type ArqueoCiego,
   type CashShiftRepositoryPort,
   type CorteCaja,
+  type IamPinValidatorPort,
   type MovimientoCaja,
   type TurnoCaja,
   CashShiftDomainService,
@@ -98,10 +99,17 @@ class InMemoryCashShiftRepository implements CashShiftRepositoryPort {
   }
 }
 
+const defaultPinValidator: IamPinValidatorPort = {
+  validatePin: async (_userId: string, pin: string) => pin === '1234',
+};
+
 describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Domain Suite (DEC-017)', () => {
   it('WP016-DOM-00: Fail-closed when tenant identity (organizationId or branchId) is missing', async () => {
     const repo = new InMemoryCashShiftRepository();
-    const service = new CashShiftDomainService({ repository: repo });
+    const service = new CashShiftDomainService({
+      repository: repo,
+      pinValidator: defaultPinValidator,
+    });
 
     await assert.rejects(
       service.abrirTurno({
@@ -110,6 +118,7 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Domain Suite 
         stationId: 'STATION_01',
         responsibleUserId: 'USER_MGR_01',
         openingCashFloat: 5000000n,
+        operatorPin: '1234',
       }),
       (err: Error) => {
         assert.ok(err instanceof DomainError);
@@ -125,6 +134,7 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Domain Suite 
         stationId: 'STATION_01',
         responsibleUserId: 'USER_MGR_01',
         openingCashFloat: 5000000n,
+        operatorPin: '1234',
       }),
       (err: Error) => {
         assert.ok(err instanceof DomainError);
@@ -136,7 +146,10 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Domain Suite 
 
   it('WP016-DOM-01: Abre turno con fondo inicial y asignación compartida (DEC-017)', async () => {
     const repo = new InMemoryCashShiftRepository();
-    const service = new CashShiftDomainService({ repository: repo });
+    const service = new CashShiftDomainService({
+      repository: repo,
+      pinValidator: defaultPinValidator,
+    });
 
     const shift = await service.abrirTurno({
       organizationId: 'ORG_01',
@@ -145,6 +158,7 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Domain Suite 
       responsibleUserId: 'USER_MGR_01',
       openingCashFloat: 5000000n, // $500.0000
       shiftNumber: 1,
+      operatorPin: '1234',
     });
 
     assert.equal(shift.organizationId, 'ORG_01');
@@ -164,6 +178,7 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Domain Suite 
         stationId: 'STATION_01',
         responsibleUserId: 'USER_MGR_02',
         openingCashFloat: 2000000n,
+        operatorPin: '1234',
       }),
       (err: Error) => {
         assert.ok(err instanceof ShiftAlreadyOpenError);
@@ -174,7 +189,10 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Domain Suite 
 
   it('WP016-DOM-02: Agrega operadores participantes a turno compartido (DEC-017)', async () => {
     const repo = new InMemoryCashShiftRepository();
-    const service = new CashShiftDomainService({ repository: repo });
+    const service = new CashShiftDomainService({
+      repository: repo,
+      pinValidator: defaultPinValidator,
+    });
 
     const shift = await service.abrirTurno({
       organizationId: 'ORG_01',
@@ -182,6 +200,7 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Domain Suite 
       stationId: 'STATION_01',
       responsibleUserId: 'USER_MGR_01',
       openingCashFloat: 10000000n, // $1000.0000
+      operatorPin: '1234',
     });
 
     // Responsible adds Cashier A
@@ -190,6 +209,7 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Domain Suite 
       operatorUserId: 'USER_CASHIER_A',
       requestingUserId: 'USER_MGR_01',
       expectedVersion: shift.version,
+      requestingPin: '1234',
     });
 
     assert.equal(updated.version, 2);
@@ -202,6 +222,7 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Domain Suite 
         operatorUserId: 'USER_CASHIER_B',
         requestingUserId: 'USER_STRANGER',
         expectedVersion: updated.version,
+        requestingPin: '1234',
       }),
       (err: Error) => {
         assert.ok(err instanceof UnauthorizedShiftOperatorError);
@@ -212,7 +233,10 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Domain Suite 
 
   it('WP016-DOM-03: Rechaza movimientos de operador no participante', async () => {
     const repo = new InMemoryCashShiftRepository();
-    const service = new CashShiftDomainService({ repository: repo });
+    const service = new CashShiftDomainService({
+      repository: repo,
+      pinValidator: defaultPinValidator,
+    });
 
     const shift = await service.abrirTurno({
       organizationId: 'ORG_01',
@@ -220,6 +244,7 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Domain Suite 
       stationId: 'STATION_01',
       responsibleUserId: 'USER_MGR_01',
       openingCashFloat: 5000000n,
+      operatorPin: '1234',
     });
 
     await assert.rejects(
@@ -230,6 +255,7 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Domain Suite 
         amount: 2500000n, // $250.0000
         reason: 'Cobro no autorizado',
         expectedVersion: shift.version,
+        operatorPin: '1234',
       }),
       (err: Error) => {
         assert.ok(err instanceof UnauthorizedShiftOperatorError);
@@ -240,7 +266,10 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Domain Suite 
 
   it('WP016-DOM-04: Cálculo exacto de cuadre de caja con desglose por operador (ADR-012)', async () => {
     const repo = new InMemoryCashShiftRepository();
-    const service = new CashShiftDomainService({ repository: repo });
+    const service = new CashShiftDomainService({
+      repository: repo,
+      pinValidator: defaultPinValidator,
+    });
 
     let shift = await service.abrirTurno({
       organizationId: 'ORG_01',
@@ -248,6 +277,7 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Domain Suite 
       stationId: 'STATION_01',
       responsibleUserId: 'USER_MGR',
       openingCashFloat: 5000000n, // $500.0000
+      operatorPin: '1234',
     });
 
     // Add Cashier 1 and Cashier 2
@@ -256,6 +286,7 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Domain Suite 
       operatorUserId: 'CASHIER_1',
       requestingUserId: 'USER_MGR',
       expectedVersion: shift.version,
+      requestingPin: '1234',
     });
 
     shift = await service.agregarOperador({
@@ -263,6 +294,7 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Domain Suite 
       operatorUserId: 'CASHIER_2',
       requestingUserId: 'USER_MGR',
       expectedVersion: shift.version,
+      requestingPin: '1234',
     });
 
     // Cashier 1 makes cash sales
@@ -273,6 +305,7 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Domain Suite 
       amount: 1505000n, // $150.5000
       reason: 'Venta mesa 1',
       expectedVersion: shift.version,
+      operatorPin: '1234',
     });
     shift = mov1.shift;
 
@@ -284,6 +317,7 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Domain Suite 
       amount: 3202500n, // $320.2500
       reason: 'Venta mesa 2',
       expectedVersion: shift.version,
+      operatorPin: '1234',
     });
     shift = mov2.shift;
 
@@ -294,6 +328,7 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Domain Suite 
       amount: 500000n, // $50.0000
       reason: 'Pago hielo',
       expectedVersion: shift.version,
+      operatorPin: '1234',
     });
     shift = mov3.shift;
 
@@ -301,6 +336,7 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Domain Suite 
     const corteX = await service.generarCorteX({
       shiftId: shift.id,
       requestedByUserId: 'USER_MGR',
+      requestedByPin: '1234',
     });
 
     // Calculated = 500 + (150.5000 + 320.2500) - 50.0000 = 920.7500 = 9207500n
@@ -322,7 +358,10 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Domain Suite 
 
   it('WP016-DOM-05: Arqueo Ciego captura efectivo declarado antes de calcular descuadre', async () => {
     const repo = new InMemoryCashShiftRepository();
-    const service = new CashShiftDomainService({ repository: repo });
+    const service = new CashShiftDomainService({
+      repository: repo,
+      pinValidator: defaultPinValidator,
+    });
 
     let shift = await service.abrirTurno({
       organizationId: 'ORG_01',
@@ -330,6 +369,7 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Domain Suite 
       stationId: 'STATION_01',
       responsibleUserId: 'USER_MGR',
       openingCashFloat: 10000000n, // $1000.0000
+      operatorPin: '1234',
     });
 
     const mov = await service.registrarMovimiento({
@@ -339,6 +379,7 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Domain Suite 
       amount: 2500000n, // $250.0000
       reason: 'Venta',
       expectedVersion: shift.version,
+      operatorPin: '1234',
     });
     shift = mov.shift;
 
@@ -348,6 +389,7 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Domain Suite 
       performedByUserId: 'USER_MGR',
       declaredCash: 12400000n, // $1240.0000
       expectedVersion: shift.version,
+      performedByPin: '1234',
     });
 
     assert.equal(closedShift.status, 'CERRADO_ARQUEO');
@@ -368,6 +410,7 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Domain Suite 
     const repo = new InMemoryCashShiftRepository();
     const service = new CashShiftDomainService({
       repository: repo,
+      pinValidator: defaultPinValidator,
       drawerPort: drawerMock,
     });
 
@@ -377,6 +420,7 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Domain Suite 
       stationId: 'STATION_01',
       responsibleUserId: 'USER_MGR',
       openingCashFloat: 5000000n,
+      operatorPin: '1234',
     });
 
     const { shift: arqueado } = await service.realizarArqueoCiego({
@@ -384,12 +428,14 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Domain Suite 
       performedByUserId: 'USER_MGR',
       declaredCash: 5000000n,
       expectedVersion: shift.version,
+      performedByPin: '1234',
     });
 
     const { shift: finalized, corte } = await service.generarCorteZ({
       shiftId: arqueado.id,
       closedByUserId: 'USER_MGR',
       expectedVersion: arqueado.version,
+      closedByPin: '1234',
     });
 
     assert.equal(finalized.status, 'CORTE_Z_EMITIDO');
@@ -402,6 +448,7 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Domain Suite 
         shiftId: finalized.id,
         closedByUserId: 'USER_MGR',
         expectedVersion: finalized.version,
+        closedByPin: '1234',
       }),
       (err: Error) => {
         assert.ok(err instanceof ShiftLockedError);
@@ -418,6 +465,7 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Domain Suite 
         amount: 1000000n,
         reason: 'Post-close movement',
         expectedVersion: finalized.version,
+        operatorPin: '1234',
       }),
       (err: Error) => {
         assert.ok(err instanceof ShiftLockedError);
@@ -428,7 +476,10 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Domain Suite 
 
   it('WP016-DOM-07: OCC Conflict detection on stale versions', async () => {
     const repo = new InMemoryCashShiftRepository();
-    const service = new CashShiftDomainService({ repository: repo });
+    const service = new CashShiftDomainService({
+      repository: repo,
+      pinValidator: defaultPinValidator,
+    });
 
     const shift = await service.abrirTurno({
       organizationId: 'ORG_01',
@@ -436,6 +487,7 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Domain Suite 
       stationId: 'STATION_01',
       responsibleUserId: 'USER_MGR',
       openingCashFloat: 5000000n,
+      operatorPin: '1234',
     });
 
     // Pass stale version 99
@@ -445,6 +497,7 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Domain Suite 
         operatorUserId: 'CASHIER_1',
         requestingUserId: 'USER_MGR',
         expectedVersion: 99,
+        requestingPin: '1234',
       }),
       (err: Error) => {
         assert.ok(err instanceof OCCConflictError);
@@ -454,7 +507,7 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Domain Suite 
     );
   });
 
-  it('WP016-DOM-08: Mandatory operator PIN validation when validator is configured', async () => {
+  it('WP016-DOM-08: Mandatory operator PIN validation: missing or invalid PIN rejects with 0 movements persisted', async () => {
     const repo = new InMemoryCashShiftRepository();
     const pinValidator = {
       validatePin: async (userId: string, pin: string, _stationId?: string) => {
@@ -527,5 +580,19 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Domain Suite 
     const movements = await repo.listMovements(shift.id);
     assert.equal(movements.length, 1);
     assert.equal(movements[0]?.movementType, 'FONDO_INICIAL');
+  });
+
+  it('WP016-DOM-09: Fail-closed configuration: constructing CashShiftDomainService without pinValidator throws PIN_VALIDATOR_REQUIRED', () => {
+    const repo = new InMemoryCashShiftRepository();
+    assert.throws(
+      // @ts-expect-error Testing missing pinValidator runtime error
+      () => new CashShiftDomainService({ repository: repo }),
+      (err: Error) => {
+        assert.ok(err instanceof DomainError);
+        assert.equal((err as DomainError).code, 'PIN_VALIDATOR_REQUIRED');
+        assert.equal((err as DomainError).statusCode, 500);
+        return true;
+      },
+    );
   });
 });

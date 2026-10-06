@@ -29,9 +29,10 @@ import {
   DomainError,
   OCCConflictError,
 } from '@trident/pos';
-import { EdgeDatabaseService, EdgeOutboxPersistence } from '@trident/edge';
+import { EdgeDatabaseService, EdgeOutboxPersistence, OfflineIamService } from '@trident/edge';
 import { SqliteDiningRoomRepository } from './dining-sqlite-repository.js';
 import { SqliteCashShiftRepository } from './cash-shift-sqlite-repository.js';
+import { OfflineIamPinValidatorAdapter } from './offline-iam-pin-validator.js';
 
 export interface FastifyAppOptions {
   readonly edgeDb: EdgeDatabaseService;
@@ -44,6 +45,7 @@ export interface FastifyAppOptions {
   readonly shiftAssignmentStrategy?: ShiftAssignmentStrategy;
   readonly cashDrawerPort?: CashDrawerPort;
   readonly pinValidator?: IamPinValidatorPort;
+  readonly offlineIamService?: OfflineIamService;
 }
 
 export function serializeCuentaToDTO(cuenta: Cuenta): Record<string, unknown> {
@@ -231,14 +233,32 @@ export async function createPosFastifyApp(options: FastifyAppOptions): Promise<F
 
   // Cash Shift Service (WP-016 / DEC-017)
   const shiftRepo = options.cashShiftRepository ?? new SqliteCashShiftRepository(options.edgeDb);
-  const shiftService =
-    options.cashShiftService ??
-    new CashShiftDomainService({
+  const pinValidator =
+    options.pinValidator ??
+    (options.offlineIamService
+      ? new OfflineIamPinValidatorAdapter(options.offlineIamService)
+      : undefined);
+
+  let shiftService = options.cashShiftService;
+  if (!shiftService && pinValidator) {
+    shiftService = new CashShiftDomainService({
       repository: shiftRepo,
       assignmentStrategy: options.shiftAssignmentStrategy,
       drawerPort: options.cashDrawerPort,
-      pinValidator: options.pinValidator,
+      pinValidator,
     });
+  }
+
+  function getRequiredShiftService(reply: FastifyReply): CashShiftDomainService | null {
+    if (!shiftService) {
+      reply.status(500).send({
+        error: 'PIN_VALIDATOR_REQUIRED',
+        message: 'CashShiftService requires pinValidator to be configured at startup',
+      });
+      return null;
+    }
+    return shiftService;
+  }
 
   // Custom Error Handler mapping domain & OCC errors
   app.setErrorHandler((error, req, reply) => {
@@ -553,6 +573,11 @@ export async function createPosFastifyApp(options: FastifyAppOptions): Promise<F
 
   // POST /turnos/apertura
   app.post('/turnos/apertura', async (req, reply) => {
+    const svc = getRequiredShiftService(reply);
+    if (!svc) {
+      return;
+    }
+
     const body = req.body as {
       organizationId?: string;
       branchId?: string;
@@ -581,7 +606,7 @@ export async function createPosFastifyApp(options: FastifyAppOptions): Promise<F
 
     const openingCashFloat = decimalStringToScaledBigInt(body.openingCashFloat);
 
-    const turno = await shiftService.abrirTurno({
+    const turno = await svc.abrirTurno({
       organizationId,
       branchId,
       stationId,
@@ -599,6 +624,11 @@ export async function createPosFastifyApp(options: FastifyAppOptions): Promise<F
 
   // POST /turnos/:id/operadores (Add participant to shared shift, DEC-017)
   app.post('/turnos/:id/operadores', async (req, reply) => {
+    const svc = getRequiredShiftService(reply);
+    if (!svc) {
+      return;
+    }
+
     const { id } = req.params as { id: string };
     const body = req.body as {
       organizationId?: string;
@@ -627,7 +657,7 @@ export async function createPosFastifyApp(options: FastifyAppOptions): Promise<F
       });
     }
 
-    const turno = await shiftService.agregarOperador({
+    const turno = await svc.agregarOperador({
       shiftId: id,
       operatorUserId: body.operatorUserId,
       requestingUserId: body.addedByUserId,
@@ -643,6 +673,11 @@ export async function createPosFastifyApp(options: FastifyAppOptions): Promise<F
 
   // POST /turnos/:id/movimientos (Register cash movement)
   app.post('/turnos/:id/movimientos', async (req, reply) => {
+    const svc = getRequiredShiftService(reply);
+    if (!svc) {
+      return;
+    }
+
     const { id } = req.params as { id: string };
     const body = req.body as {
       organizationId?: string;
@@ -682,7 +717,7 @@ export async function createPosFastifyApp(options: FastifyAppOptions): Promise<F
 
     const amount = decimalStringToScaledBigInt(body.amount);
 
-    const result = await shiftService.registrarMovimiento({
+    const result = await svc.registrarMovimiento({
       shiftId: id,
       operatorUserId: body.operatorUserId,
       movementType: body.movementType,
@@ -701,6 +736,11 @@ export async function createPosFastifyApp(options: FastifyAppOptions): Promise<F
 
   // POST /turnos/:id/corte-x (Read-only partial inspection)
   app.post('/turnos/:id/corte-x', async (req, reply) => {
+    const svc = getRequiredShiftService(reply);
+    if (!svc) {
+      return;
+    }
+
     const { id } = req.params as { id: string };
     const body = req.body as {
       organizationId?: string;
@@ -726,7 +766,7 @@ export async function createPosFastifyApp(options: FastifyAppOptions): Promise<F
       });
     }
 
-    const corte = await shiftService.generarCorteX({
+    const corte = await svc.generarCorteX({
       shiftId: id,
       requestedByUserId: body.requestedByUserId,
       requestedByPin: body.requestedByPin,
@@ -739,6 +779,11 @@ export async function createPosFastifyApp(options: FastifyAppOptions): Promise<F
 
   // POST /turnos/:id/arqueo (Blind cash count, captures declared cash before displaying calculated total)
   app.post('/turnos/:id/arqueo', async (req, reply) => {
+    const svc = getRequiredShiftService(reply);
+    if (!svc) {
+      return;
+    }
+
     const { id } = req.params as { id: string };
     const body = req.body as {
       organizationId?: string;
@@ -772,7 +817,7 @@ export async function createPosFastifyApp(options: FastifyAppOptions): Promise<F
 
     const declaredCash = decimalStringToScaledBigInt(body.declaredCash);
 
-    const result = await shiftService.realizarArqueoCiego({
+    const result = await svc.realizarArqueoCiego({
       shiftId: id,
       performedByUserId: body.performedByUserId,
       declaredCash,
@@ -788,6 +833,11 @@ export async function createPosFastifyApp(options: FastifyAppOptions): Promise<F
 
   // POST /turnos/:id/corte-z (Permanently closes shift, commits with PRAGMA synchronous = FULL, emits sync event)
   app.post('/turnos/:id/corte-z', async (req, reply) => {
+    const svc = getRequiredShiftService(reply);
+    if (!svc) {
+      return;
+    }
+
     const { id } = req.params as { id: string };
     const body = req.body as {
       organizationId?: string;
@@ -814,7 +864,7 @@ export async function createPosFastifyApp(options: FastifyAppOptions): Promise<F
       });
     }
 
-    const result = await shiftService.generarCorteZ({
+    const result = await svc.generarCorteZ({
       shiftId: id,
       closedByUserId: body.closedByUserId,
       expectedVersion: body.expectedVersion,

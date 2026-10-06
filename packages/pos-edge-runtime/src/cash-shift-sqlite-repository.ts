@@ -62,21 +62,23 @@ interface MovimientoCajaRow {
   created_at: string;
 }
 
+export interface SqliteCashShiftRepositoryOptions {
+  readonly outboxPersistence?: EdgeOutboxPersistence;
+  readonly auditPersistence?: LocalAuditTrailPersistence;
+  readonly onBeforeCorteZCommit?: (corte: CorteCaja) => void;
+}
+
 export class SqliteCashShiftRepository implements CashShiftRepositoryPort {
   readonly #db: EdgeDatabaseService;
   readonly #outboxPersistence: EdgeOutboxPersistence;
   readonly #auditPersistence: LocalAuditTrailPersistence;
+  readonly #onBeforeCorteZCommit?: (corte: CorteCaja) => void;
 
-  constructor(
-    db: EdgeDatabaseService,
-    options?: {
-      outboxPersistence?: EdgeOutboxPersistence;
-      auditPersistence?: LocalAuditTrailPersistence;
-    },
-  ) {
+  constructor(db: EdgeDatabaseService, options?: SqliteCashShiftRepositoryOptions) {
     this.#db = db;
     this.#outboxPersistence = options?.outboxPersistence ?? new EdgeOutboxPersistence(db);
     this.#auditPersistence = options?.auditPersistence ?? new LocalAuditTrailPersistence(db);
+    this.#onBeforeCorteZCommit = options?.onBeforeCorteZCommit;
     this.bootstrapSchema();
   }
 
@@ -538,6 +540,10 @@ export class SqliteCashShiftRepository implements CashShiftRepositoryPort {
           aggregateSequenceNumber: shift.shiftNumber >= 1 ? shift.shiftNumber : 1,
           payload: outboxPayload,
         });
+
+        if (this.#onBeforeCorteZCommit) {
+          this.#onBeforeCorteZCommit(corte);
+        }
 
         return corte;
       },

@@ -35,9 +35,9 @@ import {
 
 export interface CashShiftDomainServiceOptions {
   readonly repository: CashShiftRepositoryPort;
+  readonly pinValidator: IamPinValidatorPort;
   readonly assignmentStrategy?: ShiftAssignmentStrategy;
   readonly drawerPort?: CashDrawerPort;
-  readonly pinValidator?: IamPinValidatorPort;
 }
 
 export interface AbrirTurnoCommand {
@@ -97,28 +97,29 @@ export class CashShiftDomainService {
   readonly #repository: CashShiftRepositoryPort;
   readonly #strategy: ShiftAssignmentStrategy;
   readonly #drawerPort?: CashDrawerPort;
-  readonly #pinValidator?: IamPinValidatorPort;
+  readonly #pinValidator: IamPinValidatorPort;
 
   constructor(options: CashShiftDomainServiceOptions) {
+    if (!options.pinValidator) {
+      throw new DomainError(
+        'pinValidator is mandatory for CashShiftService startup',
+        'PIN_VALIDATOR_REQUIRED',
+        500,
+      );
+    }
     this.#repository = options.repository;
     this.#strategy = options.assignmentStrategy ?? new SharedShiftAssignmentStrategy();
     this.#drawerPort = options.drawerPort;
     this.#pinValidator = options.pinValidator;
   }
 
-  private async validatePinIfConfigured(
-    userId: string,
-    pin?: string,
-    stationId?: string,
-  ): Promise<void> {
-    if (this.#pinValidator) {
-      if (!pin || pin.trim() === '') {
-        throw new InvalidOperatorPinError(userId);
-      }
-      const isValid = await this.#pinValidator.validatePin(userId, pin, stationId);
-      if (!isValid) {
-        throw new InvalidOperatorPinError(userId);
-      }
+  private async validatePin(userId: string, pin?: string, stationId?: string): Promise<void> {
+    if (!pin || pin.trim() === '') {
+      throw new InvalidOperatorPinError(userId);
+    }
+    const isValid = await this.#pinValidator.validatePin(userId, pin, stationId);
+    if (!isValid) {
+      throw new InvalidOperatorPinError(userId);
     }
   }
 
@@ -235,11 +236,7 @@ export class CashShiftDomainService {
       );
     }
 
-    await this.validatePinIfConfigured(
-      command.responsibleUserId,
-      command.operatorPin,
-      command.stationId,
-    );
+    await this.validatePin(command.responsibleUserId, command.operatorPin, command.stationId);
 
     const now = new Date().toISOString();
     const shiftId = crypto.randomUUID();
@@ -308,11 +305,7 @@ export class CashShiftDomainService {
       throw new ShiftInvalidStatusError(shift.id, shift.status, 'ABIERTO');
     }
 
-    await this.validatePinIfConfigured(
-      command.requestingUserId,
-      command.requestingPin,
-      shift.stationId,
-    );
+    await this.validatePin(command.requestingUserId, command.requestingPin, shift.stationId);
 
     if (!this.#strategy.canAddOperator(shift, command.operatorUserId, command.requestingUserId)) {
       throw new UnauthorizedShiftOperatorError(command.requestingUserId, shift.id);
@@ -357,11 +350,7 @@ export class CashShiftDomainService {
       throw new ShiftInvalidStatusError(shift.id, shift.status, 'ABIERTO');
     }
 
-    await this.validatePinIfConfigured(
-      command.operatorUserId,
-      command.operatorPin,
-      shift.stationId,
-    );
+    await this.validatePin(command.operatorUserId, command.operatorPin, shift.stationId);
 
     if (!this.#strategy.canOperate(shift, command.operatorUserId)) {
       throw new UnauthorizedShiftOperatorError(command.operatorUserId, shift.id);
@@ -407,11 +396,7 @@ export class CashShiftDomainService {
       throw new ShiftNotFoundError(command.shiftId);
     }
 
-    await this.validatePinIfConfigured(
-      command.requestedByUserId,
-      command.requestedByPin,
-      shift.stationId,
-    );
+    await this.validatePin(command.requestedByUserId, command.requestedByPin, shift.stationId);
 
     if (!this.#strategy.canOperate(shift, command.requestedByUserId)) {
       throw new UnauthorizedShiftOperatorError(command.requestedByUserId, shift.id);
@@ -472,11 +457,7 @@ export class CashShiftDomainService {
       );
     }
 
-    await this.validatePinIfConfigured(
-      command.performedByUserId,
-      command.performedByPin,
-      shift.stationId,
-    );
+    await this.validatePin(command.performedByUserId, command.performedByPin, shift.stationId);
 
     if (!this.#strategy.canOperate(shift, command.performedByUserId)) {
       throw new UnauthorizedShiftOperatorError(command.performedByUserId, shift.id);
@@ -542,11 +523,7 @@ export class CashShiftDomainService {
       );
     }
 
-    await this.validatePinIfConfigured(
-      command.closedByUserId,
-      command.closedByPin,
-      shift.stationId,
-    );
+    await this.validatePin(command.closedByUserId, command.closedByPin, shift.stationId);
 
     if (!this.#strategy.canClose(shift, command.closedByUserId)) {
       throw new UnauthorizedShiftOperatorError(command.closedByUserId, shift.id);
@@ -594,3 +571,6 @@ export class CashShiftDomainService {
     return { shift: finalShift, corte: savedCorte };
   }
 }
+
+export const CashShiftService = CashShiftDomainService;
+export type CashShiftService = CashShiftDomainService;
