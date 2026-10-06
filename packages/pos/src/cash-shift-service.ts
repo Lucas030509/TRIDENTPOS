@@ -111,7 +111,10 @@ export class CashShiftDomainService {
     pin?: string,
     stationId?: string,
   ): Promise<void> {
-    if (this.#pinValidator && pin !== undefined) {
+    if (this.#pinValidator) {
+      if (!pin || pin.trim() === '') {
+        throw new InvalidOperatorPinError(userId);
+      }
       const isValid = await this.#pinValidator.validatePin(userId, pin, stationId);
       if (!isValid) {
         throw new InvalidOperatorPinError(userId);
@@ -293,16 +296,16 @@ export class CashShiftDomainService {
       throw new ShiftNotFoundError(command.shiftId);
     }
 
+    if (shift.version !== command.expectedVersion) {
+      throw new OCCConflictError(shift.id, command.expectedVersion, shift.version, shift);
+    }
+
     if (shift.status === 'CORTE_Z_EMITIDO') {
       throw new ShiftLockedError(shift.id);
     }
 
     if (shift.status !== 'ABIERTO') {
       throw new ShiftInvalidStatusError(shift.id, shift.status, 'ABIERTO');
-    }
-
-    if (shift.version !== command.expectedVersion) {
-      throw new OCCConflictError(shift.id, command.expectedVersion, shift.version, shift);
     }
 
     await this.validatePinIfConfigured(
@@ -342,16 +345,16 @@ export class CashShiftDomainService {
       throw new ShiftNotFoundError(command.shiftId);
     }
 
+    if (shift.version !== command.expectedVersion) {
+      throw new OCCConflictError(shift.id, command.expectedVersion, shift.version, shift);
+    }
+
     if (shift.status === 'CORTE_Z_EMITIDO') {
       throw new ShiftLockedError(shift.id);
     }
 
     if (shift.status !== 'ABIERTO') {
       throw new ShiftInvalidStatusError(shift.id, shift.status, 'ABIERTO');
-    }
-
-    if (shift.version !== command.expectedVersion) {
-      throw new OCCConflictError(shift.id, command.expectedVersion, shift.version, shift);
     }
 
     await this.validatePinIfConfigured(
@@ -449,16 +452,16 @@ export class CashShiftDomainService {
       throw new ShiftNotFoundError(command.shiftId);
     }
 
+    if (shift.version !== command.expectedVersion) {
+      throw new OCCConflictError(shift.id, command.expectedVersion, shift.version, shift);
+    }
+
     if (shift.status === 'CORTE_Z_EMITIDO') {
       throw new ShiftLockedError(shift.id);
     }
 
     if (shift.status !== 'ABIERTO') {
       throw new ShiftInvalidStatusError(shift.id, shift.status, 'ABIERTO');
-    }
-
-    if (shift.version !== command.expectedVersion) {
-      throw new OCCConflictError(shift.id, command.expectedVersion, shift.version, shift);
     }
 
     if (command.declaredCash < 0n) {
@@ -523,6 +526,10 @@ export class CashShiftDomainService {
       throw new ShiftNotFoundError(command.shiftId);
     }
 
+    if (shift.version !== command.expectedVersion) {
+      throw new OCCConflictError(shift.id, command.expectedVersion, shift.version, shift);
+    }
+
     if (shift.status === 'CORTE_Z_EMITIDO') {
       throw new ShiftLockedError(shift.id);
     }
@@ -533,10 +540,6 @@ export class CashShiftDomainService {
         'BLIND_COUNT_REQUIRED',
         400,
       );
-    }
-
-    if (shift.version !== command.expectedVersion) {
-      throw new OCCConflictError(shift.id, command.expectedVersion, shift.version, shift);
     }
 
     await this.validatePinIfConfigured(

@@ -72,6 +72,7 @@ CREATE TABLE IF NOT EXISTS cortes_caja (
 
 CREATE INDEX IF NOT EXISTS idx_turnos_station_status ON turnos_caja(station_id, status);
 CREATE INDEX IF NOT EXISTS idx_turnos_tenant_station ON turnos_caja(organization_id, branch_id, station_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_turnos_caja_active_station ON turnos_caja(organization_id, branch_id, station_id) WHERE status = 'ABIERTO';
 CREATE INDEX IF NOT EXISTS idx_movimientos_turno ON movimientos_caja(turno_caja_id);
 CREATE INDEX IF NOT EXISTS idx_turnos_operadores_turno ON turnos_caja_operadores(turno_caja_id);
 CREATE INDEX IF NOT EXISTS idx_cortes_turno ON cortes_caja(turno_caja_id);

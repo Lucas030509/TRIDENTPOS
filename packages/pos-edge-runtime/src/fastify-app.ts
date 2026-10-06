@@ -494,11 +494,12 @@ export async function createPosFastifyApp(options: FastifyAppOptions): Promise<F
   ): boolean {
     const enrolledOrgId = options.organizationId;
     const enrolledBranchId = options.branchId;
+    const enrolledStationId = options.stationId;
 
-    if (!enrolledOrgId || !enrolledBranchId) {
+    if (!enrolledOrgId || !enrolledBranchId || !enrolledStationId) {
       reply.status(400).send({
-        error: 'MISSING_TENANT_IDENTITY',
-        message: 'Missing mandatory enrolled tenant identity: organizationId, branchId',
+        error: 'MISSING_ENROLLED_IDENTITY',
+        message: 'Missing mandatory enrolled identity: organizationId, branchId, stationId',
       });
       return false;
     }
@@ -506,7 +507,7 @@ export async function createPosFastifyApp(options: FastifyAppOptions): Promise<F
     if (body?.organizationId && body.organizationId !== enrolledOrgId) {
       reply.status(403).send({
         error: 'TENANT_MISMATCH',
-        message: `organizationId '${body.organizationId}' does not match enrolled edge tenant '${enrolledOrgId}'`,
+        message: 'Tenant mismatch: client organizationId does not match enrolled tenant',
       });
       return false;
     }
@@ -514,20 +515,40 @@ export async function createPosFastifyApp(options: FastifyAppOptions): Promise<F
     if (body?.branchId && body.branchId !== enrolledBranchId) {
       reply.status(403).send({
         error: 'TENANT_MISMATCH',
-        message: `branchId '${body.branchId}' does not match enrolled edge branch '${enrolledBranchId}'`,
+        message: 'Tenant mismatch: client branchId does not match enrolled branch',
       });
       return false;
     }
 
-    if (options.stationId && body?.stationId && body.stationId !== options.stationId) {
+    if (body?.stationId && body.stationId !== enrolledStationId) {
       reply.status(403).send({
         error: 'STATION_MISMATCH',
-        message: `stationId '${body.stationId}' does not match enrolled edge station '${options.stationId}'`,
+        message: 'Station mismatch: client stationId does not match enrolled station',
       });
       return false;
     }
 
     return true;
+  }
+
+  async function loadAndVerifyShift(
+    shiftId: string,
+    reply: FastifyReply,
+  ): Promise<TurnoCaja | null> {
+    const shift = await shiftRepo.getShiftById(shiftId);
+    if (
+      !shift ||
+      shift.organizationId !== options.organizationId ||
+      shift.branchId !== options.branchId ||
+      shift.stationId !== options.stationId
+    ) {
+      reply.status(404).send({
+        error: 'SHIFT_NOT_FOUND',
+        message: 'Shift not found',
+      });
+      return null;
+    }
+    return shift;
   }
 
   // POST /turnos/apertura
@@ -549,15 +570,12 @@ export async function createPosFastifyApp(options: FastifyAppOptions): Promise<F
 
     const organizationId = options.organizationId;
     const branchId = options.branchId;
+    const stationId = options.stationId!;
 
-    // TODO(WP-026A): Station enrolled identity is bound at edge startup in WP-026A (session in main).
-    // If options.stationId is exposed by the edge, enforce and use it; otherwise fallback to body.stationId.
-    const stationId = options.stationId ?? body?.stationId;
-
-    if (!stationId || !body?.responsibleUserId || body?.openingCashFloat === undefined) {
+    if (!body?.responsibleUserId || body?.openingCashFloat === undefined) {
       return reply.status(400).send({
         error: 'MISSING_FIELDS',
-        message: 'Missing mandatory fields: stationId, responsibleUserId, openingCashFloat',
+        message: 'Missing mandatory fields: responsibleUserId, openingCashFloat',
       });
     }
 
@@ -597,12 +615,12 @@ export async function createPosFastifyApp(options: FastifyAppOptions): Promise<F
       return;
     }
 
-    if (
-      !id ||
-      !body?.operatorUserId ||
-      !body?.addedByUserId ||
-      body.expectedVersion === undefined
-    ) {
+    const verifiedShift = await loadAndVerifyShift(id, reply);
+    if (!verifiedShift) {
+      return;
+    }
+
+    if (!body?.operatorUserId || !body?.addedByUserId || body.expectedVersion === undefined) {
       return reply.status(400).send({
         error: 'MISSING_FIELDS',
         message: 'Missing mandatory fields: operatorUserId, addedByUserId, expectedVersion',
@@ -643,8 +661,12 @@ export async function createPosFastifyApp(options: FastifyAppOptions): Promise<F
       return;
     }
 
+    const verifiedShift = await loadAndVerifyShift(id, reply);
+    if (!verifiedShift) {
+      return;
+    }
+
     if (
-      !id ||
       !body?.operatorUserId ||
       !body?.movementType ||
       body?.amount === undefined ||
@@ -692,7 +714,12 @@ export async function createPosFastifyApp(options: FastifyAppOptions): Promise<F
       return;
     }
 
-    if (!id || !body?.requestedByUserId) {
+    const verifiedShift = await loadAndVerifyShift(id, reply);
+    if (!verifiedShift) {
+      return;
+    }
+
+    if (!body?.requestedByUserId) {
       return reply.status(400).send({
         error: 'MISSING_FIELDS',
         message: 'Missing mandatory field: requestedByUserId',
@@ -727,8 +754,12 @@ export async function createPosFastifyApp(options: FastifyAppOptions): Promise<F
       return;
     }
 
+    const verifiedShift = await loadAndVerifyShift(id, reply);
+    if (!verifiedShift) {
+      return;
+    }
+
     if (
-      !id ||
       !body?.performedByUserId ||
       body?.declaredCash === undefined ||
       body.expectedVersion === undefined
@@ -771,7 +802,12 @@ export async function createPosFastifyApp(options: FastifyAppOptions): Promise<F
       return;
     }
 
-    if (!id || !body?.closedByUserId || body.expectedVersion === undefined) {
+    const verifiedShift = await loadAndVerifyShift(id, reply);
+    if (!verifiedShift) {
+      return;
+    }
+
+    if (!body?.closedByUserId || body.expectedVersion === undefined) {
       return reply.status(400).send({
         error: 'MISSING_FIELDS',
         message: 'Missing mandatory fields: closedByUserId, expectedVersion',

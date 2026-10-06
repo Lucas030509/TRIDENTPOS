@@ -8,7 +8,7 @@ import {
   EdgeOutboxPersistence,
   LocalAuditTrailPersistence,
 } from '@trident/edge';
-import { DomainError } from '@trident/pos';
+import { DomainError, ShiftAlreadyOpenError } from '@trident/pos';
 import { createPosFastifyApp, SqliteCashShiftRepository } from './index.js';
 
 describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Integration Suite (DEC-017)', () => {
@@ -47,6 +47,7 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Integration S
       outbox,
       organizationId: 'ORG_REAL_01',
       branchId: 'BRANCH_REAL_01',
+      stationId: 'POS_TERMINAL_01',
       cashDrawerPort: drawerMock,
     });
 
@@ -55,7 +56,6 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Integration S
       method: 'POST',
       url: '/turnos/apertura',
       payload: {
-        stationId: 'POS_TERMINAL_01',
         responsibleUserId: 'MGR_JUAN',
         openingCashFloat: '500.0000',
         shiftNumber: 1,
@@ -67,6 +67,7 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Integration S
     const shiftId = openData.turno.id;
     assert.equal(openData.turno.organizationId, 'ORG_REAL_01');
     assert.equal(openData.turno.branchId, 'BRANCH_REAL_01');
+    assert.equal(openData.turno.stationId, 'POS_TERMINAL_01');
     assert.equal(openData.turno.status, 'ABIERTO');
     assert.equal(openData.turno.openingCashFloat, '500.0000');
     assert.equal(openData.turno.version, 1);
@@ -211,26 +212,27 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Integration S
     assert.equal(auditDetails.cashDifference, '-5.0000');
   });
 
-  it('WP016-INT-02: Double close blocked by OCC (HTTP 409)', async () => {
+  it('WP016-INT-02 (BLK-05): Double close blocked by OCC: two closes against same version -> one 200, second 409 OCC without second corte or event', async () => {
     const app = await createPosFastifyApp({
       edgeDb,
       outbox,
       organizationId: 'ORG_01',
       branchId: 'BRANCH_01',
+      stationId: 'POS_STATION_OCC',
     });
 
     const openRes = await app.inject({
       method: 'POST',
       url: '/turnos/apertura',
       payload: {
-        stationId: 'POS_STATION_OCC',
         responsibleUserId: 'USER_MGR',
         openingCashFloat: '100.0000',
       },
     });
+    assert.equal(openRes.statusCode, 201);
     const shiftId = JSON.parse(openRes.body).turno.id;
 
-    // Perform Arqueo
+    // Perform Arqueo Ciego -> advances shift to version 2 (CERRADO_ARQUEO)
     const arqRes = await app.inject({
       method: 'POST',
       url: `/turnos/${shiftId}/arqueo`,
@@ -242,24 +244,54 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Integration S
     });
     assert.equal(arqRes.statusCode, 200);
 
-    // Stale Corte Z attempt with version 1 instead of version 2
-    const staleRes = await app.inject({
+    // Call 1: Corte Z with expectedVersion = 2 -> Succeeds (200)
+    const closeRes1 = await app.inject({
       method: 'POST',
       url: `/turnos/${shiftId}/corte-z`,
       payload: {
         closedByUserId: 'USER_MGR',
-        expectedVersion: 1,
+        expectedVersion: 2,
+      },
+    });
+    assert.equal(closeRes1.statusCode, 200);
+
+    // Call 2: Duplicate Corte Z with expectedVersion = 2 (same version) -> Blocked by OCC (409)
+    const closeRes2 = await app.inject({
+      method: 'POST',
+      url: `/turnos/${shiftId}/corte-z`,
+      payload: {
+        closedByUserId: 'USER_MGR',
+        expectedVersion: 2,
       },
     });
 
-    assert.equal(staleRes.statusCode, 409);
-    const staleData = JSON.parse(staleRes.body);
-    assert.equal(staleData.error, 'OCC_CONFLICT');
-    assert.equal(staleData.actualVersion, 2);
+    assert.equal(closeRes2.statusCode, 409);
+    const conflictData = JSON.parse(closeRes2.body);
+    assert.equal(conflictData.error, 'OCC_CONFLICT');
+    assert.equal(conflictData.actualVersion, 3);
+
+    // Verify exactly ONE corte row in cortes_caja
+    const cortesRows = edgeDb.queryRowsSafe(
+      'SELECT * FROM cortes_caja WHERE turno_caja_id = ?;',
+      shiftId,
+    );
+    assert.equal(cortesRows.length, 1);
+
+    // Verify exactly ONE CorteZGenerado event in outbox_queue
+    const outboxEvents = edgeDb.queryRowsSafe(
+      "SELECT * FROM outbox_queue WHERE aggregate_type = 'CORTE_Z';",
+    );
+    assert.equal(outboxEvents.length, 1);
   });
 
-  it('WP016-INT-03: Simulated crash during Corte Z commit guarantees atomic rollback', async () => {
-    const repo = new SqliteCashShiftRepository(edgeDb);
+  it('WP016-INT-03 (BLK-04): Simulated real crash during Corte Z transaction with DB reopen guarantees all-or-nothing atomicity', async () => {
+    const crashTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wp016-crash-test-'));
+    const crashDbPath = path.join(crashTmpDir, 'crash.db');
+
+    let dbInstance: EdgeDatabaseService | null = new EdgeDatabaseService({
+      databasePath: crashDbPath,
+    });
+    const repo = new SqliteCashShiftRepository(dbInstance);
 
     const shift = repo.saveShiftSync(
       {
@@ -285,65 +317,137 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Integration S
       0,
     );
 
-    // Simulate crash inside transaction by throwing in saveCorteZSync
-    const failingCorte = {
-      id: 'CORTE_FAIL',
-      turnoCajaId: shift.id,
-      tipoCorte: 'CORTE_Z' as const,
-      generatedByUserId: 'MGR_CRASH',
-      openingCashFloat: 1000000n,
-      totalIngresos: 0n,
-      totalEgresos: 0n,
-      totalVentasEfectivo: 0n,
-      totalCalculado: 1000000n,
-      totalDeclarado: 1000000n,
-      diferencia: 0n,
-      desgloseOperadores: [],
-      generatedAt: new Date().toISOString(),
-    };
-
-    // Corrupt mutation with wrong version to trigger rollback
+    // Simulate crash inside transaction by executing partial writes and throwing before commit
     assert.throws(() => {
-      repo.saveCorteZSync(
-        failingCorte,
-        { ...shift, status: 'CORTE_Z_EMITIDO', version: 3 },
-        99, // Stale version triggers OCC rollback
-      );
+      dbInstance!.runInTransaction(() => {
+        dbInstance!.executeMutation(
+          `INSERT INTO cortes_caja (
+            id, turno_caja_id, tipo_corte, generated_by_user_id, opening_cash_float,
+            total_ingresos, total_egresos, total_ventas_efectivo, total_calculado,
+            total_declarado, diferencia, desglose_operadores_json, generated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+          'CORTE_PARTIAL_CRASH',
+          shift.id,
+          'CORTE_Z',
+          'MGR_CRASH',
+          1000000n,
+          0n,
+          0n,
+          0n,
+          1000000n,
+          1000000n,
+          0n,
+          '[]',
+          new Date().toISOString(),
+        );
+
+        // Crash simulation: unhandled error / abrupt termination inside transaction
+        throw new Error('SIMULATED_POWER_FAILURE_MID_TRANSACTION');
+      });
     });
 
-    // Verify shift remains intact in CERRADO_ARQUEO status with version 2
-    const current = repo.getShiftByIdSync(shift.id);
-    assert.equal(current?.status, 'CERRADO_ARQUEO');
-    assert.equal(current?.version, 2);
+    // Close the crashed DB connection
+    dbInstance.close();
+    dbInstance = null;
 
-    // Verify zero records in cortes_caja or outbox_queue
-    const cortes = edgeDb.queryRowsSafe('SELECT * FROM cortes_caja WHERE id = ?;', 'CORTE_FAIL');
-    assert.equal(cortes.length, 0);
+    // Reopen the DB from disk and verify clean recovery
+    const recoveredDb = new EdgeDatabaseService({ databasePath: crashDbPath });
+    try {
+      const recoveredRepo = new SqliteCashShiftRepository(recoveredDb);
+
+      // Verify shift remains intact in CERRADO_ARQUEO status with version 2
+      const current = recoveredRepo.getShiftByIdSync(shift.id);
+      assert.equal(current?.status, 'CERRADO_ARQUEO');
+      assert.equal(current?.version, 2);
+
+      // Verify ZERO partial records in cortes_caja or outbox_queue
+      const cortes = recoveredDb.queryRowsSafe(
+        'SELECT * FROM cortes_caja WHERE id = ?;',
+        'CORTE_PARTIAL_CRASH',
+      );
+      assert.equal(cortes.length, 0);
+
+      const outboxRows = recoveredDb.queryRowsSafe(
+        'SELECT * FROM outbox_queue WHERE aggregate_id = ?;',
+        shift.id,
+      );
+      assert.equal(outboxRows.length, 0);
+
+      // Now complete the Corte Z successfully on the recovered DB
+      const successfulCorte = {
+        id: 'CORTE_SUCCESS_RECOVERY',
+        turnoCajaId: shift.id,
+        tipoCorte: 'CORTE_Z' as const,
+        generatedByUserId: 'MGR_CRASH',
+        openingCashFloat: 1000000n,
+        totalIngresos: 0n,
+        totalEgresos: 0n,
+        totalVentasEfectivo: 0n,
+        totalCalculado: 1000000n,
+        totalDeclarado: 1000000n,
+        diferencia: 0n,
+        desgloseOperadores: [],
+        generatedAt: new Date().toISOString(),
+      };
+
+      recoveredRepo.saveCorteZSync(
+        successfulCorte,
+        { ...shift, status: 'CORTE_Z_EMITIDO', closedAt: new Date().toISOString(), version: 3 },
+        2,
+      );
+
+      // Post-recovery verification: both corte and outbox event are complete and durable
+      const finishedShift = recoveredRepo.getShiftByIdSync(shift.id);
+      assert.equal(finishedShift?.status, 'CORTE_Z_EMITIDO');
+      assert.equal(finishedShift?.version, 3);
+
+      const finalCortes = recoveredDb.queryRowsSafe(
+        'SELECT * FROM cortes_caja WHERE id = ?;',
+        'CORTE_SUCCESS_RECOVERY',
+      );
+      assert.equal(finalCortes.length, 1);
+
+      const finalOutbox = recoveredDb.queryRowsSafe(
+        "SELECT * FROM outbox_queue WHERE aggregate_type = 'CORTE_Z' AND action = 'CorteZGenerado';",
+      );
+      assert.equal(finalOutbox.length, 1);
+    } finally {
+      recoveredDb.close();
+      fs.rmSync(crashTmpDir, { recursive: true, force: true });
+    }
   });
 
-  it('WP016-INT-04: Tenant fail-closed: apertura rechaza si falta organization_id o branch_id sin defaults', async () => {
-    // 1. Missing organizationId at app level without per-request override
-    const appWithoutOrg = await createPosFastifyApp({
+  it('WP016-INT-04 (BLK-03): Fail-closed: sin stationId enrolado rechaza con 400 y no acepta stationId del body', async () => {
+    // 1. Missing stationId at app level
+    const appWithoutStation = await createPosFastifyApp({
       edgeDb,
       outbox,
-      organizationId: '',
+      organizationId: 'ORG_VALID',
       branchId: 'BRANCH_VALID',
+      // stationId omitted
     });
 
-    const resMissingOrg = await appWithoutOrg.inject({
+    const resMissingStation = await appWithoutStation.inject({
       method: 'POST',
       url: '/turnos/apertura',
       payload: {
-        stationId: 'STATION_NO_ORG',
+        stationId: 'STATION_IN_BODY_SHOULD_BE_IGNORED',
         responsibleUserId: 'USER_01',
         openingCashFloat: '100.0000',
       },
     });
-    assert.equal(resMissingOrg.statusCode, 400);
-    const bodyMissingOrg = JSON.parse(resMissingOrg.body);
-    assert.equal(bodyMissingOrg.error, 'MISSING_TENANT_IDENTITY');
 
-    // 2. Direct repository fail-closed check
+    assert.equal(resMissingStation.statusCode, 400);
+    const bodyMissingStation = JSON.parse(resMissingStation.body);
+    assert.equal(bodyMissingStation.error, 'MISSING_ENROLLED_IDENTITY');
+
+    // Verify zero shifts created
+    const count = edgeDb.queryRowSafe<{ count: number | bigint }>(
+      'SELECT count(*) AS count FROM turnos_caja;',
+    );
+    assert.equal(BigInt(count?.count ?? 0), 0n);
+
+    // 2. Direct repository fail-closed check on tenant identity
     const repo = new SqliteCashShiftRepository(edgeDb);
     assert.throws(
       () => {
@@ -377,23 +481,21 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Integration S
     );
   });
 
-  it('WP016-INT-04B: Tenant & Station Mismatch: foreign identities rejected with 403 and zero side-effects; missing identity uses enrolled', async () => {
+  it('WP016-INT-04B (ADV-01 & BLK-03): Foreign tenant/station identities rejected with 403 without leaking enrolled IDs in messages', async () => {
     const app = await createPosFastifyApp({
       edgeDb,
       outbox,
-      organizationId: 'ORG_ENROLLED',
-      branchId: 'BRANCH_ENROLLED',
-      stationId: 'STATION_ENROLLED',
+      organizationId: 'ORG_ENROLLED_SECRET_ID',
+      branchId: 'BRANCH_ENROLLED_SECRET_ID',
+      stationId: 'STATION_ENROLLED_SECRET_ID',
     });
 
-    // 1. Body with foreign organizationId -> 403 TENANT_MISMATCH, zero shift created
+    // 1. Body with foreign organizationId -> 403 TENANT_MISMATCH
     const resForeignOrg = await app.inject({
       method: 'POST',
       url: '/turnos/apertura',
       payload: {
-        organizationId: 'ORG_ATTACKER',
-        branchId: 'BRANCH_ENROLLED',
-        stationId: 'STATION_ENROLLED',
+        organizationId: 'ORG_ATTACKER_ID',
         responsibleUserId: 'USER_01',
         openingCashFloat: '100.0000',
       },
@@ -401,20 +503,19 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Integration S
     assert.equal(resForeignOrg.statusCode, 403);
     const bodyForeignOrg = JSON.parse(resForeignOrg.body);
     assert.equal(bodyForeignOrg.error, 'TENANT_MISMATCH');
-
-    const shiftsCountAfterOrg = edgeDb.queryRowSafe<{ count: number | bigint }>(
-      'SELECT count(*) AS count FROM turnos_caja;',
+    // ADV-01: Message must NOT contain the enrolled or attacker ID
+    assert.ok(!bodyForeignOrg.message.includes('ORG_ENROLLED_SECRET_ID'));
+    assert.equal(
+      bodyForeignOrg.message,
+      'Tenant mismatch: client organizationId does not match enrolled tenant',
     );
-    assert.equal(BigInt(shiftsCountAfterOrg?.count ?? 0), 0n);
 
-    // 2. Body with foreign branchId -> 403 TENANT_MISMATCH, zero shift created
+    // 2. Body with foreign branchId -> 403 TENANT_MISMATCH
     const resForeignBranch = await app.inject({
       method: 'POST',
       url: '/turnos/apertura',
       payload: {
-        organizationId: 'ORG_ENROLLED',
-        branchId: 'BRANCH_ATTACKER',
-        stationId: 'STATION_ENROLLED',
+        branchId: 'BRANCH_ATTACKER_ID',
         responsibleUserId: 'USER_01',
         openingCashFloat: '100.0000',
       },
@@ -422,13 +523,18 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Integration S
     assert.equal(resForeignBranch.statusCode, 403);
     const bodyForeignBranch = JSON.parse(resForeignBranch.body);
     assert.equal(bodyForeignBranch.error, 'TENANT_MISMATCH');
+    assert.ok(!bodyForeignBranch.message.includes('BRANCH_ENROLLED_SECRET_ID'));
+    assert.equal(
+      bodyForeignBranch.message,
+      'Tenant mismatch: client branchId does not match enrolled branch',
+    );
 
-    // 3. Body with foreign stationId -> 403 STATION_MISMATCH, zero shift created
+    // 3. Body with foreign stationId -> 403 STATION_MISMATCH
     const resForeignStation = await app.inject({
       method: 'POST',
       url: '/turnos/apertura',
       payload: {
-        stationId: 'STATION_ATTACKER',
+        stationId: 'STATION_ATTACKER_ID',
         responsibleUserId: 'USER_01',
         openingCashFloat: '100.0000',
       },
@@ -436,8 +542,13 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Integration S
     assert.equal(resForeignStation.statusCode, 403);
     const bodyForeignStation = JSON.parse(resForeignStation.body);
     assert.equal(bodyForeignStation.error, 'STATION_MISMATCH');
+    assert.ok(!bodyForeignStation.message.includes('STATION_ENROLLED_SECRET_ID'));
+    assert.equal(
+      bodyForeignStation.message,
+      'Station mismatch: client stationId does not match enrolled station',
+    );
 
-    // 4. Body without organizationId / branchId / stationId -> uses enrolled identity successfully
+    // 4. Valid opening without body identity -> uses enrolled identity
     const resEnrolled = await app.inject({
       method: 'POST',
       url: '/turnos/apertura',
@@ -448,23 +559,334 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Integration S
     });
     assert.equal(resEnrolled.statusCode, 201);
     const shiftData = JSON.parse(resEnrolled.body).turno;
-    assert.equal(shiftData.organizationId, 'ORG_ENROLLED');
-    assert.equal(shiftData.branchId, 'BRANCH_ENROLLED');
-    assert.equal(shiftData.stationId, 'STATION_ENROLLED');
+    assert.equal(shiftData.organizationId, 'ORG_ENROLLED_SECRET_ID');
+    assert.equal(shiftData.branchId, 'BRANCH_ENROLLED_SECRET_ID');
+    assert.equal(shiftData.stationId, 'STATION_ENROLLED_SECRET_ID');
+  });
 
-    // 5. Subsequent shift endpoint (/operadores) rejects foreign organizationId with 403
-    const resOpMismatch = await app.inject({
+  it('WP016-INT-07 (BLK-01): Operator PIN is MANDATORY on each movement/charge: missing or invalid PIN -> 401 rejection with 0 movements persisted', async () => {
+    const pinValidatorMock = {
+      validatePin: async (userId: string, pin: string, _stationId?: string) => {
+        return userId === 'CASHIER_01' && pin === '4321';
+      },
+    };
+
+    const app = await createPosFastifyApp({
+      edgeDb,
+      outbox,
+      organizationId: 'ORG_PIN_TEST',
+      branchId: 'BRANCH_PIN_TEST',
+      stationId: 'STATION_PIN_TEST',
+      pinValidator: pinValidatorMock,
+    });
+
+    // 1. Open shift with valid PIN
+    const openRes = await app.inject({
       method: 'POST',
-      url: `/turnos/${shiftData.id}/operadores`,
+      url: '/turnos/apertura',
       payload: {
-        organizationId: 'ORG_ATTACKER',
-        operatorUserId: 'USER_02',
-        addedByUserId: 'USER_01',
-        expectedVersion: shiftData.version,
+        responsibleUserId: 'CASHIER_01',
+        operatorPin: '4321',
+        openingCashFloat: '200.0000',
       },
     });
-    assert.equal(resOpMismatch.statusCode, 403);
-    assert.equal(JSON.parse(resOpMismatch.body).error, 'TENANT_MISMATCH');
+    assert.equal(openRes.statusCode, 201);
+    const shift = JSON.parse(openRes.body).turno;
+
+    // 2. Register movement without PIN -> 401 rejection
+    const movMissingPin = await app.inject({
+      method: 'POST',
+      url: `/turnos/${shift.id}/movimientos`,
+      payload: {
+        operatorUserId: 'CASHIER_01',
+        movementType: 'VENTA_EFECTIVO',
+        amount: '150.0000',
+        reason: 'Venta sin PIN',
+        expectedVersion: shift.version,
+        // operatorPin missing
+      },
+    });
+    assert.equal(movMissingPin.statusCode, 401);
+    assert.equal(JSON.parse(movMissingPin.body).error, 'INVALID_OPERATOR_PIN');
+
+    // 3. Register movement with wrong PIN -> 401 rejection
+    const movWrongPin = await app.inject({
+      method: 'POST',
+      url: `/turnos/${shift.id}/movimientos`,
+      payload: {
+        operatorUserId: 'CASHIER_01',
+        operatorPin: '0000',
+        movementType: 'VENTA_EFECTIVO',
+        amount: '150.0000',
+        reason: 'Venta con PIN equivocado',
+        expectedVersion: shift.version,
+      },
+    });
+    assert.equal(movWrongPin.statusCode, 401);
+    assert.equal(JSON.parse(movWrongPin.body).error, 'INVALID_OPERATOR_PIN');
+
+    // Verify exactly 1 movement exists in SQLite (the initial float only; 0 rejected movements persisted)
+    const movements = edgeDb.queryRowsSafe<{ movement_type: string }>(
+      'SELECT * FROM movimientos_caja WHERE turno_caja_id = ?;',
+      shift.id,
+    );
+    assert.equal(movements.length, 1);
+    assert.equal(movements[0]!.movement_type, 'FONDO_INICIAL');
+
+    // 4. Register movement with correct PIN -> 201 success
+    const movValidPin = await app.inject({
+      method: 'POST',
+      url: `/turnos/${shift.id}/movimientos`,
+      payload: {
+        operatorUserId: 'CASHIER_01',
+        operatorPin: '4321',
+        movementType: 'VENTA_EFECTIVO',
+        amount: '150.0000',
+        reason: 'Venta con PIN correcto',
+        expectedVersion: shift.version,
+      },
+    });
+    assert.equal(movValidPin.statusCode, 201);
+
+    const updatedMovements = edgeDb.queryRowsSafe(
+      'SELECT * FROM movimientos_caja WHERE turno_caja_id = ?;',
+      shift.id,
+    );
+    assert.equal(updatedMovements.length, 2);
+  });
+
+  it('WP016-INT-08 (BLK-02): Instance enrolled in Station A cannot operate or view a shift of Station B (returns 404 SHIFT_NOT_FOUND, zero existence leaked)', async () => {
+    // Open a shift on Station B
+    const repo = new SqliteCashShiftRepository(edgeDb);
+    const shiftB = repo.saveShiftSync(
+      {
+        id: 'SHIFT_STATION_B',
+        organizationId: 'ORG_MAIN',
+        branchId: 'BRANCH_MAIN',
+        stationId: 'STATION_B',
+        responsibleUserId: 'OPERATOR_B',
+        openedByUserId: 'OPERATOR_B',
+        shiftNumber: 1,
+        openingCashFloat: 3000000n,
+        closingDeclaredCash: null,
+        calculatedCashTotal: null,
+        cashDifference: null,
+        status: 'ABIERTO',
+        assignmentStrategy: 'COMPARTIDO',
+        participatingOperators: ['OPERATOR_B'],
+        openedAt: new Date().toISOString(),
+        closedAt: null,
+        version: 1,
+        updatedAt: new Date().toISOString(),
+      },
+      0,
+    );
+
+    // Create Fastify app enrolled in Station A
+    const appStationA = await createPosFastifyApp({
+      edgeDb,
+      outbox,
+      organizationId: 'ORG_MAIN',
+      branchId: 'BRANCH_MAIN',
+      stationId: 'STATION_A',
+    });
+
+    // Attempt /turnos/:id/operadores -> 404
+    const resOp = await appStationA.inject({
+      method: 'POST',
+      url: `/turnos/${shiftB.id}/operadores`,
+      payload: {
+        operatorUserId: 'OPERATOR_A',
+        addedByUserId: 'OPERATOR_B',
+        expectedVersion: 1,
+      },
+    });
+    assert.equal(resOp.statusCode, 404);
+    assert.equal(JSON.parse(resOp.body).error, 'SHIFT_NOT_FOUND');
+
+    // Attempt /turnos/:id/movimientos -> 404
+    const resMov = await appStationA.inject({
+      method: 'POST',
+      url: `/turnos/${shiftB.id}/movimientos`,
+      payload: {
+        operatorUserId: 'OPERATOR_A',
+        movementType: 'VENTA_EFECTIVO',
+        amount: '100.0000',
+        reason: 'Attempt on other station shift',
+        expectedVersion: 1,
+      },
+    });
+    assert.equal(resMov.statusCode, 404);
+    assert.equal(JSON.parse(resMov.body).error, 'SHIFT_NOT_FOUND');
+
+    // Attempt /turnos/:id/corte-x -> 404
+    const resCorteX = await appStationA.inject({
+      method: 'POST',
+      url: `/turnos/${shiftB.id}/corte-x`,
+      payload: {
+        requestedByUserId: 'OPERATOR_A',
+      },
+    });
+    assert.equal(resCorteX.statusCode, 404);
+    assert.equal(JSON.parse(resCorteX.body).error, 'SHIFT_NOT_FOUND');
+
+    // Attempt /turnos/:id/arqueo -> 404
+    const resArqueo = await appStationA.inject({
+      method: 'POST',
+      url: `/turnos/${shiftB.id}/arqueo`,
+      payload: {
+        performedByUserId: 'OPERATOR_A',
+        declaredCash: '300.0000',
+        expectedVersion: 1,
+      },
+    });
+    assert.equal(resArqueo.statusCode, 404);
+    assert.equal(JSON.parse(resArqueo.body).error, 'SHIFT_NOT_FOUND');
+
+    // Attempt /turnos/:id/corte-z -> 404
+    const resCorteZ = await appStationA.inject({
+      method: 'POST',
+      url: `/turnos/${shiftB.id}/corte-z`,
+      payload: {
+        closedByUserId: 'OPERATOR_A',
+        expectedVersion: 1,
+      },
+    });
+    assert.equal(resCorteZ.statusCode, 404);
+    assert.equal(JSON.parse(resCorteZ.body).error, 'SHIFT_NOT_FOUND');
+
+    // Verify shift B is completely unchanged
+    const unchanged = repo.getShiftByIdSync(shiftB.id);
+    assert.equal(unchanged?.version, 1);
+    assert.equal(unchanged?.status, 'ABIERTO');
+  });
+
+  it('WP016-INT-09 (BLK Data): Simultaneous shifts: max ONE active shift per station; SQLite partial unique index + service check enforce one 201 and one 409', async () => {
+    const app = await createPosFastifyApp({
+      edgeDb,
+      outbox,
+      organizationId: 'ORG_CONCURRENT',
+      branchId: 'BRANCH_CONCURRENT',
+      stationId: 'STATION_CONCURRENT_01',
+    });
+
+    // First opening -> 201 Created
+    const res1 = await app.inject({
+      method: 'POST',
+      url: '/turnos/apertura',
+      payload: {
+        responsibleUserId: 'USER_01',
+        openingCashFloat: '100.0000',
+      },
+    });
+    assert.equal(res1.statusCode, 201);
+
+    // Second concurrent opening on same station -> 409 Conflict
+    const res2 = await app.inject({
+      method: 'POST',
+      url: '/turnos/apertura',
+      payload: {
+        responsibleUserId: 'USER_02',
+        openingCashFloat: '200.0000',
+      },
+    });
+    assert.equal(res2.statusCode, 409);
+    assert.equal(JSON.parse(res2.body).error, 'SHIFT_ALREADY_OPEN');
+
+    // Direct SQLite repository test verifying partial unique index enforcement
+    const repo = new SqliteCashShiftRepository(edgeDb);
+    assert.throws(
+      () => {
+        repo.saveShiftSync(
+          {
+            id: 'SHIFT_DIRECT_CONFLICT',
+            organizationId: 'ORG_CONCURRENT',
+            branchId: 'BRANCH_CONCURRENT',
+            stationId: 'STATION_CONCURRENT_01',
+            responsibleUserId: 'USER_03',
+            openedByUserId: 'USER_03',
+            shiftNumber: 2,
+            openingCashFloat: 1000000n,
+            closingDeclaredCash: null,
+            calculatedCashTotal: null,
+            cashDifference: null,
+            status: 'ABIERTO',
+            assignmentStrategy: 'COMPARTIDO',
+            participatingOperators: ['USER_03'],
+            openedAt: new Date().toISOString(),
+            closedAt: null,
+            version: 1,
+            updatedAt: new Date().toISOString(),
+          },
+          0,
+        );
+      },
+      (err: Error) => {
+        return err instanceof ShiftAlreadyOpenError;
+      },
+    );
+  });
+
+  it('WP016-INT-10 (ADV-02): Arqueo Ciego secrecy: blind count does not disclose calculated cash total prior to registering declared cash', async () => {
+    const app = await createPosFastifyApp({
+      edgeDb,
+      outbox,
+      organizationId: 'ORG_BLIND',
+      branchId: 'BRANCH_BLIND',
+      stationId: 'STATION_BLIND',
+    });
+
+    const openRes = await app.inject({
+      method: 'POST',
+      url: '/turnos/apertura',
+      payload: {
+        responsibleUserId: 'CASHIER_01',
+        openingCashFloat: '500.0000',
+      },
+    });
+    const shift = JSON.parse(openRes.body).turno;
+
+    // Movement: $200 sale
+    const movRes = await app.inject({
+      method: 'POST',
+      url: `/turnos/${shift.id}/movimientos`,
+      payload: {
+        operatorUserId: 'CASHIER_01',
+        movementType: 'VENTA_EFECTIVO',
+        amount: '200.0000',
+        reason: 'Sale 1',
+        expectedVersion: shift.version,
+      },
+    });
+    const updatedShift = JSON.parse(movRes.body).turno;
+
+    // Attempting to do Arqueo without declaredCash fails validation
+    const missingDeclaredRes = await app.inject({
+      method: 'POST',
+      url: `/turnos/${shift.id}/arqueo`,
+      payload: {
+        performedByUserId: 'CASHIER_01',
+        expectedVersion: updatedShift.version,
+      },
+    });
+    assert.equal(missingDeclaredRes.statusCode, 400);
+
+    // Operator submits declaredCash ($690.0000) -> system records and returns computed variance
+    const arqueoRes = await app.inject({
+      method: 'POST',
+      url: `/turnos/${shift.id}/arqueo`,
+      payload: {
+        performedByUserId: 'CASHIER_01',
+        declaredCash: '690.0000',
+        expectedVersion: updatedShift.version,
+      },
+    });
+    assert.equal(arqueoRes.statusCode, 200);
+    const arqueoData = JSON.parse(arqueoRes.body);
+    // Calculated is 500 + 200 = 700.0000, declared is 690.0000, difference is -10.0000
+    assert.equal(arqueoData.arqueo.declaredCash, '690.0000');
+    assert.equal(arqueoData.arqueo.calculatedCash, '700.0000');
+    assert.equal(arqueoData.arqueo.difference, '-10.0000');
   });
 
   it('WP016-INT-05: El esquema de outbox_queue y audit_trail es canónico sin importar orden de inicialización', async () => {

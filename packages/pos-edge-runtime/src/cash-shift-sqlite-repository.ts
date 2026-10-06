@@ -18,6 +18,7 @@ import {
   type TurnoCajaStatus,
   DomainError,
   OCCConflictError,
+  ShiftAlreadyOpenError,
 } from '@trident/pos';
 import {
   EdgeDatabaseService,
@@ -169,44 +170,55 @@ export class SqliteCashShiftRepository implements CashShiftRepositoryPort {
         throw new DomainError(`Shift '${shift.id}' already exists`, 'DUPLICATE_SHIFT', 409);
       }
 
-      this.#db.runInTransaction(() => {
-        this.#db.executeMutation(
-          `INSERT INTO turnos_caja (
-            id, organization_id, branch_id, station_id, responsible_user_id, opened_by_user_id, shift_number,
-            opening_cash_float, closing_declared_cash, calculated_cash_total, cash_difference,
-            status, assignment_strategy, opened_at, closed_at, version, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
-          shift.id,
-          shift.organizationId,
-          shift.branchId,
-          shift.stationId,
-          shift.responsibleUserId,
-          shift.openedByUserId,
-          shift.shiftNumber,
-          shift.openingCashFloat,
-          shift.closingDeclaredCash,
-          shift.calculatedCashTotal,
-          shift.cashDifference,
-          shift.status,
-          shift.assignmentStrategy,
-          shift.openedAt,
-          shift.closedAt,
-          shift.version,
-          shift.updatedAt,
-        );
-
-        for (const opId of shift.participatingOperators) {
+      try {
+        this.#db.runInTransaction(() => {
           this.#db.executeMutation(
-            `INSERT OR IGNORE INTO turnos_caja_operadores (id, turno_caja_id, operator_user_id, added_by_user_id, added_at)
-             VALUES (?, ?, ?, ?, ?);`,
-            crypto.randomUUID(),
+            `INSERT INTO turnos_caja (
+              id, organization_id, branch_id, station_id, responsible_user_id, opened_by_user_id, shift_number,
+              opening_cash_float, closing_declared_cash, calculated_cash_total, cash_difference,
+              status, assignment_strategy, opened_at, closed_at, version, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
             shift.id,
-            opId,
+            shift.organizationId,
+            shift.branchId,
+            shift.stationId,
+            shift.responsibleUserId,
             shift.openedByUserId,
+            shift.shiftNumber,
+            shift.openingCashFloat,
+            shift.closingDeclaredCash,
+            shift.calculatedCashTotal,
+            shift.cashDifference,
+            shift.status,
+            shift.assignmentStrategy,
             shift.openedAt,
+            shift.closedAt,
+            shift.version,
+            shift.updatedAt,
           );
+
+          for (const opId of shift.participatingOperators) {
+            this.#db.executeMutation(
+              `INSERT OR IGNORE INTO turnos_caja_operadores (id, turno_caja_id, operator_user_id, added_by_user_id, added_at)
+               VALUES (?, ?, ?, ?, ?);`,
+              crypto.randomUUID(),
+              shift.id,
+              opId,
+              shift.openedByUserId,
+              shift.openedAt,
+            );
+          }
+        });
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (
+          message.includes('UNIQUE constraint failed') ||
+          message.includes('uq_turnos_caja_active_station')
+        ) {
+          throw new ShiftAlreadyOpenError(shift.stationId);
         }
-      });
+        throw err;
+      }
 
       return shift;
     }

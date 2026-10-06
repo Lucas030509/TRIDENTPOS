@@ -8,6 +8,7 @@ import {
   type TurnoCaja,
   CashShiftDomainService,
   DomainError,
+  InvalidOperatorPinError,
   OCCConflictError,
   ShiftAlreadyOpenError,
   ShiftLockedError,
@@ -451,5 +452,80 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Domain Suite 
         return true;
       },
     );
+  });
+
+  it('WP016-DOM-08: Mandatory operator PIN validation when validator is configured', async () => {
+    const repo = new InMemoryCashShiftRepository();
+    const pinValidator = {
+      validatePin: async (userId: string, pin: string, _stationId?: string) => {
+        return userId === 'USER_VALID' && pin === '1234';
+      },
+    };
+    const service = new CashShiftDomainService({
+      repository: repo,
+      pinValidator,
+    });
+
+    // Opening with missing PIN -> rejects
+    await assert.rejects(
+      service.abrirTurno({
+        organizationId: 'ORG_01',
+        branchId: 'BRANCH_01',
+        stationId: 'STATION_01',
+        responsibleUserId: 'USER_VALID',
+        openingCashFloat: 5000000n,
+      }),
+      (err: Error) => {
+        assert.ok(err instanceof InvalidOperatorPinError);
+        return true;
+      },
+    );
+
+    // Opening with wrong PIN -> rejects
+    await assert.rejects(
+      service.abrirTurno({
+        organizationId: 'ORG_01',
+        branchId: 'BRANCH_01',
+        stationId: 'STATION_01',
+        responsibleUserId: 'USER_VALID',
+        openingCashFloat: 5000000n,
+        operatorPin: '9999',
+      }),
+      (err: Error) => {
+        assert.ok(err instanceof InvalidOperatorPinError);
+        return true;
+      },
+    );
+
+    // Opening with valid PIN -> succeeds
+    const shift = await service.abrirTurno({
+      organizationId: 'ORG_01',
+      branchId: 'BRANCH_01',
+      stationId: 'STATION_01',
+      responsibleUserId: 'USER_VALID',
+      openingCashFloat: 5000000n,
+      operatorPin: '1234',
+    });
+    assert.ok(shift);
+
+    // Movement with missing PIN -> rejects without persisting movement
+    await assert.rejects(
+      service.registrarMovimiento({
+        shiftId: shift.id,
+        operatorUserId: 'USER_VALID',
+        movementType: 'VENTA_EFECTIVO',
+        amount: 1000000n,
+        reason: 'Venta sin PIN',
+        expectedVersion: shift.version,
+      }),
+      (err: Error) => {
+        assert.ok(err instanceof InvalidOperatorPinError);
+        return true;
+      },
+    );
+
+    const movements = await repo.listMovements(shift.id);
+    assert.equal(movements.length, 1);
+    assert.equal(movements[0]?.movementType, 'FONDO_INICIAL');
   });
 });
