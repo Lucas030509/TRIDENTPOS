@@ -15,3 +15,9 @@ export * from './kds-schema.js';
 export * from './kds-sqlite-repository.js';
 export * from './printer-queue-runner.js';
 export * from './kds-runtime.js';
+
+// WP-016: Cash Management, Shifts & Arqueo Ciego (DEC-017)
+export * from './cash-shift-schema.js';
+export * from './cash-shift-sqlite-repository.js';
+export * from './escpos-cash-drawer.js';
+export * from './offline-iam-pin-validator.js';
