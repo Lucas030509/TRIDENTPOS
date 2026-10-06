@@ -1,10 +1,10 @@
 /**
- * TRIDENTPOS Edge POS Fastify LAN REST Application (ADR-013)
+ * TRIDENTPOS Edge POS Fastify LAN REST Application (ADR-013 / WP-014 / WP-016 / DEC-017)
  * Provides local LAN REST daemon for floor operations.
  * Enforces canonical fixed-four-decimal transport format and OCC conflict resolution.
  */
 
-import Fastify, { FastifyInstance } from 'fastify';
+import Fastify, { FastifyInstance, FastifyReply } from 'fastify';
 import {
   decimalStringToScaledBigInt,
   isValidUuidV4,
@@ -12,22 +12,40 @@ import {
 } from '@trident/core';
 import {
   type AccountType,
+  type ArqueoCiego,
+  type CashDrawerPort,
+  type CashShiftRepositoryPort,
+  type CorteCaja,
   type Cuenta,
   type CuentaItem,
   type CuentaItemModificador,
+  type IamPinValidatorPort,
   type Mesa,
+  type MovimientoCaja,
+  type ShiftAssignmentStrategy,
+  type TurnoCaja,
+  CashShiftDomainService,
   DiningDomainService,
   DomainError,
   OCCConflictError,
 } from '@trident/pos';
-import { EdgeDatabaseService, EdgeOutboxPersistence } from '@trident/edge';
+import { EdgeDatabaseService, EdgeOutboxPersistence, OfflineIamService } from '@trident/edge';
 import { SqliteDiningRoomRepository } from './dining-sqlite-repository.js';
+import { SqliteCashShiftRepository } from './cash-shift-sqlite-repository.js';
+import { OfflineIamPinValidatorAdapter } from './offline-iam-pin-validator.js';
 
 export interface FastifyAppOptions {
   readonly edgeDb: EdgeDatabaseService;
   readonly outbox: EdgeOutboxPersistence;
   readonly organizationId: string;
   readonly branchId: string;
+  readonly stationId?: string;
+  readonly cashShiftRepository?: CashShiftRepositoryPort;
+  readonly cashShiftService?: CashShiftDomainService;
+  readonly shiftAssignmentStrategy?: ShiftAssignmentStrategy;
+  readonly cashDrawerPort?: CashDrawerPort;
+  readonly pinValidator?: IamPinValidatorPort;
+  readonly offlineIamService?: OfflineIamService;
 }
 
 export function serializeCuentaToDTO(cuenta: Cuenta): Record<string, unknown> {
@@ -93,14 +111,101 @@ export function serializeMesaToDTO(mesa: Mesa): Record<string, unknown> {
   };
 }
 
+export function serializeTurnoCajaToDTO(turno: TurnoCaja): Record<string, unknown> {
+  return {
+    id: turno.id,
+    organizationId: turno.organizationId,
+    branchId: turno.branchId,
+    stationId: turno.stationId,
+    responsibleUserId: turno.responsibleUserId,
+    openedByUserId: turno.openedByUserId,
+    shiftNumber: turno.shiftNumber,
+    openingCashFloat: scaledBigIntToDecimalString(turno.openingCashFloat),
+    closingDeclaredCash:
+      turno.closingDeclaredCash !== null
+        ? scaledBigIntToDecimalString(turno.closingDeclaredCash)
+        : null,
+    calculatedCashTotal:
+      turno.calculatedCashTotal !== null
+        ? scaledBigIntToDecimalString(turno.calculatedCashTotal)
+        : null,
+    cashDifference:
+      turno.cashDifference !== null ? scaledBigIntToDecimalString(turno.cashDifference) : null,
+    status: turno.status,
+    assignmentStrategy: turno.assignmentStrategy,
+    participatingOperators: Array.from(turno.participatingOperators),
+    openedAt: turno.openedAt,
+    closedAt: turno.closedAt,
+    version: turno.version,
+    updatedAt: turno.updatedAt,
+  };
+}
+
+export function serializeMovimientoCajaToDTO(mov: MovimientoCaja): Record<string, unknown> {
+  return {
+    id: mov.id,
+    turnoCajaId: mov.turnoCajaId,
+    operatorUserId: mov.operatorUserId,
+    movementType: mov.movementType,
+    amount: scaledBigIntToDecimalString(mov.amount),
+    reason: mov.reason,
+    referenceId: mov.referenceId,
+    createdAt: mov.createdAt,
+  };
+}
+
+export function serializeArqueoCiegoToDTO(arqueo: ArqueoCiego): Record<string, unknown> {
+  return {
+    id: arqueo.id,
+    turnoCajaId: arqueo.turnoCajaId,
+    performedByUserId: arqueo.performedByUserId,
+    declaredCash: scaledBigIntToDecimalString(arqueo.declaredCash),
+    calculatedCash: scaledBigIntToDecimalString(arqueo.calculatedCash),
+    difference: scaledBigIntToDecimalString(arqueo.difference),
+    createdAt: arqueo.createdAt,
+  };
+}
+
+export function serializeCorteCajaToDTO(corte: CorteCaja): Record<string, unknown> {
+  return {
+    id: corte.id,
+    turnoCajaId: corte.turnoCajaId,
+    tipoCorte: corte.tipoCorte,
+    generatedByUserId: corte.generatedByUserId,
+    openingCashFloat: scaledBigIntToDecimalString(corte.openingCashFloat),
+    totalIngresos: scaledBigIntToDecimalString(corte.totalIngresos),
+    totalEgresos: scaledBigIntToDecimalString(corte.totalEgresos),
+    totalVentasEfectivo: scaledBigIntToDecimalString(corte.totalVentasEfectivo),
+    totalCalculado: scaledBigIntToDecimalString(corte.totalCalculado),
+    totalDeclarado:
+      corte.totalDeclarado !== null ? scaledBigIntToDecimalString(corte.totalDeclarado) : null,
+    diferencia: corte.diferencia !== null ? scaledBigIntToDecimalString(corte.diferencia) : null,
+    desgloseOperadores: corte.desgloseOperadores.map((op) => ({
+      operatorUserId: op.operatorUserId,
+      totalIngresos: scaledBigIntToDecimalString(op.totalIngresos),
+      totalEgresos: scaledBigIntToDecimalString(op.totalEgresos),
+      totalVentasEfectivo: scaledBigIntToDecimalString(op.totalVentasEfectivo),
+      netCash: scaledBigIntToDecimalString(op.netCash),
+      movementsCount: op.movementsCount,
+    })),
+    generatedAt: corte.generatedAt,
+  };
+}
+
 export function serializeSnapshotToDTO(snapshot: unknown): {
-  aggregateType: 'CUENTA' | 'MESA' | 'UNKNOWN';
+  aggregateType: 'CUENTA' | 'MESA' | 'TURNO_CAJA' | 'UNKNOWN';
   snapshot: Record<string, unknown> | null;
 } {
   if (!snapshot || typeof snapshot !== 'object') {
     return { aggregateType: 'UNKNOWN', snapshot: null };
   }
   const rec = snapshot as Record<string, unknown>;
+  if ('responsibleUserId' in rec && 'openingCashFloat' in rec) {
+    return {
+      aggregateType: 'TURNO_CAJA',
+      snapshot: serializeTurnoCajaToDTO(snapshot as TurnoCaja),
+    };
+  }
   if ('tableNumber' in rec && 'roomName' in rec) {
     return {
       aggregateType: 'MESA',
@@ -118,11 +223,42 @@ export function serializeSnapshotToDTO(snapshot: unknown): {
 
 export async function createPosFastifyApp(options: FastifyAppOptions): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
-  const repo = new SqliteDiningRoomRepository(options.edgeDb);
-  const service = new DiningDomainService({
-    diningRepo: repo,
-    accountRepo: repo,
+
+  // Dining Room & Account Service
+  const diningRepo = new SqliteDiningRoomRepository(options.edgeDb);
+  const diningService = new DiningDomainService({
+    diningRepo,
+    accountRepo: diningRepo,
   });
+
+  // Cash Shift Service (WP-016 / DEC-017)
+  const shiftRepo = options.cashShiftRepository ?? new SqliteCashShiftRepository(options.edgeDb);
+  const pinValidator =
+    options.pinValidator ??
+    (options.offlineIamService
+      ? new OfflineIamPinValidatorAdapter(options.offlineIamService)
+      : undefined);
+
+  let shiftService = options.cashShiftService;
+  if (!shiftService && pinValidator) {
+    shiftService = new CashShiftDomainService({
+      repository: shiftRepo,
+      assignmentStrategy: options.shiftAssignmentStrategy,
+      drawerPort: options.cashDrawerPort,
+      pinValidator,
+    });
+  }
+
+  function getRequiredShiftService(reply: FastifyReply): CashShiftDomainService | null {
+    if (!shiftService) {
+      reply.status(500).send({
+        error: 'PIN_VALIDATOR_REQUIRED',
+        message: 'CashShiftService requires pinValidator to be configured at startup',
+      });
+      return null;
+    }
+    return shiftService;
+  }
 
   // Custom Error Handler mapping domain & OCC errors
   app.setErrorHandler((error, req, reply) => {
@@ -165,9 +301,11 @@ export async function createPosFastifyApp(options: FastifyAppOptions): Promise<F
     });
   });
 
-  // -------------------------------------------------------------
-  // Frozen WP-014 Public Cuentas & Orders Endpoints
-  // -------------------------------------------------------------
+  // ==========================================
+  // Dining Room & Accounts API (WP-014)
+  // ==========================================
+
+  // Open Account on Table or Direct
   app.post('/cuentas', async (req, reply) => {
     const body = req.body as {
       id: string;
@@ -200,7 +338,7 @@ export async function createPosFastifyApp(options: FastifyAppOptions): Promise<F
 
     // Atomic execution with transactional outbox under one synchronous SQLite transaction
     const op = options.outbox.executeWithOutbox(
-      () => service.openCuentaSync(body),
+      () => diningService.openCuentaSync(body),
       [
         {
           organizationId: options.organizationId,
@@ -230,10 +368,10 @@ export async function createPosFastifyApp(options: FastifyAppOptions): Promise<F
       clientOpId: string;
       productId: string;
       productNameSnapshot: string;
-      unitPriceApplied: string; // Canonical 4-decimal string
-      quantity: string; // Canonical 4-decimal string
-      taxRateApplied: string; // Canonical 4-decimal string
-      discountAmountApplied?: string; // Canonical 4-decimal string
+      unitPriceApplied: string;
+      quantity: string;
+      taxRateApplied: string;
+      discountAmountApplied?: string;
       modifiers?: Array<{
         id: string;
         modifierId: string;
@@ -268,7 +406,6 @@ export async function createPosFastifyApp(options: FastifyAppOptions): Promise<F
       });
     }
 
-    // Strict lexical conversion to scale-4 BigInt
     const unitPriceApplied = decimalStringToScaledBigInt(body.unitPriceApplied);
     const quantity = decimalStringToScaledBigInt(body.quantity);
     const taxRateApplied = decimalStringToScaledBigInt(body.taxRateApplied);
@@ -283,10 +420,9 @@ export async function createPosFastifyApp(options: FastifyAppOptions): Promise<F
       modifierPriceApplied: decimalStringToScaledBigInt(m.modifierPriceApplied),
     }));
 
-    // Execute with transactional outbox under one synchronous transaction
     const updatedCuenta = options.outbox.executeWithOutbox(
       () =>
-        service.addItemToCuentaSync(cuentaId, body.expectedVersion, {
+        diningService.addItemToCuentaSync(cuentaId, body.expectedVersion, {
           id: body.id,
           productId: body.productId,
           productNameSnapshot: body.productNameSnapshot,
@@ -343,7 +479,7 @@ export async function createPosFastifyApp(options: FastifyAppOptions): Promise<F
     }
 
     const op = options.outbox.executeWithOutbox(
-      () => service.closeCuentaSync(id, body.expectedVersion, body.closedStatus ?? 'PAGADA'),
+      () => diningService.closeCuentaSync(id, body.expectedVersion, body.closedStatus ?? 'PAGADA'),
       (result) => [
         {
           organizationId: options.organizationId,
@@ -365,6 +501,379 @@ export async function createPosFastifyApp(options: FastifyAppOptions): Promise<F
     return reply.status(200).send({
       cuenta: serializeCuentaToDTO(op.cuenta),
       mesa: op.mesa ? serializeMesaToDTO(op.mesa) : undefined,
+    });
+  });
+
+  // ==========================================
+  // Cash Management & Shifts API (WP-016 / DEC-017)
+  // ==========================================
+
+  function validateEnrolledTenantAndStation(
+    body: { organizationId?: string; branchId?: string; stationId?: string } | undefined,
+    reply: FastifyReply,
+  ): boolean {
+    const enrolledOrgId = options.organizationId;
+    const enrolledBranchId = options.branchId;
+    const enrolledStationId = options.stationId;
+
+    if (!enrolledOrgId || !enrolledBranchId || !enrolledStationId) {
+      reply.status(400).send({
+        error: 'MISSING_ENROLLED_IDENTITY',
+        message: 'Missing mandatory enrolled identity: organizationId, branchId, stationId',
+      });
+      return false;
+    }
+
+    if (body?.organizationId && body.organizationId !== enrolledOrgId) {
+      reply.status(403).send({
+        error: 'TENANT_MISMATCH',
+        message: 'Tenant mismatch: client organizationId does not match enrolled tenant',
+      });
+      return false;
+    }
+
+    if (body?.branchId && body.branchId !== enrolledBranchId) {
+      reply.status(403).send({
+        error: 'TENANT_MISMATCH',
+        message: 'Tenant mismatch: client branchId does not match enrolled branch',
+      });
+      return false;
+    }
+
+    if (body?.stationId && body.stationId !== enrolledStationId) {
+      reply.status(403).send({
+        error: 'STATION_MISMATCH',
+        message: 'Station mismatch: client stationId does not match enrolled station',
+      });
+      return false;
+    }
+
+    return true;
+  }
+
+  async function loadAndVerifyShift(
+    shiftId: string,
+    reply: FastifyReply,
+  ): Promise<TurnoCaja | null> {
+    const shift = await shiftRepo.getShiftById(shiftId);
+    if (
+      !shift ||
+      shift.organizationId !== options.organizationId ||
+      shift.branchId !== options.branchId ||
+      shift.stationId !== options.stationId
+    ) {
+      reply.status(404).send({
+        error: 'SHIFT_NOT_FOUND',
+        message: 'Shift not found',
+      });
+      return null;
+    }
+    return shift;
+  }
+
+  // POST /turnos/apertura
+  app.post('/turnos/apertura', async (req, reply) => {
+    const svc = getRequiredShiftService(reply);
+    if (!svc) {
+      return;
+    }
+
+    const body = req.body as {
+      organizationId?: string;
+      branchId?: string;
+      stationId?: string;
+      responsibleUserId: string;
+      openedByUserId?: string;
+      openingCashFloat: string; // Scale-4 DecimalString (e.g. "500.0000")
+      shiftNumber?: number;
+      operatorPin?: string;
+    };
+
+    if (!validateEnrolledTenantAndStation(body, reply)) {
+      return;
+    }
+
+    const organizationId = options.organizationId;
+    const branchId = options.branchId;
+    const stationId = options.stationId!;
+
+    if (!body?.responsibleUserId || body?.openingCashFloat === undefined) {
+      return reply.status(400).send({
+        error: 'MISSING_FIELDS',
+        message: 'Missing mandatory fields: responsibleUserId, openingCashFloat',
+      });
+    }
+
+    const openingCashFloat = decimalStringToScaledBigInt(body.openingCashFloat);
+
+    const turno = await svc.abrirTurno({
+      organizationId,
+      branchId,
+      stationId,
+      responsibleUserId: body.responsibleUserId,
+      openedByUserId: body.openedByUserId,
+      openingCashFloat,
+      shiftNumber: body.shiftNumber,
+      operatorPin: body.operatorPin,
+    });
+
+    return reply.status(201).send({
+      turno: serializeTurnoCajaToDTO(turno),
+    });
+  });
+
+  // POST /turnos/:id/operadores (Add participant to shared shift, DEC-017)
+  app.post('/turnos/:id/operadores', async (req, reply) => {
+    const svc = getRequiredShiftService(reply);
+    if (!svc) {
+      return;
+    }
+
+    const { id } = req.params as { id: string };
+    const body = req.body as {
+      organizationId?: string;
+      branchId?: string;
+      stationId?: string;
+      operatorUserId: string;
+      addedByUserId: string;
+      expectedVersion: number;
+      operatorPin?: string;
+      requestingPin?: string;
+    };
+
+    if (!validateEnrolledTenantAndStation(body, reply)) {
+      return;
+    }
+
+    const verifiedShift = await loadAndVerifyShift(id, reply);
+    if (!verifiedShift) {
+      return;
+    }
+
+    if (!body?.operatorUserId || !body?.addedByUserId || body.expectedVersion === undefined) {
+      return reply.status(400).send({
+        error: 'MISSING_FIELDS',
+        message: 'Missing mandatory fields: operatorUserId, addedByUserId, expectedVersion',
+      });
+    }
+
+    const turno = await svc.agregarOperador({
+      shiftId: id,
+      operatorUserId: body.operatorUserId,
+      requestingUserId: body.addedByUserId,
+      expectedVersion: body.expectedVersion,
+      operatorPin: body.operatorPin,
+      requestingPin: body.requestingPin,
+    });
+
+    return reply.status(200).send({
+      turno: serializeTurnoCajaToDTO(turno),
+    });
+  });
+
+  // POST /turnos/:id/movimientos (Register cash movement)
+  app.post('/turnos/:id/movimientos', async (req, reply) => {
+    const svc = getRequiredShiftService(reply);
+    if (!svc) {
+      return;
+    }
+
+    const { id } = req.params as { id: string };
+    const body = req.body as {
+      organizationId?: string;
+      branchId?: string;
+      stationId?: string;
+      operatorUserId: string;
+      movementType: MovimientoCaja['movementType'];
+      amount: string; // Scale-4 DecimalString
+      reason: string;
+      referenceId?: string | null;
+      expectedVersion: number;
+      operatorPin?: string;
+    };
+
+    if (!validateEnrolledTenantAndStation(body, reply)) {
+      return;
+    }
+
+    const verifiedShift = await loadAndVerifyShift(id, reply);
+    if (!verifiedShift) {
+      return;
+    }
+
+    if (
+      !body?.operatorUserId ||
+      !body?.movementType ||
+      body?.amount === undefined ||
+      !body?.reason ||
+      body.expectedVersion === undefined
+    ) {
+      return reply.status(400).send({
+        error: 'MISSING_FIELDS',
+        message:
+          'Missing mandatory fields: operatorUserId, movementType, amount, reason, expectedVersion',
+      });
+    }
+
+    const amount = decimalStringToScaledBigInt(body.amount);
+
+    const result = await svc.registrarMovimiento({
+      shiftId: id,
+      operatorUserId: body.operatorUserId,
+      movementType: body.movementType,
+      amount,
+      reason: body.reason,
+      referenceId: body.referenceId,
+      expectedVersion: body.expectedVersion,
+      operatorPin: body.operatorPin,
+    });
+
+    return reply.status(201).send({
+      turno: serializeTurnoCajaToDTO(result.shift),
+      movimiento: serializeMovimientoCajaToDTO(result.movement),
+    });
+  });
+
+  // POST /turnos/:id/corte-x (Read-only partial inspection)
+  app.post('/turnos/:id/corte-x', async (req, reply) => {
+    const svc = getRequiredShiftService(reply);
+    if (!svc) {
+      return;
+    }
+
+    const { id } = req.params as { id: string };
+    const body = req.body as {
+      organizationId?: string;
+      branchId?: string;
+      stationId?: string;
+      requestedByUserId: string;
+      requestedByPin?: string;
+    };
+
+    if (!validateEnrolledTenantAndStation(body, reply)) {
+      return;
+    }
+
+    const verifiedShift = await loadAndVerifyShift(id, reply);
+    if (!verifiedShift) {
+      return;
+    }
+
+    if (!body?.requestedByUserId) {
+      return reply.status(400).send({
+        error: 'MISSING_FIELDS',
+        message: 'Missing mandatory field: requestedByUserId',
+      });
+    }
+
+    const corte = await svc.generarCorteX({
+      shiftId: id,
+      requestedByUserId: body.requestedByUserId,
+      requestedByPin: body.requestedByPin,
+    });
+
+    return reply.status(200).send({
+      corte: serializeCorteCajaToDTO(corte),
+    });
+  });
+
+  // POST /turnos/:id/arqueo (Blind cash count, captures declared cash before displaying calculated total)
+  app.post('/turnos/:id/arqueo', async (req, reply) => {
+    const svc = getRequiredShiftService(reply);
+    if (!svc) {
+      return;
+    }
+
+    const { id } = req.params as { id: string };
+    const body = req.body as {
+      organizationId?: string;
+      branchId?: string;
+      stationId?: string;
+      performedByUserId: string;
+      declaredCash: string; // Scale-4 DecimalString
+      expectedVersion: number;
+      performedByPin?: string;
+    };
+
+    if (!validateEnrolledTenantAndStation(body, reply)) {
+      return;
+    }
+
+    const verifiedShift = await loadAndVerifyShift(id, reply);
+    if (!verifiedShift) {
+      return;
+    }
+
+    if (
+      !body?.performedByUserId ||
+      body?.declaredCash === undefined ||
+      body.expectedVersion === undefined
+    ) {
+      return reply.status(400).send({
+        error: 'MISSING_FIELDS',
+        message: 'Missing mandatory fields: performedByUserId, declaredCash, expectedVersion',
+      });
+    }
+
+    const declaredCash = decimalStringToScaledBigInt(body.declaredCash);
+
+    const result = await svc.realizarArqueoCiego({
+      shiftId: id,
+      performedByUserId: body.performedByUserId,
+      declaredCash,
+      expectedVersion: body.expectedVersion,
+      performedByPin: body.performedByPin,
+    });
+
+    return reply.status(200).send({
+      turno: serializeTurnoCajaToDTO(result.shift),
+      arqueo: serializeArqueoCiegoToDTO(result.arqueo),
+    });
+  });
+
+  // POST /turnos/:id/corte-z (Permanently closes shift, commits with PRAGMA synchronous = FULL, emits sync event)
+  app.post('/turnos/:id/corte-z', async (req, reply) => {
+    const svc = getRequiredShiftService(reply);
+    if (!svc) {
+      return;
+    }
+
+    const { id } = req.params as { id: string };
+    const body = req.body as {
+      organizationId?: string;
+      branchId?: string;
+      stationId?: string;
+      closedByUserId: string;
+      expectedVersion: number;
+      closedByPin?: string;
+    };
+
+    if (!validateEnrolledTenantAndStation(body, reply)) {
+      return;
+    }
+
+    const verifiedShift = await loadAndVerifyShift(id, reply);
+    if (!verifiedShift) {
+      return;
+    }
+
+    if (!body?.closedByUserId || body.expectedVersion === undefined) {
+      return reply.status(400).send({
+        error: 'MISSING_FIELDS',
+        message: 'Missing mandatory fields: closedByUserId, expectedVersion',
+      });
+    }
+
+    const result = await svc.generarCorteZ({
+      shiftId: id,
+      closedByUserId: body.closedByUserId,
+      expectedVersion: body.expectedVersion,
+      closedByPin: body.closedByPin,
+    });
+
+    return reply.status(200).send({
+      turno: serializeTurnoCajaToDTO(result.shift),
+      corte: serializeCorteCajaToDTO(result.corte),
     });
   });
 

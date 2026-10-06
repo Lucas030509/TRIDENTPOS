@@ -32,3 +32,9 @@ export * from './kds-types.js';
 export * from './kds-ports.js';
 export * from './kds-service.js';
 export * from './kds-wire-mapper.js';
+
+// Re-export Cash Shifts & Cortes X/Z domain model (WP-016 / DEC-017)
+export * from './cash-shift-types.js';
+export * from './cash-shift-ports.js';
+export * from './cash-shift-strategy.js';
+export * from './cash-shift-service.js';

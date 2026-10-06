@@ -8,4 +8,5 @@ export * from './write-serializer.js';
 export * from './wal-manager.js';
 export * from './edge-database.js';
 export * from './outbox-persistence.js';
+export * from './local-audit-persistence.js';
 export * from './sync-persistence.js';
