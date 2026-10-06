@@ -7,6 +7,7 @@ import {
   type MovimientoCaja,
   type TurnoCaja,
   CashShiftDomainService,
+  DomainError,
   OCCConflictError,
   ShiftAlreadyOpenError,
   ShiftLockedError,
@@ -97,17 +98,56 @@ class InMemoryCashShiftRepository implements CashShiftRepositoryPort {
 }
 
 describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Domain Suite (DEC-017)', () => {
+  it('WP016-DOM-00: Fail-closed when tenant identity (organizationId or branchId) is missing', async () => {
+    const repo = new InMemoryCashShiftRepository();
+    const service = new CashShiftDomainService({ repository: repo });
+
+    await assert.rejects(
+      service.abrirTurno({
+        organizationId: '',
+        branchId: 'BRANCH_01',
+        stationId: 'STATION_01',
+        responsibleUserId: 'USER_MGR_01',
+        openingCashFloat: 5000000n,
+      }),
+      (err: Error) => {
+        assert.ok(err instanceof DomainError);
+        assert.equal((err as DomainError).code, 'MISSING_TENANT_IDENTITY');
+        return true;
+      },
+    );
+
+    await assert.rejects(
+      service.abrirTurno({
+        organizationId: 'ORG_01',
+        branchId: '',
+        stationId: 'STATION_01',
+        responsibleUserId: 'USER_MGR_01',
+        openingCashFloat: 5000000n,
+      }),
+      (err: Error) => {
+        assert.ok(err instanceof DomainError);
+        assert.equal((err as DomainError).code, 'MISSING_TENANT_IDENTITY');
+        return true;
+      },
+    );
+  });
+
   it('WP016-DOM-01: Abre turno con fondo inicial y asignación compartida (DEC-017)', async () => {
     const repo = new InMemoryCashShiftRepository();
     const service = new CashShiftDomainService({ repository: repo });
 
     const shift = await service.abrirTurno({
+      organizationId: 'ORG_01',
+      branchId: 'BRANCH_01',
       stationId: 'STATION_01',
       responsibleUserId: 'USER_MGR_01',
       openingCashFloat: 5000000n, // $500.0000
       shiftNumber: 1,
     });
 
+    assert.equal(shift.organizationId, 'ORG_01');
+    assert.equal(shift.branchId, 'BRANCH_01');
     assert.equal(shift.stationId, 'STATION_01');
     assert.equal(shift.responsibleUserId, 'USER_MGR_01');
     assert.equal(shift.openingCashFloat, 5000000n);
@@ -118,6 +158,8 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Domain Suite 
     // Second shift open on same station must fail closed
     await assert.rejects(
       service.abrirTurno({
+        organizationId: 'ORG_01',
+        branchId: 'BRANCH_01',
         stationId: 'STATION_01',
         responsibleUserId: 'USER_MGR_02',
         openingCashFloat: 2000000n,
@@ -134,6 +176,8 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Domain Suite 
     const service = new CashShiftDomainService({ repository: repo });
 
     const shift = await service.abrirTurno({
+      organizationId: 'ORG_01',
+      branchId: 'BRANCH_01',
       stationId: 'STATION_01',
       responsibleUserId: 'USER_MGR_01',
       openingCashFloat: 10000000n, // $1000.0000
@@ -170,6 +214,8 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Domain Suite 
     const service = new CashShiftDomainService({ repository: repo });
 
     const shift = await service.abrirTurno({
+      organizationId: 'ORG_01',
+      branchId: 'BRANCH_01',
       stationId: 'STATION_01',
       responsibleUserId: 'USER_MGR_01',
       openingCashFloat: 5000000n,
@@ -196,6 +242,8 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Domain Suite 
     const service = new CashShiftDomainService({ repository: repo });
 
     let shift = await service.abrirTurno({
+      organizationId: 'ORG_01',
+      branchId: 'BRANCH_01',
       stationId: 'STATION_01',
       responsibleUserId: 'USER_MGR',
       openingCashFloat: 5000000n, // $500.0000
@@ -276,6 +324,8 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Domain Suite 
     const service = new CashShiftDomainService({ repository: repo });
 
     let shift = await service.abrirTurno({
+      organizationId: 'ORG_01',
+      branchId: 'BRANCH_01',
       stationId: 'STATION_01',
       responsibleUserId: 'USER_MGR',
       openingCashFloat: 10000000n, // $1000.0000
@@ -321,6 +371,8 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Domain Suite 
     });
 
     const shift = await service.abrirTurno({
+      organizationId: 'ORG_01',
+      branchId: 'BRANCH_01',
       stationId: 'STATION_01',
       responsibleUserId: 'USER_MGR',
       openingCashFloat: 5000000n,
@@ -378,6 +430,8 @@ describe('TRIDENTPOS WP-016 Cash Management, Shifts & Arqueo Ciego Domain Suite 
     const service = new CashShiftDomainService({ repository: repo });
 
     const shift = await service.abrirTurno({
+      organizationId: 'ORG_01',
+      branchId: 'BRANCH_01',
       stationId: 'STATION_01',
       responsibleUserId: 'USER_MGR',
       openingCashFloat: 5000000n,

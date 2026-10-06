@@ -1,7 +1,8 @@
 /**
  * TRIDENTPOS Edge SQLite Cash Management & Shift Repository Adapter (WP-016 / DEC-017 / ADR-004 / ADR-012)
  * Implements CashShiftRepositoryPort from @trident/pos.
- * Guarantees strict OCC concurrency, scale-4 integer storage, atomic movement persistence,
+ * Guarantees strict OCC concurrency, scale-4 BigInt storage (zero floats/coercion),
+ * atomic movement persistence, canonical tenant identity enforcement (fail-closed, zero defaults),
  * and PRAGMA synchronous = FULL durable commit for Corte Z before outbox emission.
  */
 
@@ -11,30 +12,37 @@ import {
   type ArqueoCiego,
   type CashShiftRepositoryPort,
   type CorteCaja,
+  type CorteZGeneradoEventPayload,
   type MovimientoCaja,
   type TurnoCaja,
   type TurnoCajaStatus,
   DomainError,
   OCCConflictError,
 } from '@trident/pos';
-import { EdgeDatabaseService } from '@trident/edge';
+import {
+  EdgeDatabaseService,
+  EdgeOutboxPersistence,
+  LocalAuditTrailPersistence,
+} from '@trident/edge';
 import { CASH_SHIFT_SQLITE_SCHEMA } from './cash-shift-schema.js';
 
 interface TurnoCajaRow {
   id: string;
+  organization_id: string;
+  branch_id: string;
   station_id: string;
   responsible_user_id: string;
   opened_by_user_id: string;
-  shift_number: number;
-  opening_cash_float: number | bigint;
-  closing_declared_cash: number | bigint | null;
-  calculated_cash_total: number | bigint | null;
-  cash_difference: number | bigint | null;
+  shift_number: number | bigint;
+  opening_cash_float: number | bigint | string;
+  closing_declared_cash: number | bigint | string | null;
+  calculated_cash_total: number | bigint | string | null;
+  cash_difference: number | bigint | string | null;
   status: string;
   assignment_strategy: string;
   opened_at: string;
   closed_at: string | null;
-  version: number;
+  version: number | bigint;
   updated_at: string;
 }
 
@@ -47,7 +55,7 @@ interface MovimientoCajaRow {
   turno_caja_id: string;
   operator_user_id: string;
   movement_type: string;
-  amount: number | bigint;
+  amount: number | bigint | string;
   reason: string;
   reference_id: string | null;
   created_at: string;
@@ -55,9 +63,19 @@ interface MovimientoCajaRow {
 
 export class SqliteCashShiftRepository implements CashShiftRepositoryPort {
   readonly #db: EdgeDatabaseService;
+  readonly #outboxPersistence: EdgeOutboxPersistence;
+  readonly #auditPersistence: LocalAuditTrailPersistence;
 
-  constructor(db: EdgeDatabaseService) {
+  constructor(
+    db: EdgeDatabaseService,
+    options?: {
+      outboxPersistence?: EdgeOutboxPersistence;
+      auditPersistence?: LocalAuditTrailPersistence;
+    },
+  ) {
     this.#db = db;
+    this.#outboxPersistence = options?.outboxPersistence ?? new EdgeOutboxPersistence(db);
+    this.#auditPersistence = options?.auditPersistence ?? new LocalAuditTrailPersistence(db);
     this.bootstrapSchema();
   }
 
@@ -68,6 +86,8 @@ export class SqliteCashShiftRepository implements CashShiftRepositoryPort {
   private mapTurnoRow(row: TurnoCajaRow, participatingOperators: readonly string[]): TurnoCaja {
     return {
       id: row.id,
+      organizationId: row.organization_id,
+      branchId: row.branch_id,
       stationId: row.station_id,
       responsibleUserId: row.responsible_user_id,
       openedByUserId: row.opened_by_user_id,
@@ -98,7 +118,7 @@ export class SqliteCashShiftRepository implements CashShiftRepositoryPort {
 
   public getActiveShiftSync(stationId: string): TurnoCaja | null {
     const row = this.#db.queryRowSafe<TurnoCajaRow>(
-      `SELECT id, station_id, responsible_user_id, opened_by_user_id, shift_number,
+      `SELECT id, organization_id, branch_id, station_id, responsible_user_id, opened_by_user_id, shift_number,
               opening_cash_float, closing_declared_cash, calculated_cash_total, cash_difference,
               status, assignment_strategy, opened_at, closed_at, version, updated_at
        FROM turnos_caja
@@ -117,7 +137,7 @@ export class SqliteCashShiftRepository implements CashShiftRepositoryPort {
 
   public getShiftByIdSync(id: string): TurnoCaja | null {
     const row = this.#db.queryRowSafe<TurnoCajaRow>(
-      `SELECT id, station_id, responsible_user_id, opened_by_user_id, shift_number,
+      `SELECT id, organization_id, branch_id, station_id, responsible_user_id, opened_by_user_id, shift_number,
               opening_cash_float, closing_declared_cash, calculated_cash_total, cash_difference,
               status, assignment_strategy, opened_at, closed_at, version, updated_at
        FROM turnos_caja
@@ -135,6 +155,13 @@ export class SqliteCashShiftRepository implements CashShiftRepositoryPort {
   }
 
   public saveShiftSync(shift: TurnoCaja, expectedVersion: number): TurnoCaja {
+    if (!shift.organizationId || shift.organizationId.trim() === '') {
+      throw new DomainError('organizationId is required', 'MISSING_TENANT_IDENTITY', 400);
+    }
+    if (!shift.branchId || shift.branchId.trim() === '') {
+      throw new DomainError('branchId is required', 'MISSING_TENANT_IDENTITY', 400);
+    }
+
     if (expectedVersion === 0) {
       // New shift insert
       const existing = this.getShiftByIdSync(shift.id);
@@ -145,19 +172,21 @@ export class SqliteCashShiftRepository implements CashShiftRepositoryPort {
       this.#db.runInTransaction(() => {
         this.#db.executeMutation(
           `INSERT INTO turnos_caja (
-            id, station_id, responsible_user_id, opened_by_user_id, shift_number,
+            id, organization_id, branch_id, station_id, responsible_user_id, opened_by_user_id, shift_number,
             opening_cash_float, closing_declared_cash, calculated_cash_total, cash_difference,
             status, assignment_strategy, opened_at, closed_at, version, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
           shift.id,
+          shift.organizationId,
+          shift.branchId,
           shift.stationId,
           shift.responsibleUserId,
           shift.openedByUserId,
           shift.shiftNumber,
-          Number(shift.openingCashFloat),
-          shift.closingDeclaredCash !== null ? Number(shift.closingDeclaredCash) : null,
-          shift.calculatedCashTotal !== null ? Number(shift.calculatedCashTotal) : null,
-          shift.cashDifference !== null ? Number(shift.cashDifference) : null,
+          shift.openingCashFloat,
+          shift.closingDeclaredCash,
+          shift.calculatedCashTotal,
+          shift.cashDifference,
           shift.status,
           shift.assignmentStrategy,
           shift.openedAt,
@@ -189,9 +218,9 @@ export class SqliteCashShiftRepository implements CashShiftRepositoryPort {
          SET closing_declared_cash = ?, calculated_cash_total = ?, cash_difference = ?,
              status = ?, closed_at = ?, version = ?, updated_at = ?
          WHERE id = ? AND version = ?;`,
-        shift.closingDeclaredCash !== null ? Number(shift.closingDeclaredCash) : null,
-        shift.calculatedCashTotal !== null ? Number(shift.calculatedCashTotal) : null,
-        shift.cashDifference !== null ? Number(shift.cashDifference) : null,
+        shift.closingDeclaredCash,
+        shift.calculatedCashTotal,
+        shift.cashDifference,
         shift.status,
         shift.closedAt,
         shift.version,
@@ -261,7 +290,7 @@ export class SqliteCashShiftRepository implements CashShiftRepositoryPort {
         movement.turnoCajaId,
         movement.operatorUserId,
         movement.movementType,
-        Number(movement.amount),
+        movement.amount,
         movement.reason,
         movement.referenceId,
         movement.createdAt,
@@ -315,9 +344,9 @@ export class SqliteCashShiftRepository implements CashShiftRepositoryPort {
          SET closing_declared_cash = ?, calculated_cash_total = ?, cash_difference = ?,
              status = ?, version = ?, updated_at = ?
          WHERE id = ? AND version = ?;`,
-        Number(shift.closingDeclaredCash),
-        Number(shift.calculatedCashTotal),
-        Number(shift.cashDifference),
+        shift.closingDeclaredCash,
+        shift.calculatedCashTotal,
+        shift.cashDifference,
         shift.status,
         shift.version,
         shift.updatedAt,
@@ -341,9 +370,9 @@ export class SqliteCashShiftRepository implements CashShiftRepositoryPort {
         arqueo.id,
         arqueo.turnoCajaId,
         arqueo.performedByUserId,
-        Number(arqueo.declaredCash),
-        Number(arqueo.calculatedCash),
-        Number(arqueo.difference),
+        arqueo.declaredCash,
+        arqueo.calculatedCash,
+        arqueo.difference,
         arqueo.createdAt,
       );
 
@@ -365,6 +394,13 @@ export class SqliteCashShiftRepository implements CashShiftRepositoryPort {
    * the transactional outbox event CorteZGenerado for downstream sync.
    */
   public saveCorteZSync(corte: CorteCaja, shift: TurnoCaja, expectedVersion: number): CorteCaja {
+    if (!shift.organizationId || shift.organizationId.trim() === '') {
+      throw new DomainError('organizationId is required', 'MISSING_TENANT_IDENTITY', 400);
+    }
+    if (!shift.branchId || shift.branchId.trim() === '') {
+      throw new DomainError('branchId is required', 'MISSING_TENANT_IDENTITY', 400);
+    }
+
     return this.#db.runInTransaction(
       () => {
         const result = this.#db.executeMutation(
@@ -410,51 +446,45 @@ export class SqliteCashShiftRepository implements CashShiftRepositoryPort {
           corte.turnoCajaId,
           corte.tipoCorte,
           corte.generatedByUserId,
-          Number(corte.openingCashFloat),
-          Number(corte.totalIngresos),
-          Number(corte.totalEgresos),
-          Number(corte.totalVentasEfectivo),
-          Number(corte.totalCalculado),
-          corte.totalDeclarado !== null ? Number(corte.totalDeclarado) : null,
-          corte.diferencia !== null ? Number(corte.diferencia) : null,
+          corte.openingCashFloat,
+          corte.totalIngresos,
+          corte.totalEgresos,
+          corte.totalVentasEfectivo,
+          corte.totalCalculado,
+          corte.totalDeclarado,
+          corte.diferencia,
           serializedDesglose,
           corte.generatedAt,
         );
 
-        // Audit cash discrepancy if difference is non-zero
+        // Audit cash discrepancy in canonical local_audit_trail if difference is non-zero
         if (corte.diferencia !== null && corte.diferencia !== 0n) {
-          this.#db.executeMutation(
-            `INSERT INTO local_audit_trail (
-              id, actor_id, station_id, action, aggregate_type, aggregate_id, details_json, reason, created_at, is_synced
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
-            crypto.randomUUID(),
-            corte.generatedByUserId,
-            shift.stationId,
-            'CASH_DIFFERENCE_AUDITED',
-            'TURNO_CAJA',
-            shift.id,
-            JSON.stringify({
+          this.#auditPersistence.recordAudit({
+            organizationId: shift.organizationId,
+            branchId: shift.branchId,
+            actorId: corte.generatedByUserId,
+            stationId: shift.stationId,
+            action: 'CASH_DIFFERENCE_AUDITED',
+            aggregateType: 'TURNO_CAJA',
+            aggregateId: shift.id,
+            details: {
               shiftId: shift.id,
               stationId: shift.stationId,
               shiftNumber: shift.shiftNumber,
               declaredCash: scaledBigIntToDecimalString(corte.totalDeclarado!),
               calculatedCash: scaledBigIntToDecimalString(corte.totalCalculado),
               cashDifference: scaledBigIntToDecimalString(corte.diferencia),
-            }),
-            'Descuadre de efectivo detectado en Arqueo Ciego / Corte Z',
-            corte.generatedAt,
-            0,
-          );
+            },
+            reason: 'Descuadre de efectivo detectado en Arqueo Ciego / Corte Z',
+            createdAt: corte.generatedAt,
+          });
         }
 
-        // Emit Transactional Outbox Event CorteZGenerado
-        const outboxPayload = {
-          eventId: crypto.randomUUID(),
-          eventType: 'CorteZGenerado',
-          occurredAt: corte.generatedAt,
-          aggregateType: 'CORTE_Z',
-          aggregateId: corte.id,
+        // Emit Transactional Outbox Event CorteZGenerado to canonical outbox_queue
+        const outboxPayload: CorteZGeneradoEventPayload = {
           shiftId: shift.id,
+          organizationId: shift.organizationId,
+          branchId: shift.branchId,
           stationId: shift.stationId,
           responsibleUserId: shift.responsibleUserId,
           shiftNumber: shift.shiftNumber,
@@ -481,24 +511,21 @@ export class SqliteCashShiftRepository implements CashShiftRepositoryPort {
           closedAt: shift.closedAt!,
         };
 
-        this.#db.executeMutation(
-          `INSERT INTO outbox_queue (
-            id, organization_id, branch_id, aggregate_type, aggregate_id, action, client_op_id,
-            aggregate_sequence_number, payload, status, retry_count, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
-          crypto.randomUUID(),
-          'org_default',
-          'branch_default',
-          'CORTE_Z',
-          corte.id,
-          'CorteZGenerado',
-          corte.id,
-          shift.shiftNumber >= 1 ? shift.shiftNumber : 1,
-          JSON.stringify(outboxPayload),
-          'PENDING',
-          0,
-          corte.generatedAt,
-        );
+        const clientOpId =
+          /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(corte.id)
+            ? corte.id
+            : crypto.randomUUID();
+
+        this.#outboxPersistence.enqueue({
+          organizationId: shift.organizationId,
+          branchId: shift.branchId,
+          aggregateType: 'CORTE_Z',
+          aggregateId: corte.id,
+          action: 'CorteZGenerado',
+          clientOpId,
+          aggregateSequenceNumber: shift.shiftNumber >= 1 ? shift.shiftNumber : 1,
+          payload: outboxPayload,
+        });
 
         return corte;
       },

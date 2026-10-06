@@ -111,6 +111,8 @@ export function serializeMesaToDTO(mesa: Mesa): Record<string, unknown> {
 export function serializeTurnoCajaToDTO(turno: TurnoCaja): Record<string, unknown> {
   return {
     id: turno.id,
+    organizationId: turno.organizationId,
+    branchId: turno.branchId,
     stationId: turno.stationId,
     responsibleUserId: turno.responsibleUserId,
     openedByUserId: turno.openedByUserId,
@@ -488,6 +490,8 @@ export async function createPosFastifyApp(options: FastifyAppOptions): Promise<F
   // POST /turnos/apertura
   app.post('/turnos/apertura', async (req, reply) => {
     const body = req.body as {
+      organizationId?: string;
+      branchId?: string;
       stationId: string;
       responsibleUserId: string;
       openedByUserId?: string;
@@ -495,6 +499,16 @@ export async function createPosFastifyApp(options: FastifyAppOptions): Promise<F
       shiftNumber?: number;
       operatorPin?: string;
     };
+
+    const organizationId = body?.organizationId ?? options.organizationId;
+    const branchId = body?.branchId ?? options.branchId;
+
+    if (!organizationId || !branchId) {
+      return reply.status(400).send({
+        error: 'MISSING_TENANT_IDENTITY',
+        message: 'Missing mandatory tenant identity: organizationId, branchId',
+      });
+    }
 
     if (!body?.stationId || !body?.responsibleUserId || body?.openingCashFloat === undefined) {
       return reply.status(400).send({
@@ -506,6 +520,8 @@ export async function createPosFastifyApp(options: FastifyAppOptions): Promise<F
     const openingCashFloat = decimalStringToScaledBigInt(body.openingCashFloat);
 
     const turno = await shiftService.abrirTurno({
+      organizationId,
+      branchId,
       stationId: body.stationId,
       responsibleUserId: body.responsibleUserId,
       openedByUserId: body.openedByUserId,

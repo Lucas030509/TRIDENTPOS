@@ -41,6 +41,8 @@ export interface CashShiftDomainServiceOptions {
 }
 
 export interface AbrirTurnoCommand {
+  readonly organizationId: string;
+  readonly branchId: string;
   readonly stationId: string;
   readonly responsibleUserId: string;
   readonly openedByUserId?: string;
@@ -210,6 +212,13 @@ export class CashShiftDomainService {
    * Opens a new cash shift on a station.
    */
   public async abrirTurno(command: AbrirTurnoCommand): Promise<TurnoCaja> {
+    if (!command.organizationId || command.organizationId.trim() === '') {
+      throw new DomainError('organizationId is required', 'MISSING_TENANT_IDENTITY', 400);
+    }
+    if (!command.branchId || command.branchId.trim() === '') {
+      throw new DomainError('branchId is required', 'MISSING_TENANT_IDENTITY', 400);
+    }
+
     const existing = await this.#repository.getActiveShift(command.stationId);
     if (existing) {
       throw new ShiftAlreadyOpenError(command.stationId);
@@ -236,6 +245,8 @@ export class CashShiftDomainService {
 
     const newShift: TurnoCaja = {
       id: shiftId,
+      organizationId: command.organizationId,
+      branchId: command.branchId,
       stationId: command.stationId,
       responsibleUserId,
       openedByUserId,

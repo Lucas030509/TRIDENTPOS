@@ -6,6 +6,8 @@
 export const CASH_SHIFT_SQLITE_SCHEMA = `
 CREATE TABLE IF NOT EXISTS turnos_caja (
     id TEXT PRIMARY KEY,
+    organization_id TEXT NOT NULL,
+    branch_id TEXT NOT NULL,
     station_id TEXT NOT NULL,
     responsible_user_id TEXT NOT NULL,
     opened_by_user_id TEXT NOT NULL,
@@ -68,39 +70,8 @@ CREATE TABLE IF NOT EXISTS cortes_caja (
     generated_at TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS local_audit_trail (
-    id TEXT PRIMARY KEY,
-    actor_id TEXT NOT NULL,
-    station_id TEXT NOT NULL,
-    action TEXT NOT NULL,
-    aggregate_type TEXT NOT NULL,
-    aggregate_id TEXT NOT NULL,
-    details_json TEXT NOT NULL,
-    reason TEXT NULL,
-    created_at TEXT NOT NULL,
-    is_synced INTEGER NOT NULL DEFAULT 0
-);
-
-CREATE TABLE IF NOT EXISTS outbox_queue (
-    id TEXT PRIMARY KEY,
-    organization_id TEXT NOT NULL DEFAULT 'org_default',
-    branch_id TEXT NOT NULL DEFAULT 'branch_default',
-    aggregate_type TEXT NOT NULL,
-    aggregate_id TEXT NOT NULL,
-    action TEXT NOT NULL,
-    client_op_id TEXT NOT NULL UNIQUE,
-    aggregate_sequence_number INTEGER NOT NULL CHECK (aggregate_sequence_number >= 1),
-    payload TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'PENDING',
-    receipt_token TEXT,
-    receipt_verified_at TEXT,
-    retry_count INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-    synced_at TEXT,
-    last_error TEXT
-);
-
 CREATE INDEX IF NOT EXISTS idx_turnos_station_status ON turnos_caja(station_id, status);
+CREATE INDEX IF NOT EXISTS idx_turnos_tenant_station ON turnos_caja(organization_id, branch_id, station_id);
 CREATE INDEX IF NOT EXISTS idx_movimientos_turno ON movimientos_caja(turno_caja_id);
 CREATE INDEX IF NOT EXISTS idx_turnos_operadores_turno ON turnos_caja_operadores(turno_caja_id);
 CREATE INDEX IF NOT EXISTS idx_cortes_turno ON cortes_caja(turno_caja_id);

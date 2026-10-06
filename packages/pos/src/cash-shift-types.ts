@@ -12,6 +12,8 @@ export type CorteCajaType = 'CORTE_X' | 'CORTE_Z';
 
 export interface TurnoCaja {
   readonly id: string;
+  readonly organizationId: string;
+  readonly branchId: string;
   readonly stationId: string;
   readonly responsibleUserId: string;
   readonly openedByUserId: string;
@@ -77,6 +79,8 @@ export interface CorteCaja {
 
 export interface CorteZGeneradoEventPayload {
   readonly shiftId: string;
+  readonly organizationId: string;
+  readonly branchId: string;
   readonly stationId: string;
   readonly responsibleUserId: string;
   readonly shiftNumber: number;
