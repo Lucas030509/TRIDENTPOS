@@ -64,6 +64,7 @@ graph TD
 1. **Front-end Corporativo:** Desplegado en **Vercel** con distribución global en Edge Network, ofreciendo carga ultrarrápida del portal de administración de la suite.
 2. **Back-end & Sincronización:** Ejecutado en **Render** como un Web Service Node.js en contenedor Docker administrado con escalamiento horizontal según demanda.
 3. **Persistencia Central:** **PostgreSQL en Supabase** con réplicas de lectura opcionales para analítica masiva y Row-Level Security (RLS) para aislamiento estricto de tenants.
+4. **Feature Flag de Timbrado Fiscal:** `FISCAL_STAMPING_ENABLED` (Kill switch para emisión y timbrado directo CFDI, OFF por defecto / fail-closed; requiere valor exacto `'true'` para habilitar llamadas activas al PAC).
 
 ---
 
