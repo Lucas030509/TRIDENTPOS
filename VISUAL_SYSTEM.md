@@ -38,7 +38,17 @@ All contrast ratios below were computed against the WCAG 2.x relative-luminance 
 | `--color-info`           | `#1D4ED8` | informational, in progress      | 6.4 / 6.7                    |
 | `--color-focus`          | `#2563EB` | focus ring (2 px + 2 px offset) | 4.9                          |
 
-Soft tones for badges/backgrounds use the same hue at 12 % opacity over `surface`, always with the solid token for text.
+**Control boundaries:** `--color-border` is decorative only (dividers, card edges). Any boundary that alone identifies a control or required state (input fields, checkboxes, selectable cards, focus-less toggles) uses `--color-border-control`: light `#64748B` (4.76:1 on `surface`, 4.55:1 on `bg`), dark `#7C8BA1` (4.91:1 on `surface`, 5.41:1 on `bg`). This satisfies WCAG 2.2 SC 1.4.11 (≥ 3:1 non-text).
+
+Soft tones (badges, chips, row highlights) are **opaque tokens**, not runtime opacity. Text and icons on a soft background **must** use the matching `-strong` token; the solid token is never used as text on its soft background (fix for FE-R1-UX-BLK-01: solid success/warning on soft measured 4.27:1 / 4.26:1).
+
+| State   | `--color-<state>-soft` (bg) | `--color-<state>-strong` (text on soft) | Contrast strong on soft / on `surface` |
+| ------- | --------------------------- | --------------------------------------- | -------------------------------------- |
+| success | `#E3F0E8`                   | `#166534`                               | 6.06 / 7.13                            |
+| warning | `#F6EAE1`                   | `#92400E`                               | 6.02 / 7.09                            |
+| danger  | `#F7E4E4`                   | `#991B1B`                               | 6.78 / 8.31                            |
+| info    | `#E4EAFA`                   | `#1E40AF`                               | 7.24 / 8.72                            |
+| brand   | `#E2ECEE`                   | `#0C4A5A`                               | 8.14 / 9.80                            |
 
 ### 2.2 Dark theme (KDS default, optional elsewhere)
 
@@ -57,6 +67,16 @@ Soft tones for badges/backgrounds use the same hue at 12 % opacity over `surface
 | `--color-danger`         | `#F87171` | 6.8 / 6.2                    |
 | `--color-info`           | `#93B4FF` | 9.1 / 8.3                    |
 | `--color-focus`          | `#7DD3FC` | 11.2                         |
+
+Dark soft tones follow the same rule:
+
+| State   | `--color-<state>-soft` (bg) | `--color-<state>-strong` (text on soft) | Contrast strong on soft / on `surface` |
+| ------- | --------------------------- | --------------------------------------- | -------------------------------------- |
+| success | `#1A3338`                   | `#86EFAC`                               | 9.46 / 12.11                           |
+| warning | `#30302D`                   | `#FDE68A`                               | 10.69 / 13.65                          |
+| danger  | `#2F2636`                   | `#FECACA`                               | 9.97 / 11.75                           |
+| info    | `#232E47`                   | `#C7D7FE`                               | 9.36 / 11.80                           |
+| brand   | `#1B3043`                   | `#A5E8F3`                               | 9.96 / 12.50                           |
 
 ### 2.3 Semantic operational states (shared by Salón, KDS, Caja)
 
@@ -143,6 +163,7 @@ Each component spec in `@trident/ui` documents: anatomy, sizes (`md`/`lg`/`xl`),
 ## 11. Acceptance checks for WP-026B/C/D
 
 - All interactive targets ≥ 44×44 (audit script).
+- Token pairing lint: any text on a `*-soft` background must use the matching `*-strong` token.
 - axe-core: 0 serious/critical violations at the three breakpoints, light and dark, with reduced motion on and off.
 - No raw palette classes outside `@trident/ui` (lint).
 - Screenshot review at 1024×768, 1280×800, 1440×900 for each delivered screen.
