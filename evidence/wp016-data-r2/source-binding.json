@@ -1,0 +1,586 @@
+{
+  "subject": "4ad5058dfb7d62cb9d9afab10b09775a1c93aa03",
+  "checked": 116,
+  "files": [
+    {
+      "path": "package.json",
+      "git_blob": "9a0df07800af9f76dcf6876a01e91a880b5c937d",
+      "match": true
+    },
+    {
+      "path": "packages/core/package.json",
+      "git_blob": "ad12af80985d649f761f26771ba912d204eae933",
+      "match": true
+    },
+    {
+      "path": "packages/core/src/audit-contracts.ts",
+      "git_blob": "bd5054951c55fbb7ea40ae50415228eeee26282a",
+      "match": true
+    },
+    {
+      "path": "packages/core/src/canonicalize.ts",
+      "git_blob": "f3254235365cb9ddb97f43858eaa7b9a5bac356d",
+      "match": true
+    },
+    {
+      "path": "packages/core/src/folio-contracts.ts",
+      "git_blob": "ca1ad538b17402ac94ee767e29ade53043bf4e56",
+      "match": true
+    },
+    {
+      "path": "packages/core/src/hash-chain.ts",
+      "git_blob": "c24969a883b7aa2628566d391011621edb9f3b94",
+      "match": true
+    },
+    {
+      "path": "packages/core/src/index.test.ts",
+      "git_blob": "0d22f2a6653b17b2e957a10438569b6a5e37b348",
+      "match": true
+    },
+    {
+      "path": "packages/core/src/index.ts",
+      "git_blob": "52c852fc88d34fa53a879c465ba0b25dced7158d",
+      "match": true
+    },
+    {
+      "path": "packages/core/src/jwt.ts",
+      "git_blob": "fdcfdbc8060d3dd21bb3f728cb31a9ac50fbf771",
+      "match": true
+    },
+    {
+      "path": "packages/core/src/money.ts",
+      "git_blob": "5a48798fdae85196eb9b579f717743e65e05086a",
+      "match": true
+    },
+    {
+      "path": "packages/core/src/pin.ts",
+      "git_blob": "b051b4515cc7dcba1e9636baa3df8dfd9f159ce5",
+      "match": true
+    },
+    {
+      "path": "packages/core/src/principal.ts",
+      "git_blob": "cfe7b096df0c1f780862066e1485a0a8c74770f8",
+      "match": true
+    },
+    {
+      "path": "packages/core/src/rbac.ts",
+      "git_blob": "84434c78a6a813080e83965bb4994b17216f9778",
+      "match": true
+    },
+    {
+      "path": "packages/core/src/redaction.ts",
+      "git_blob": "8f57a2ebe5ead19e3d0256324ff1235679c1cee1",
+      "match": true
+    },
+    {
+      "path": "packages/core/src/sync-contracts.ts",
+      "git_blob": "62abc309d0b321a631b94c3ffc1b10030c1d110a",
+      "match": true
+    },
+    {
+      "path": "packages/core/src/test-support.ts",
+      "git_blob": "75b91371be3dd32f5688d105931dcfe30475f9de",
+      "match": true
+    },
+    {
+      "path": "packages/core/tsconfig.json",
+      "git_blob": "8f24167afd41ead8cdb40d067264ea54e4cbdc62",
+      "match": true
+    },
+    {
+      "path": "packages/edge/edge-config.json",
+      "git_blob": "97c6b6261fff46c9debf37536e5ec6fb677c6e3f",
+      "match": true
+    },
+    {
+      "path": "packages/edge/edge-config.schema.json",
+      "git_blob": "fadc6bb3ca4d50b40059165aef8390be152e2bca",
+      "match": true
+    },
+    {
+      "path": "packages/edge/package.json",
+      "git_blob": "166b33ccea484581e96310a304c93d3835072166",
+      "match": true
+    },
+    {
+      "path": "packages/edge/scripts/crash-worker-helper.cjs",
+      "git_blob": "d4e688b8cd083c3dfad4a5d06011b6a0e15909a4",
+      "match": true
+    },
+    {
+      "path": "packages/edge/scripts/run-electron-tests.mjs",
+      "git_blob": "28aa436c9ec1800a117f44842cb9b34f1790ee1c",
+      "match": true
+    },
+    {
+      "path": "packages/edge/src/config.ts",
+      "git_blob": "dcafa4bc3660192eb8b04b62bc7f9614ed2512fd",
+      "match": true
+    },
+    {
+      "path": "packages/edge/src/database.test.ts",
+      "git_blob": "f515a3127ea4b2ea8face4e6cf12b4bc1cd692b2",
+      "match": true
+    },
+    {
+      "path": "packages/edge/src/db/edge-database.ts",
+      "git_blob": "45322165c86aeb76e3d88d579030569ef68a6360",
+      "match": true
+    },
+    {
+      "path": "packages/edge/src/db/enrollment-persistence.ts",
+      "git_blob": "8ae92228b85d123898a2da73edb43ba569d1dbef",
+      "match": true
+    },
+    {
+      "path": "packages/edge/src/db/folio-persistence.ts",
+      "git_blob": "9bcbd2cc79595289d7f2b9817520df65964a9c1d",
+      "match": true
+    },
+    {
+      "path": "packages/edge/src/db/iam-persistence.ts",
+      "git_blob": "a6fa10ec1e532d57d5c1f88dd9e13a4c5b86eabb",
+      "match": true
+    },
+    {
+      "path": "packages/edge/src/db/index.ts",
+      "git_blob": "95a769e72d7a97d99be6143ca5c661192a83ac59",
+      "match": true
+    },
+    {
+      "path": "packages/edge/src/db/internal-outbox-adapter.ts",
+      "git_blob": "0f12069f3894b6a0b3139491066ddbf37e41587f",
+      "match": true
+    },
+    {
+      "path": "packages/edge/src/db/local-audit-persistence.ts",
+      "git_blob": "4444a80aa5029c5f4d13efdd946200e0856b7ba9",
+      "match": true
+    },
+    {
+      "path": "packages/edge/src/db/outbox-persistence.ts",
+      "git_blob": "00b5a5e6a569c28277694147a656eacb9c597dfd",
+      "match": true
+    },
+    {
+      "path": "packages/edge/src/db/sync-persistence.ts",
+      "git_blob": "3441cb6d993c16f5e52eb5de7545e7272b3fb5ad",
+      "match": true
+    },
+    {
+      "path": "packages/edge/src/db/test-access.ts",
+      "git_blob": "0620297c25714f6521de71d56b70810b4f3a288d",
+      "match": true
+    },
+    {
+      "path": "packages/edge/src/db/types.ts",
+      "git_blob": "1c74f48a47956b39858f7f590ccb7771c2f17829",
+      "match": true
+    },
+    {
+      "path": "packages/edge/src/db/wal-manager.ts",
+      "git_blob": "324d80164468828318363fd95eaa8b50cb9236e0",
+      "match": true
+    },
+    {
+      "path": "packages/edge/src/db/write-serializer.ts",
+      "git_blob": "25cbcd8b87a545abfc402e575e52b29ab54152fb",
+      "match": true
+    },
+    {
+      "path": "packages/edge/src/electron.test.ts",
+      "git_blob": "8ba6603b20b6edcc44e27aa442fa3d3edd49530a",
+      "match": true
+    },
+    {
+      "path": "packages/edge/src/enrollment.test.ts",
+      "git_blob": "40c6c8f82865bd1e9778c5f228ca331b593425be",
+      "match": true
+    },
+    {
+      "path": "packages/edge/src/enrollment/crypto.ts",
+      "git_blob": "7cceda919f2a7daa2a41d211b78d57f885e8cf51",
+      "match": true
+    },
+    {
+      "path": "packages/edge/src/enrollment/enrollment-server.ts",
+      "git_blob": "5de5829f7a64b9ae5b551ba703e32a50dd0957bc",
+      "match": true
+    },
+    {
+      "path": "packages/edge/src/enrollment/index.ts",
+      "git_blob": "564988e876259ea2af8dccb2018227d96fdf798a",
+      "match": true
+    },
+    {
+      "path": "packages/edge/src/enrollment/mdns-discovery.ts",
+      "git_blob": "77a735242ac345d6bde5fa8e57c1c1f422f906e4",
+      "match": true
+    },
+    {
+      "path": "packages/edge/src/enrollment/pairing-store.ts",
+      "git_blob": "df6f8ddc68cf7ba3d3bc9250382be4fd904c137f",
+      "match": true
+    },
+    {
+      "path": "packages/edge/src/enrollment/secure-store.ts",
+      "git_blob": "ef9644ac41f09ffdd00c781628008eca95b45851",
+      "match": true
+    },
+    {
+      "path": "packages/edge/src/enrollment/station-client.ts",
+      "git_blob": "e81e3869acbfdea781e0699724844b553841c8ff",
+      "match": true
+    },
+    {
+      "path": "packages/edge/src/enrollment/test-support.ts",
+      "git_blob": "f1de4f486a395e9223dc1c215501b8e52bf6028f",
+      "match": true
+    },
+    {
+      "path": "packages/edge/src/enrollment/tls-identity.ts",
+      "git_blob": "fa6580d3e87732e23f8466025acdf476b045adc7",
+      "match": true
+    },
+    {
+      "path": "packages/edge/src/enrollment/trusted-time.ts",
+      "git_blob": "ac8cc6007c7a5b8a673007b7326b48e6379d76f1",
+      "match": true
+    },
+    {
+      "path": "packages/edge/src/enrollment/types.ts",
+      "git_blob": "53847589aabf887177cc5d477c6c66edd791fe74",
+      "match": true
+    },
+    {
+      "path": "packages/edge/src/folio.test.ts",
+      "git_blob": "c19a7588be9f5e41777591a4a6fc8df65748d34a",
+      "match": true
+    },
+    {
+      "path": "packages/edge/src/iam/auth-router.ts",
+      "git_blob": "c7e79451dff89d901f4b25ee7f2364bb2cb87963",
+      "match": true
+    },
+    {
+      "path": "packages/edge/src/iam/index.ts",
+      "git_blob": "e2cb5abc1468f6c5e21af14087916cf79dd28bc5",
+      "match": true
+    },
+    {
+      "path": "packages/edge/src/iam/lockout-manager.ts",
+      "git_blob": "d880904482d801d87a901ce1f7bf76a2f822f327",
+      "match": true
+    },
+    {
+      "path": "packages/edge/src/iam/offline-iam-service.ts",
+      "git_blob": "27feb67be8a05dea7109447bf232277edaceac5a",
+      "match": true
+    },
+    {
+      "path": "packages/edge/src/iam/session-token.ts",
+      "git_blob": "2c44e7d0eaa782a88f39fbd9e57a3a5c4c36b993",
+      "match": true
+    },
+    {
+      "path": "packages/edge/src/iam/test-support.ts",
+      "git_blob": "e15c67b1927e5d3dd037454ed31c5d305d15ddfc",
+      "match": true
+    },
+    {
+      "path": "packages/edge/src/iam/types.ts",
+      "git_blob": "b6206ec5b1e6858576506046fe403074e4116000",
+      "match": true
+    },
+    {
+      "path": "packages/edge/src/index.html",
+      "git_blob": "fb2f46fcb44e2d2a44fc8a499ed5664ff98525fe",
+      "match": true
+    },
+    {
+      "path": "packages/edge/src/index.test.ts",
+      "git_blob": "6ede9ad59477e3188df3d61e6744f22e9e1548a4",
+      "match": true
+    },
+    {
+      "path": "packages/edge/src/index.ts",
+      "git_blob": "1295ce027cbb7e4796b901f02709ffe367c97b79",
+      "match": true
+    },
+    {
+      "path": "packages/edge/src/ipc-channels.ts",
+      "git_blob": "337daecb260638e7016170451451b93187f4ecc2",
+      "match": true
+    },
+    {
+      "path": "packages/edge/src/kds/escpos-formatter.test.ts",
+      "git_blob": "3f0d5ca407b4889613c8e0f1816d0bc8a4f48083",
+      "match": true
+    },
+    {
+      "path": "packages/edge/src/kds/escpos-formatter.ts",
+      "git_blob": "20eeabf653b065451ef811de368f768a0b38ca2e",
+      "match": true
+    },
+    {
+      "path": "packages/edge/src/kds/escpos-printer-client.test.ts",
+      "git_blob": "acc815f7d32498e9e2cf0f1b0831fdbad08660f4",
+      "match": true
+    },
+    {
+      "path": "packages/edge/src/kds/escpos-printer-client.ts",
+      "git_blob": "e9a14f0ef578547e293a150e732cf6384705daba",
+      "match": true
+    },
+    {
+      "path": "packages/edge/src/kds/index.ts",
+      "git_blob": "cbd57757b696d7bee2b4e7a2bd3fd5750dadb8b0",
+      "match": true
+    },
+    {
+      "path": "packages/edge/src/kds/ws-dispatcher.test.ts",
+      "git_blob": "3ba1854762bc2c6593d06efe469bc135d29779a3",
+      "match": true
+    },
+    {
+      "path": "packages/edge/src/kds/ws-dispatcher.ts",
+      "git_blob": "edd4a762196aab10e4ad2637533bc461ea331fde",
+      "match": true
+    },
+    {
+      "path": "packages/edge/src/main.ts",
+      "git_blob": "6b4e5c3728c4ac94c2fc53b4c47cf710c815e007",
+      "match": true
+    },
+    {
+      "path": "packages/edge/src/navigation-lock.ts",
+      "git_blob": "a4e0bb71562815bde6de11002e926c2b34a0c100",
+      "match": true
+    },
+    {
+      "path": "packages/edge/src/offline-iam.test.ts",
+      "git_blob": "a8b9fc7779d67b515964846979ea98499a010c30",
+      "match": true
+    },
+    {
+      "path": "packages/edge/src/outbox.test.ts",
+      "git_blob": "154220d277090925a950ddaf2e43e43999f04ea3",
+      "match": true
+    },
+    {
+      "path": "packages/edge/src/preload.cjs",
+      "git_blob": "2fad738f529c912b524f9cf179b59192cac16a72",
+      "match": true
+    },
+    {
+      "path": "packages/edge/src/preload.ts",
+      "git_blob": "1fc35f0975886cfa1831b4b5c9777c7006dea397",
+      "match": true
+    },
+    {
+      "path": "packages/edge/src/renderer.ts",
+      "git_blob": "ad13681ad064f05434a8250f7c9f2b6406cff864",
+      "match": true
+    },
+    {
+      "path": "packages/edge/src/security-profile.ts",
+      "git_blob": "e4e436fb8cbaaa471d7cb1b86ad2b7891736259b",
+      "match": true
+    },
+    {
+      "path": "packages/edge/src/worker-boundary.ts",
+      "git_blob": "bbc3b664f476a99abe46a5c06a113a4dcc53efc9",
+      "match": true
+    },
+    {
+      "path": "packages/edge/tsconfig.json",
+      "git_blob": "8c0414a83c5827da8ba7f3430aea1b04953e6186",
+      "match": true
+    },
+    {
+      "path": "packages/pos-edge-runtime/package.json",
+      "git_blob": "f84f80daa880ea382c469710c9d0dc9b2529a62e",
+      "match": true
+    },
+    {
+      "path": "packages/pos-edge-runtime/src/cash-shift-runtime.test.ts",
+      "git_blob": "33ca8e7b5797ac7be0f1326d00a1c905848f96b0",
+      "match": true
+    },
+    {
+      "path": "packages/pos-edge-runtime/src/cash-shift-schema.ts",
+      "git_blob": "74153738f599b6135c27c5196b081484926e087e",
+      "match": true
+    },
+    {
+      "path": "packages/pos-edge-runtime/src/cash-shift-sqlite-repository.ts",
+      "git_blob": "0e9a59c802a94ab2d266afa345bbb0d8275e6c75",
+      "match": true
+    },
+    {
+      "path": "packages/pos-edge-runtime/src/dining-sqlite-repository.ts",
+      "git_blob": "64e2d1a2a9f4520bcf3e29aed2bacf2d9582eec8",
+      "match": true
+    },
+    {
+      "path": "packages/pos-edge-runtime/src/escpos-cash-drawer.ts",
+      "git_blob": "ac2305839ff944abe8aaafc594e6ad620162681e",
+      "match": true
+    },
+    {
+      "path": "packages/pos-edge-runtime/src/fastify-app.ts",
+      "git_blob": "41e4b6f6971dba72a2994a15482b3b5bab3fb897",
+      "match": true
+    },
+    {
+      "path": "packages/pos-edge-runtime/src/index.test.ts",
+      "git_blob": "4d1941967b4501cedfed3a6a497adef2f90a5895",
+      "match": true
+    },
+    {
+      "path": "packages/pos-edge-runtime/src/index.ts",
+      "git_blob": "4f14d2645e36667ecce97385fe594f383de779ed",
+      "match": true
+    },
+    {
+      "path": "packages/pos-edge-runtime/src/kds-runtime.test.ts",
+      "git_blob": "445e7e693758d796a7c2836d96dc0a6fc7ccfc5a",
+      "match": true
+    },
+    {
+      "path": "packages/pos-edge-runtime/src/kds-runtime.ts",
+      "git_blob": "a5245fa8d3f81b1a81c6ee220d46e7f5808794e3",
+      "match": true
+    },
+    {
+      "path": "packages/pos-edge-runtime/src/kds-schema.ts",
+      "git_blob": "f82f711ed8ceb7a9d7c4e86f0d2ea52541956914",
+      "match": true
+    },
+    {
+      "path": "packages/pos-edge-runtime/src/kds-sqlite-repository.ts",
+      "git_blob": "f80f2f872afc2e4e857184c2865381d11ef8219b",
+      "match": true
+    },
+    {
+      "path": "packages/pos-edge-runtime/src/offline-iam-pin-validator.ts",
+      "git_blob": "66cf73258467f229df8c31a8c9bdb8833e8831e3",
+      "match": true
+    },
+    {
+      "path": "packages/pos-edge-runtime/src/printer-queue-runner.ts",
+      "git_blob": "7441cca9460bb71a144e819ed3538e5a7b990504",
+      "match": true
+    },
+    {
+      "path": "packages/pos-edge-runtime/src/schema.ts",
+      "git_blob": "84f159532cb048d70f701a9a452f624c59f3bb15",
+      "match": true
+    },
+    {
+      "path": "packages/pos-edge-runtime/tsconfig.json",
+      "git_blob": "8c0414a83c5827da8ba7f3430aea1b04953e6186",
+      "match": true
+    },
+    {
+      "path": "packages/pos/package.json",
+      "git_blob": "34e27168b96583548fa84ef73ef9a7df77a9aa2a",
+      "match": true
+    },
+    {
+      "path": "packages/pos/src/cash-shift-ports.ts",
+      "git_blob": "756c9962f3bab70b25124b31b4e25ca7f436f794",
+      "match": true
+    },
+    {
+      "path": "packages/pos/src/cash-shift-service.test.ts",
+      "git_blob": "feb7d1a9e0c3abeac2808746bcc496ba172ce2b7",
+      "match": true
+    },
+    {
+      "path": "packages/pos/src/cash-shift-service.ts",
+      "git_blob": "635d216e7b8629a6a79fe45978759dfddd0034e8",
+      "match": true
+    },
+    {
+      "path": "packages/pos/src/cash-shift-strategy.ts",
+      "git_blob": "0391fcdd5d797aa030f6a3b730c86f34e49c2920",
+      "match": true
+    },
+    {
+      "path": "packages/pos/src/cash-shift-types.ts",
+      "git_blob": "8d2c36c07f6052d53776680007591fce81de4b01",
+      "match": true
+    },
+    {
+      "path": "packages/pos/src/dining-service.ts",
+      "git_blob": "cd857ff2fb945edec07490b258454494035b826b",
+      "match": true
+    },
+    {
+      "path": "packages/pos/src/errors.ts",
+      "git_blob": "6dbacaeb12578f1d2f0ec1797b6fe88337e8b5e9",
+      "match": true
+    },
+    {
+      "path": "packages/pos/src/index.test.ts",
+      "git_blob": "9a2b72b81e4594a0e399125c61d2716fe1b5adea",
+      "match": true
+    },
+    {
+      "path": "packages/pos/src/index.ts",
+      "git_blob": "bf173849a957a2f082f7da152359575a2dd36f8d",
+      "match": true
+    },
+    {
+      "path": "packages/pos/src/kds-ports.ts",
+      "git_blob": "2eb87a90a874deb7b3dcbc9d9f6429506b185639",
+      "match": true
+    },
+    {
+      "path": "packages/pos/src/kds-service.test.ts",
+      "git_blob": "90cc077bdc3c6947c2c8c3eab040325b75feb343",
+      "match": true
+    },
+    {
+      "path": "packages/pos/src/kds-service.ts",
+      "git_blob": "2cbfb3d2f444e6a497497c80183955c31efc2a03",
+      "match": true
+    },
+    {
+      "path": "packages/pos/src/kds-types.ts",
+      "git_blob": "5d2cfd31a56163df5c5946bb5504d90750824234",
+      "match": true
+    },
+    {
+      "path": "packages/pos/src/kds-wire-mapper.ts",
+      "git_blob": "f0b22364eecad43ad62c1b3cca053790d452a062",
+      "match": true
+    },
+    {
+      "path": "packages/pos/src/policies.ts",
+      "git_blob": "3917e0ccdb1ee95c8ab26bdcf980e1c2eda1c896",
+      "match": true
+    },
+    {
+      "path": "packages/pos/src/ports.ts",
+      "git_blob": "9b430a224039a40f79db100c2c7a6017955adcde",
+      "match": true
+    },
+    {
+      "path": "packages/pos/src/types.ts",
+      "git_blob": "2095d3d5f1e7da64f9a15f7ab79eb1d55c506c18",
+      "match": true
+    },
+    {
+      "path": "packages/pos/tsconfig.json",
+      "git_blob": "8f24167afd41ead8cdb40d067264ea54e4cbdc62",
+      "match": true
+    },
+    {
+      "path": "tsconfig.base.json",
+      "git_blob": "5deda8322a87e7050fa11293dfa9d6a6008a89f2",
+      "match": true
+    }
+  ]
+}
