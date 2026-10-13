@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type pg from 'pg';
 import { getPool } from './connection.js';
-import { migrateUp, migrateDown } from './runner.js';
+import { migrateUp, migrateDown, getAppliedMigrations } from './runner.js';
 import { setTenantContext } from './tenant.js';
 
 dotenv.config();
@@ -374,6 +374,11 @@ describe('TRIDENTPOS WP-022 CRM & Loyalty Database Suite', { concurrency: 1 }, (
       await client1.query('BEGIN;');
       await setTenantContext(client1, tenantAId);
 
+      // Ensure baseline balance of 100.0000 for test card
+      await client1.query(
+        'UPDATE loyalty_accounts SET points_balance = 100.0000 WHERE card_number = $1;',
+        ['RC-A-100'],
+      );
       const cardRes = await client1.query<{ id: string; points_balance: string }>(
         'SELECT id, points_balance FROM loyalty_accounts WHERE card_number = $1 FOR UPDATE;',
         ['RC-A-100'],
@@ -404,6 +409,20 @@ describe('TRIDENTPOS WP-022 CRM & Loyalty Database Suite', { concurrency: 1 }, (
   });
 
   it('WP022-DOWN-01: Non-production rollback reverts WP-022 tables while preserving predecessors', async () => {
+    // Roll down any migrations newer than WP-022 first (e.g. WP-023)
+    const checkClientBefore = await pool.connect();
+    try {
+      const appliedBefore = await getAppliedMigrations(checkClientBefore);
+      for (let i = appliedBefore.length - 1; i >= 0; i--) {
+        const entry = appliedBefore[i];
+        if (entry && entry.id > '20261014000000') {
+          await migrateDown(pool, { allowDestructiveDown: true });
+        }
+      }
+    } finally {
+      checkClientBefore.release();
+    }
+
     const downResult = await migrateDown(pool, { allowDestructiveDown: true });
     assert.ok(downResult.reverted.includes('20261014000000_crm_loyalty_rewards'));
 

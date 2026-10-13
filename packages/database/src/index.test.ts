@@ -61,6 +61,14 @@ describe('TRIDENTPOS WP-003 PostgreSQL Migration Engine Integration Suite', () =
     try {
       await client.query(`
         DROP TABLE IF EXISTS
+          webhook_events,
+          external_orders,
+          delivery_integrations,
+          customer_delivery_addresses,
+          loyalty_transactions,
+          loyalty_accounts,
+          promotions,
+          customers,
           consumer_restore_pending_markers,
           consumer_inbox_events,
           fiscal_stamping_operations,
