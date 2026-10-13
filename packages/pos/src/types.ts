@@ -17,6 +17,9 @@ export interface Mesa {
   readonly tableNumber: string;
   readonly status: MesaStatus;
   readonly currentAccountId: string | null;
+  readonly posX?: number | null;
+  readonly posY?: number | null;
+  readonly capacity?: number | null;
   readonly version: number;
   readonly updatedAt: string;
 }
@@ -42,6 +45,10 @@ export interface CuentaItem {
   readonly subtotal: bigint; // Scale 4
   readonly total: bigint; // Scale 4
   readonly status: CuentaItemStatus;
+  readonly cancellationReason?: string | null;
+  readonly cancelledByUserId?: string | null;
+  readonly cancelledAt?: string | null;
+  readonly requiresWasteRecord?: boolean;
   readonly createdAt: string;
   readonly modifiers: readonly CuentaItemModificador[];
 }
@@ -59,9 +66,50 @@ export interface Cuenta {
   readonly tipsTotal: bigint; // Scale 4
   readonly totalAmount: bigint; // Scale 4
   readonly openedByUserId: string;
+  readonly currentWaiterUserId?: string | null;
+  readonly guestCount?: number | null;
   readonly openedAt: string;
+  readonly printedAt?: string | null;
   readonly closedAt: string | null;
   readonly version: number;
   readonly updatedAt: string;
+  readonly parentCuentaId?: string | null;
+  readonly splitSequence?: number | null;
   readonly items: readonly CuentaItem[];
+}
+
+export interface AttentionSignal {
+  readonly flagged: boolean;
+  readonly reason: string | null;
+  readonly elapsedMinutes: number;
+}
+
+export interface MesaSummary {
+  readonly id: string;
+  readonly roomName: string;
+  readonly tableNumber: string;
+  readonly status: MesaStatus;
+  readonly currentAccountId: string | null;
+  readonly assignedWaiterUserId: string | null;
+  readonly guestCount: number;
+  readonly subtotal: bigint; // Scale 4
+  readonly totalAmount: bigint; // Scale 4
+  readonly openedAt: string | null;
+  readonly attentionSignal: AttentionSignal;
+  readonly version: number;
+  readonly updatedAt: string;
+}
+
+export interface SalonRoomSummary {
+  readonly name: string;
+  readonly tables: readonly MesaSummary[];
+}
+
+export interface SalonReadModel {
+  readonly rooms: readonly SalonRoomSummary[];
+  readonly totalTables: number;
+  readonly occupiedTables: number;
+  readonly inCheckTables: number;
+  readonly availableTables: number;
+  readonly generatedAt: string;
 }
