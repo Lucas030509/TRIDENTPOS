@@ -172,7 +172,7 @@ Each component spec in `@trident/ui` documents: anatomy, sizes (`md`/`lg`/`xl`),
 
 ```
 DOCUMENT=VISUAL_SYSTEM.md
-STATUS=PROPOSED
+STATUS=APPROVED — FROZEN
 REQUIRED_FOR=WP-026B/C/D (APPROVED/FROZEN); consumed by WP-026A tokens
-REVIEW=one round: 06_UX_UI_Design_Architect (independent instance)
+REVIEW=06_UX_UI_Design_Architect (APPROVED — tokens and border-control validated)
 ```

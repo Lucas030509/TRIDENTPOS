@@ -31,15 +31,15 @@ This document defines every architectural choice `WP-026A..D` must implement (`F
 
 ## 2. Packages and build
 
-| Package                          | Role                                                                                                             | Depends on                                                       |
-| -------------------------------- | ---------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
-| `@trident/ui` (exists, scaffold) | Design tokens, primitives, shared components. No domain knowledge, no IPC.                                       | React, Tailwind, Radix UI primitives, `class-variance-authority` |
-| `@trident/pos-renderer` (NEW)    | React application: routing, session presentation, data layer, feature modules (`salon`, `kds`, `caja`, `shell`). | `@trident/ui`, renderer-safe contract types from `@trident/core` |
-| `@trident/edge` (exists)         | Electron main + preload; gains `ApiGateway`, `EventRelay` and new allowlisted channels.                          | `@trident/core`, `pos-edge-runtime` contracts                    |
+| Package                          | Role                                                                                                               | Depends on                                                        |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------- |
+| `@trident/ui` (exists, scaffold) | Design tokens, primitives, shared components. No domain knowledge, no IPC.                                         | React, Tailwind, Radix UI primitives, `class-variance-authority`  |
+| `@trident/pos-renderer` (NEW)    | React application: routing, session presentation, data layer, feature modules (`salon`, `kds`, `caja`, `shell`).  | `@trident/ui`, contract types and Zod schemas from `@trident/core`|
+| `@trident/edge` (exists)         | Electron main + preload; gains `ApiGateway`, `EventRelay` and new allowlisted channels.                           | `@trident/core`                                                   |
 
 - **Build:** Vite produces static assets for `pos-renderer`; Electron loads them from a custom privileged protocol (`app://pos/`) registered in main, never `http://` and never a dev server in production builds.
-- **Graph rules (added to `scripts/check-graph.mjs`):** `ui` may not import `pos-renderer`, `edge`, `database`, `cloud-server` or Node built-ins. `pos-renderer` may import only `ui` and type-only exports of `core`. Domain packages (`pos`, `inventory`, `finance`, `billing`) are never imported by renderer packages.
-- **New dependencies (non-foundational, exact pins, Trivy clean):** `react`, `react-dom`, `react-router` (v7), `@tanstack/react-query` (v5), `react-hook-form`, `zod`, `tailwindcss`, Radix UI primitives, `class-variance-authority`, `vite`; dev: `vitest`, `@testing-library/react`, `@playwright/test` (Electron mode). These match EAAF web defaults.
+- **Graph rules (enforced by `scripts/check-graph.mjs`):** `ui` may import only `@trident/core`. `pos-renderer` may import only `@trident/ui` and `@trident/core`. `@trident/edge` imports only `@trident/core`. Domain implementation packages (`pos`, `inventory`, `finance`, `billing`, `pos-edge-runtime`) are never imported by renderer packages or `edge`.
+- **New dependencies (non-foundational, exact pins, Trivy clean):** All dependencies are strictly pinned with exact versions (no `^` or `~`), vetted with 0 high/critical vulnerabilities via Trivy SCA and secret scan in CI: `react` (19.x), `react-dom` (19.x), `react-router` (7.x), `@tanstack/react-query` (5.x), `react-hook-form` (7.x), `zod` (3.x), `tailwindcss` (3.4.x / 4.x), Radix UI primitives, `class-variance-authority`, `vite`; dev: `vitest`, `@testing-library/react`, `@playwright/test` (Electron mode). These conform to EAAF web defaults.
 
 ## 3. Station modes and routing
 
@@ -96,8 +96,12 @@ type Result<T> =
 
 ## 6. Client contract strategy
 
-- Request/response and event payload types are defined once, as **type-only exports** of the owning domain contracts (`pos`, `pos-edge-runtime`), re-exported from `@trident/core/contracts` so renderer packages never import domain runtime code.
-- Each contract has a Zod schema next to its type; preload and main validate inbound/outbound payloads; the renderer validates events before applying them to the cache.
+**Decision FE-08 — Acyclic Edge API contracts defined natively in `@trident/core`.**
+
+- Request/response DTOs, events, and validation schemas are defined natively in `@trident/core/src/contracts/edge-api/` (e.g. `dining-contracts.ts`), with **zero dependencies** on domain runtime packages (`pos`, `pos-edge-runtime`, etc.).
+- Both `@trident/pos-renderer` and `@trident/pos-edge-runtime` import these contracts directly from `@trident/core`.
+- Neither `@trident/core` re-exports domain packages, nor does `@trident/edge` depend on `@trident/pos-edge-runtime`. This ensures 100% acyclic compliance with ADR-013 §4.2/6 and satisfies `scripts/check-graph.mjs`.
+- Each contract provides both TypeScript interfaces and runtime Zod schemas. Preload and main validate payloads at the boundary; the renderer validates events before caching.
 - Event payloads carry `eventContractVersion` (ACR-2026-020 rule). Unknown major versions are dropped with a diagnostic and trigger a full refetch of the affected projection.
 
 ## 7. Data layer, state and caching
@@ -115,6 +119,7 @@ type Result<T> =
 - **Invalidation:** `EventRelay` forwards domain events on `trident:events`; a single `EventInvalidator` maps event types to query keys and invalidates or patches them (patching only when the event carries the full new projection and version).
 - **staleTime:** operational projections 0–5 s; catalogs 5 min; station profile until restart.
 - **Reconnect (ADR-005):** on `connectivity.restored`, invalidate every operational query (full resync).
+- **Session termination and operator switch (ADV-01):** On logout, lock, or operator switch, the TanStack Query cache is purged immediately (`queryClient.clear()`), active in-flight requests are canceled via `AbortController`, and transient form drafts are reset to prevent cross-operator information leakage.
 
 ## 8. Offline and connectivity presentation
 
@@ -146,9 +151,9 @@ The renderer never queues mutations for later replay; durability and outbox sema
 
 Feature modules in `pos-renderer` (`salon`, `kds`, `caja`) compose these and may not define new visual primitives; anything reusable moves down into `@trident/ui` (`UX-COND-015-02`: one visual language).
 
-- **Variants:** `class-variance-authority` with variants restricted to `intent` (primary, secondary, neutral, danger), `size` (md = 44 px, lg = 56 px, xl = 72 px for KDS/caja) and `tone` (solid, soft, outline). No ad-hoc Tailwind colors in feature code; lint rule forbids raw palette classes outside `@trident/ui`.
+- **Variants:** `class-variance-authority` with variants restricted to `intent` (primary, secondary, neutral, danger), `size` (md = 48 px matching `--target-md` default in `VISUAL_SYSTEM.md` §5, lg = 56 px for primary actions, xl = 72 px for KDS bump/caja keypad; with 44 px `--target-min` as absolute floor) and `tone` (solid, soft, outline). No ad-hoc Tailwind colors in feature code; lint rule forbids raw palette classes outside `@trident/ui`.
 - **Composition:** slot-based components (`asChild` pattern) over prop explosion.
-- **Money:** `MoneyText` and inputs receive minor units / fixed-point strings from contracts (ADR-012) and only format; the UI never does arithmetic on money.
+- **Money (ADV-02):** All monetary figures in contracts and presentation are strictly scale-4 `BigInt` (ADR-012, DEC-013). The UI never performs floating-point arithmetic or uses ambiguous minor units. Display strings are formatted exclusively via `@trident/core` monetary helpers (e.g. `formatMoney(amount4)`).
 
 ## 11. Design-token consumption mechanism (`FE-COND-015-01`)
 
@@ -201,9 +206,9 @@ Feature modules in `pos-renderer` (`salon`, `kds`, `caja`) compose these and may
 
 ```
 DOCUMENT=FRONTEND_ARCHITECTURE.md
-STATUS=PROPOSED
+STATUS=APPROVED — FROZEN
 REQUIRED_FOR=WP-026A START (APPROVED/FROZEN)
-REVIEW=one parallel round: 05_Frontend_Architect (independent instance) + 08_Security_Architect (§4, §5, §13)
+REVIEW=05_Frontend_Architect (APPROVED — BLK-01 resolved via Decision FE-08, ADV-01..04 closed) + 08_Security_Architect (§4, §5, §13 APPROVED)
 ARCHITECTURE_STACK_CHANGE=NO (React + Electron + Tailwind unchanged)
 NEW_FOUNDATIONAL_TECHNOLOGY=NO
 ```
