@@ -43,9 +43,7 @@ export function AppShell({ children, onOpenDiagnostics }: AppShellProps): React.
           role="status"
           className="bg-warning-soft text-warning-strong border-b border-warning px-4 py-2 text-sm font-semibold flex items-center justify-between"
         >
-          <span>
-            Sin conexión a la red de área local (LAN). Operando en modo autónomo local.
-          </span>
+          <span>Sin conexión a la red de área local (LAN). Operando en modo autónomo local.</span>
           <Button intent="neutral" tone="outline" size="md" onClick={refreshConnectivity}>
             Reintentar red
           </Button>

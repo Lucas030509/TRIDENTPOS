@@ -74,7 +74,7 @@ describe('@trident/pos-renderer Architecture & Shell Harness', () => {
     });
   });
 
-  describe('EventInvalidator & Cache Sychronization Policy', () => {
+  describe('EventInvalidator & Cache Synchronization Policy', () => {
     it('invalidates salon queries on dining events', () => {
       const invalidatedKeys: unknown[][] = [];
       let fullInvalidated = false;
@@ -210,6 +210,286 @@ describe('@trident/pos-renderer Architecture & Shell Harness', () => {
   describe('Routing & Hash Path Helpers', () => {
     it('extracts initial route cleanly from hash', () => {
       assert.equal(getInitialRouteFromHash(), '/');
+    });
+  });
+
+  describe('WP-026B Salón & Comandero Táctil Integration Suite', () => {
+    it('retrieves salon floor plan with room areas, table statuses and metrics', async () => {
+      const bridge = createMockTridentBridge();
+      const res = await bridge.salon.getSalonReadModel();
+      assert.ok(res.ok);
+      if (res.ok) {
+        assert.ok(res.data.rooms.length >= 3);
+        assert.ok(res.data.totalTables >= 5);
+        assert.ok(res.data.availableTables >= 1);
+        assert.ok(res.data.occupiedTables >= 1);
+        assert.ok(res.data.inCheckTables >= 1);
+
+        const mesaOcupada = res.data.rooms
+          .flatMap((r) => r.tables)
+          .find((t) => t.status === 'OCUPADA');
+        assert.ok(mesaOcupada);
+        assert.equal(mesaOcupada.tableNumber, '2');
+        assert.equal(mesaOcupada.currentAccountId, 'cuenta-2');
+        assert.equal(mesaOcupada.guestCount, 2);
+      }
+    });
+
+    it('retrieves catalog categories and products with modifiers and scale-4 prices', async () => {
+      const bridge = createMockTridentBridge();
+      const res = await bridge.salon.getCatalog();
+      assert.ok(res.ok);
+      if (res.ok) {
+        assert.ok(res.data.categories.length >= 4);
+        assert.ok(res.data.products.length >= 5);
+
+        const steak = res.data.products.find((p) => p.code === 'P01');
+        assert.ok(steak);
+        assert.equal(steak.basePrice, '480.0000');
+        assert.ok(steak.modifierGroups && steak.modifierGroups.length >= 2);
+
+        const terminoGroup = steak.modifierGroups.find((g) => g.required);
+        assert.ok(terminoGroup);
+        assert.equal(terminoGroup.minSelect, 1);
+      }
+    });
+
+    it('opens an available table and transitions state to OCUPADA with new account', async () => {
+      const bridge = createMockTridentBridge();
+      const openRes = await bridge.salon.openMesa({
+        mesaId: 'mesa-1',
+        guestCount: 3,
+        waiterUserId: 'usr-waiter-1',
+      });
+      assert.ok(openRes.ok);
+      if (openRes.ok) {
+        assert.equal(openRes.data.mesaId, 'mesa-1');
+        assert.equal(openRes.data.guestCount, 3);
+        assert.equal(openRes.data.status, 'ABIERTA');
+        assert.equal(openRes.data.totalAmount, '0.0000');
+        assert.equal(openRes.data.version, 1);
+      }
+
+      // Verify table state updated in salon read model
+      const salonRes = await bridge.salon.getSalonReadModel();
+      assert.ok(salonRes.ok);
+      if (salonRes.ok) {
+        const mesa1 = salonRes.data.rooms.flatMap((r) => r.tables).find((t) => t.id === 'mesa-1');
+        assert.ok(mesa1);
+        assert.equal(mesa1.status, 'OCUPADA');
+        assert.equal(mesa1.guestCount, 3);
+      }
+
+      // Prevent opening an already occupied table
+      const conflictRes = await bridge.salon.openMesa({
+        mesaId: 'mesa-1',
+        guestCount: 2,
+      });
+      assert.equal(conflictRes.ok, false);
+      if (!conflictRes.ok) {
+        assert.equal(conflictRes.error.code, 'CONFLICT_VERSION');
+      }
+    });
+
+    it('dispatches items to kitchen, updates account version, subtotal and totals with zero floats', async () => {
+      const bridge = createMockTridentBridge();
+
+      // Open mesa-5 in Terraza
+      const openRes = await bridge.salon.openMesa({ mesaId: 'mesa-5', guestCount: 2 });
+      assert.ok(openRes.ok);
+      if (!openRes.ok) return;
+
+      const cuentaId = openRes.data.id;
+      const expectedVersion = openRes.data.version;
+
+      // Dispatch 2 items: 1 Guacamole (120) + 1 Cerveza (95)
+      const sendRes = await bridge.salon.enviarComanda({
+        cuentaId,
+        expectedVersion,
+        items: [
+          {
+            productId: 'prod-1',
+            productNameSnapshot: 'Guacamole Rústico con Totopos',
+            unitPriceApplied: '120.0000',
+            quantity: '1.0000',
+            taxRateApplied: '0.1600',
+            modifiers: [
+              {
+                modifierId: 'opt-bravo',
+                modifierNameSnapshot: 'Muy bravo (Habanero)',
+                modifierPriceApplied: '10.0000',
+              },
+            ],
+          },
+          {
+            productId: 'prod-4',
+            productNameSnapshot: 'Cerveza Artesanal IPA 355ml',
+            unitPriceApplied: '95.0000',
+            quantity: '1.0000',
+            taxRateApplied: '0.1600',
+          },
+        ],
+      });
+
+      assert.ok(sendRes.ok);
+      if (sendRes.ok) {
+        assert.equal(sendRes.data.version, expectedVersion + 1);
+        assert.equal(sendRes.data.items.length, 2);
+        // Subtotal = (120 + 10) + 95 = 225.0000
+        assert.equal(sendRes.data.subtotal, '225.0000');
+        // Tax 16% of 225 = 36.0000
+        assert.equal(sendRes.data.taxTotal, '36.0000');
+        // Total = 225 + 36 = 261.0000
+        const firstItem = sendRes.data.items[0];
+        assert.ok(firstItem);
+        assert.equal(firstItem.status, 'EN_COCINA');
+      }
+    });
+
+    it('detects OCC 409 conflict when sending order with stale expectedVersion', async () => {
+      const bridge = createMockTridentBridge();
+
+      const staleRes = await bridge.salon.enviarComanda({
+        cuentaId: 'cuenta-2',
+        expectedVersion: 1, // server version is 3
+        items: [
+          {
+            productId: 'prod-5',
+            productNameSnapshot: 'Limonada Natural',
+            unitPriceApplied: '55.0000',
+            quantity: '1.0000',
+            taxRateApplied: '0.1600',
+          },
+        ],
+      });
+
+      assert.equal(staleRes.ok, false);
+      if (!staleRes.ok) {
+        assert.equal(staleRes.error.code, 'CONFLICT_VERSION');
+        assert.equal(staleRes.error.conflict?.expectedVersion, 1);
+        assert.equal(staleRes.error.conflict?.serverVersion, 3);
+      }
+    });
+
+    it('cancels item with reason, deducting balance and marking CANCELADO (DEC-010)', async () => {
+      const bridge = createMockTridentBridge();
+
+      const cancelRes = await bridge.salon.cancelItem({
+        cuentaId: 'cuenta-2',
+        itemId: 'item-1',
+        expectedVersion: 3,
+        clientOpId: 'op-cancel-10',
+        reason: 'Comensal cambió de opinión antes de cocinar',
+        operatorUserId: 'usr-1',
+        operatorPin: '1234',
+        supervisorPin: '9999',
+      });
+
+      assert.ok(cancelRes.ok);
+
+      // Verify updated account
+      const detailRes = await bridge.salon.getCuentaDetalle('cuenta-2');
+      assert.ok(detailRes.ok);
+      if (detailRes.ok) {
+        assert.equal(detailRes.data.version, 4);
+        const item1 = detailRes.data.items.find((i) => i.id === 'item-1');
+        assert.ok(item1);
+        assert.equal(item1.status, 'CANCELADO');
+        assert.equal(item1.cancellationReason, 'Comensal cambió de opinión antes de cocinar');
+        // Original subtotal 550 - item1 120 = 430.0000
+        assert.equal(detailRes.data.subtotal, '430.0000');
+      }
+    });
+
+    it('transfers account to another available table, reassigning table states (DEC-011)', async () => {
+      const bridge = createMockTridentBridge();
+
+      const transferRes = await bridge.salon.transferCuenta({
+        cuentaId: 'cuenta-2',
+        expectedVersion: 3,
+        clientOpId: 'op-transfer-1',
+        sourceMesaId: 'mesa-2',
+        targetMesaId: 'mesa-6',
+        sourceWaiterUserId: 'usr-1',
+        targetWaiterUserId: 'usr-1',
+        targetWaiterPin: '1234',
+        reason: 'Cliente solicitó mesa en terraza exterior',
+      });
+
+      assert.ok(transferRes.ok);
+
+      // Verify table states
+      const salonRes = await bridge.salon.getSalonReadModel();
+      assert.ok(salonRes.ok);
+      if (salonRes.ok) {
+        const all = salonRes.data.rooms.flatMap((r) => r.tables);
+        const mesa2 = all.find((t) => t.id === 'mesa-2');
+        const mesa6 = all.find((t) => t.id === 'mesa-6');
+
+        assert.equal(mesa2?.status, 'DISPONIBLE');
+        assert.equal(mesa6?.status, 'OCUPADA');
+        assert.equal(mesa6?.currentAccountId, 'cuenta-2');
+      }
+    });
+
+    it('requests check, changing account to IMPRESA and table to EN_CUENTA', async () => {
+      const bridge = createMockTridentBridge();
+
+      const reqRes = await bridge.salon.requestCheck({
+        cuentaId: 'cuenta-2',
+        expectedVersion: 3,
+        clientOpId: 'op-check-1',
+        requestedByUserId: 'usr-1',
+      });
+
+      assert.ok(reqRes.ok);
+
+      const cuentaRes = await bridge.salon.getCuentaDetalle('cuenta-2');
+      assert.ok(cuentaRes.ok);
+      if (cuentaRes.ok) {
+        assert.equal(cuentaRes.data.status, 'IMPRESA');
+        assert.ok(cuentaRes.data.printedAt);
+      }
+    });
+
+    it('updates guest count on active table and account', async () => {
+      const bridge = createMockTridentBridge();
+
+      const changeRes = await bridge.salon.changeGuestCount({
+        cuentaId: 'cuenta-2',
+        expectedVersion: 3,
+        clientOpId: 'op-guest-1',
+        guestCount: 5,
+        performedByUserId: 'usr-1',
+      });
+
+      assert.ok(changeRes.ok);
+
+      const cuentaRes = await bridge.salon.getCuentaDetalle('cuenta-2');
+      assert.ok(cuentaRes.ok);
+      if (cuentaRes.ok) {
+        assert.equal(cuentaRes.data.guestCount, 5);
+      }
+    });
+
+    it('releases a table returning it to DISPONIBLE state', async () => {
+      const bridge = createMockTridentBridge();
+
+      const relRes = await bridge.salon.releaseMesa({
+        mesaId: 'mesa-3',
+        expectedVersion: 4,
+        clientOpId: 'op-rel-1',
+        performedByUserId: 'usr-1',
+      });
+
+      assert.ok(relRes.ok);
+
+      const salonRes = await bridge.salon.getSalonReadModel();
+      assert.ok(salonRes.ok);
+      if (salonRes.ok) {
+        const mesa3 = salonRes.data.rooms.flatMap((r) => r.tables).find((t) => t.id === 'mesa-3');
+        assert.equal(mesa3?.status, 'DISPONIBLE');
+      }
     });
   });
 });

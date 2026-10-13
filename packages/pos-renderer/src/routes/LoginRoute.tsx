@@ -34,7 +34,11 @@ export function LoginRoute({ onLoginSuccess }: LoginRouteProps): React.JSX.Eleme
         </div>
 
         {/* Quick User Role Selector */}
-        <div className="grid grid-cols-2 gap-3 w-full" role="radiogroup" aria-label="Rol de operador">
+        <div
+          className="grid grid-cols-2 gap-3 w-full"
+          role="radiogroup"
+          aria-label="Rol de operador"
+        >
           <Button
             intent={userCode === 'cajero' ? 'primary' : 'neutral'}
             tone={userCode === 'cajero' ? 'solid' : 'outline'}
