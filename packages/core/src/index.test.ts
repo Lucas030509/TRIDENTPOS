@@ -1052,4 +1052,84 @@ describe('TRIDENTPOS WP-012 Idempotency Identity & Trust Provider Boundary Suite
       assert.equal(total, 1189000n);
     });
   });
+
+  describe('Edge API REST Contracts & Zod Schemas Suite (Decision FE-08)', () => {
+    it('CancelCuentaItemSchema validates compliant input and rejects invalid clientOpId or negative version', () => {
+      const valid = {
+        cuentaId: 'cta_123',
+        itemId: 'item_456',
+        expectedVersion: 1,
+        clientOpId: '550e8400-e29b-41d4-a716-446655440000',
+        reason: 'Cliente cambió de opinión',
+        operatorUserId: 'usr_waiter',
+        operatorPin: '1234',
+        kitchenStatus: 'PENDIENTE',
+      };
+      const parsed = core.CancelCuentaItemSchema.safeParse(valid);
+      assert.equal(parsed.success, true);
+
+      const invalidUuid = { ...valid, clientOpId: 'non-uuid' };
+      assert.equal(core.CancelCuentaItemSchema.safeParse(invalidUuid).success, false);
+
+      const invalidVersion = { ...valid, expectedVersion: -1 };
+      assert.equal(core.CancelCuentaItemSchema.safeParse(invalidVersion).success, false);
+    });
+
+    it('TransferCuentaSchema validates table/waiter transfer and enforces targetWaiterPin', () => {
+      const valid = {
+        cuentaId: 'cta_123',
+        expectedVersion: 2,
+        clientOpId: '550e8400-e29b-41d4-a716-446655440001',
+        sourceMesaId: 'mesa_01',
+        targetMesaId: 'mesa_02',
+        sourceWaiterUserId: 'usr_w1',
+        targetWaiterUserId: 'usr_w2',
+        targetWaiterPin: '9999',
+      };
+      const parsed = core.TransferCuentaSchema.safeParse(valid);
+      assert.equal(parsed.success, true);
+
+      const missingPin = { ...valid, targetWaiterPin: '' };
+      assert.equal(core.TransferCuentaSchema.safeParse(missingPin).success, false);
+    });
+
+    it('SplitCuentaSchema enforces at least 2 partitions for any split strategy', () => {
+      const valid = {
+        cuentaId: 'cta_123',
+        expectedVersion: 1,
+        clientOpId: '550e8400-e29b-41d4-a716-446655440002',
+        splitType: 'BY_ITEMS',
+        partitions: [
+          { partitionId: 'part_1', itemIds: ['item_1'] },
+          { partitionId: 'part_2', itemIds: ['item_2'] },
+        ],
+        performedByUserId: 'usr_waiter',
+        operatorPin: '1234',
+      };
+      const parsed = core.SplitCuentaSchema.safeParse(valid);
+      assert.equal(parsed.success, true);
+
+      const singlePart = { ...valid, partitions: [{ partitionId: 'part_1', itemIds: ['item_1'] }] };
+      assert.equal(core.SplitCuentaSchema.safeParse(singlePart).success, false);
+    });
+
+    it('ChangeGuestCountSchema enforces positive range (1-999)', () => {
+      const valid = {
+        cuentaId: 'cta_123',
+        expectedVersion: 1,
+        clientOpId: '550e8400-e29b-41d4-a716-446655440003',
+        guestCount: 4,
+        performedByUserId: 'usr_waiter',
+      };
+      assert.equal(core.ChangeGuestCountSchema.safeParse(valid).success, true);
+      assert.equal(
+        core.ChangeGuestCountSchema.safeParse({ ...valid, guestCount: 0 }).success,
+        false,
+      );
+      assert.equal(
+        core.ChangeGuestCountSchema.safeParse({ ...valid, guestCount: 1000 }).success,
+        false,
+      );
+    });
+  });
 });

@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type pg from 'pg';
 import { getPool } from './connection.js';
-import { migrateUp, migrateDown } from './runner.js';
+import { migrateUp, migrateDown, getAppliedMigrations } from './runner.js';
 import { setTenantContext } from './tenant.js';
 
 dotenv.config();
@@ -865,6 +865,20 @@ describe('TRIDENTPOS WP-020 Finance & Cash Reconciliation Database Suite', () =>
   });
 
   it('R4-DB-11 & R4-DB-12: WP-020 rollback removes settlement tables and predecessors survive', async () => {
+    // Roll down any migrations newer than WP-020 first (e.g. WP-021)
+    const checkClientBefore = await pool.connect();
+    try {
+      const appliedBefore = await getAppliedMigrations(checkClientBefore);
+      for (let i = appliedBefore.length - 1; i >= 0; i--) {
+        const entry = appliedBefore[i];
+        if (entry && entry.id > '20260905020000') {
+          await migrateDown(pool, { allowDestructiveDown: true });
+        }
+      }
+    } finally {
+      checkClientBefore.release();
+    }
+
     // 1. Rollback WP-020 migration only
     const revertResult = await migrateDown(pool, { allowDestructiveDown: true });
     assert.equal(

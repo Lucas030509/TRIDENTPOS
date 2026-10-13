@@ -5,6 +5,9 @@
  */
 
 import type { Cuenta, Mesa } from './types.js';
+import type { IamPinValidatorPort } from './cash-shift-ports.js';
+
+export type { IamPinValidatorPort };
 
 export interface DiningRoomRepositoryPort {
   getMesaById(id: string): Promise<Mesa | null> | Mesa | null;
@@ -12,6 +15,7 @@ export interface DiningRoomRepositoryPort {
   listMesas(): Promise<readonly Mesa[]> | readonly Mesa[];
   getMesaByIdSync?(id: string): Mesa | null;
   saveMesaSync?(mesa: Mesa, expectedVersion: number): Mesa;
+  listMesasSync?(): readonly Mesa[];
 }
 
 export interface AccountRepositoryPort {
@@ -20,4 +24,5 @@ export interface AccountRepositoryPort {
   listOpenCuentas(): Promise<readonly Cuenta[]> | readonly Cuenta[];
   getCuentaByIdSync?(id: string): Cuenta | null;
   saveCuentaSync?(cuenta: Cuenta, expectedVersion: number): Cuenta;
+  listOpenCuentasSync?(): readonly Cuenta[];
 }

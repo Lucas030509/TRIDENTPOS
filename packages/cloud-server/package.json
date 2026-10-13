@@ -13,6 +13,7 @@
     }
   },
   "dependencies": {
+    "@trident/billing": "*",
     "@trident/core": "*",
     "@trident/database": "*",
     "@trident/finance": "*",
@@ -28,7 +29,7 @@
     "build": "tsc -b",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src/",
-    "test": "node --test dist/index.test.js",
+    "test": "node --test --test-concurrency=1 dist/index.test.js dist/billing.test.js",
     "clean": "rm -rf dist"
   }
 }
