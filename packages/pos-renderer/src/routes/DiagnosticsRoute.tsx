@@ -39,7 +39,9 @@ export function DiagnosticsRoute(): React.JSX.Element {
           <h2 className="text-lg font-bold text-text">Conectividad</h2>
           <div className="flex flex-col gap-2.5">
             <div className="flex items-center justify-between">
-              <span className="text-sm font-semibold text-text">Servidor Local (Fastify / SQLite)</span>
+              <span className="text-sm font-semibold text-text">
+                Servidor Local (Fastify / SQLite)
+              </span>
               <Badge
                 state={connectivity.edge === 'online' ? 'LISTO' : 'RECHAZADO'}
                 label={connectivity.edge === 'online' ? 'En línea' : 'Desconectado'}

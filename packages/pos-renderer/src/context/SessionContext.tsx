@@ -1,15 +1,14 @@
 import * as React from 'react';
-import {
-  getTridentBridge,
-  SessionView,
-  TridentApi,
-} from '../bridge/trident-bridge.js';
+import { getTridentBridge, SessionView, TridentApi } from '../bridge/trident-bridge.js';
 
 export interface SessionContextValue {
   readonly session: SessionView | null;
   readonly isAuthenticated: boolean;
   readonly isLoading: boolean;
-  readonly login: (userCode: string, pin: string) => Promise<{ readonly success: boolean; readonly error?: string }>;
+  readonly login: (
+    userCode: string,
+    pin: string,
+  ) => Promise<{ readonly success: boolean; readonly error?: string }>;
   readonly logout: () => Promise<void>;
   readonly authorizeStepUp: (commandRef: string, pin: string) => Promise<boolean>;
   readonly hasPermission: (permission: string) => boolean;

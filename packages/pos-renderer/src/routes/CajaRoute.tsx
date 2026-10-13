@@ -50,7 +50,9 @@ export function CajaRoute(): React.JSX.Element {
         </div>
 
         <div className="p-6 bg-surface rounded-xl border-2 border-border-control shadow-1 flex flex-col justify-between">
-          <span className="text-sm font-semibold text-text-muted uppercase">Operaciones de Turno</span>
+          <span className="text-sm font-semibold text-text-muted uppercase">
+            Operaciones de Turno
+          </span>
           <div className="flex items-center gap-3 mt-4">
             <Button intent="neutral" tone="outline" size="md" className="flex-1">
               Corte X / Z

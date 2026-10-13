@@ -12,6 +12,7 @@ import type {
   ChangeGuestCountDTO,
   RequestCheckDTO,
   ReleaseMesaDTO,
+  MesaSummaryDTO,
   SalonReadModelDTO,
   SubmitTenderRequestDTO,
   TenderResultDTO,
@@ -26,6 +27,7 @@ export type {
   ChangeGuestCountDTO,
   RequestCheckDTO,
   ReleaseMesaDTO,
+  MesaSummaryDTO,
   SalonReadModelDTO,
   SubmitTenderRequestDTO,
   TenderResultDTO,
@@ -123,6 +125,120 @@ export interface CashShiftStatusDTO {
   readonly currentBalance: string;
 }
 
+// ==========================================
+// Salón & Catalog DTOs (WP-026B)
+// ==========================================
+
+export interface CatalogCategoryDTO {
+  readonly id: string;
+  readonly code: string;
+  readonly name: string;
+  readonly sortOrder: number;
+}
+
+export interface CatalogModifierOptionDTO {
+  readonly id: string;
+  readonly name: string;
+  readonly extraPrice: string; // Scale 4
+}
+
+export interface CatalogModifierGroupDTO {
+  readonly id: string;
+  readonly name: string;
+  readonly required: boolean;
+  readonly minSelect: number;
+  readonly maxSelect: number;
+  readonly options: readonly CatalogModifierOptionDTO[];
+}
+
+export interface CatalogProductDTO {
+  readonly id: string;
+  readonly categoryId: string;
+  readonly code: string;
+  readonly name: string;
+  readonly description?: string;
+  readonly basePrice: string; // Scale 4
+  readonly taxRate: string; // Scale 4 (e.g. "0.1600")
+  readonly modifierGroups?: readonly CatalogModifierGroupDTO[];
+}
+
+export interface CuentaItemModificadorDTO {
+  readonly id: string;
+  readonly modifierId: string;
+  readonly modifierNameSnapshot: string;
+  readonly modifierPriceApplied: string; // Scale 4
+}
+
+export interface CuentaItemDTO {
+  readonly id: string;
+  readonly cuentaId: string;
+  readonly productId: string;
+  readonly productNameSnapshot: string;
+  readonly unitPriceApplied: string; // Scale 4
+  readonly quantity: string; // Scale 4
+  readonly taxRateApplied: string; // Scale 4
+  readonly taxAmountApplied: string; // Scale 4
+  readonly discountAmountApplied: string; // Scale 4
+  readonly subtotal: string; // Scale 4
+  readonly total: string; // Scale 4
+  readonly status: 'ORDENADO' | 'EN_COCINA' | 'PREPARADO' | 'ENTREGADO' | 'CANCELADO';
+  readonly cancellationReason?: string | null;
+  readonly cancelledByUserId?: string | null;
+  readonly notes?: string | null;
+  readonly createdAt: string;
+  readonly modifiers: readonly CuentaItemModificadorDTO[];
+}
+
+export interface CuentaDetalleDTO {
+  readonly id: string;
+  readonly folioNumber: number | null;
+  readonly mesaId: string | null;
+  readonly tableNumber?: string;
+  readonly roomName?: string;
+  readonly accountType: 'COMEDOR' | 'MOSTRADOR' | 'RAPPI' | 'UBER' | 'DOMICILIO';
+  readonly status: 'ABIERTA' | 'IMPRESA' | 'PAGADA' | 'ANULADA';
+  readonly subtotal: string; // Scale 4
+  readonly taxTotal: string; // Scale 4
+  readonly discountsTotal: string; // Scale 4
+  readonly tipsTotal: string; // Scale 4
+  readonly totalAmount: string; // Scale 4
+  readonly openedByUserId: string;
+  readonly currentWaiterUserId?: string | null;
+  readonly guestCount: number;
+  readonly openedAt: string;
+  readonly printedAt?: string | null;
+  readonly closedAt?: string | null;
+  readonly version: number;
+  readonly updatedAt: string;
+  readonly items: readonly CuentaItemDTO[];
+}
+
+export interface OpenMesaDTO {
+  readonly mesaId: string;
+  readonly guestCount: number;
+  readonly waiterUserId?: string;
+}
+
+export interface EnviarComandaItemInput {
+  readonly productId: string;
+  readonly productNameSnapshot: string;
+  readonly unitPriceApplied: string;
+  readonly quantity: string;
+  readonly taxRateApplied: string;
+  readonly notes?: string;
+  readonly modifiers?: readonly {
+    readonly modifierId: string;
+    readonly modifierNameSnapshot: string;
+    readonly modifierPriceApplied: string;
+  }[];
+}
+
+export interface EnviarComandaDTO {
+  readonly cuentaId: string;
+  readonly expectedVersion: number;
+  readonly items: readonly EnviarComandaItemInput[];
+}
+
 export interface TridentApi {
   readonly session: {
     readonly login: (credentials: {
@@ -142,6 +258,15 @@ export interface TridentApi {
   };
   readonly salon: {
     readonly getSalonReadModel: () => Promise<BridgeResult<SalonReadModelDTO>>;
+    readonly getCuentaDetalle: (cuentaId: string) => Promise<BridgeResult<CuentaDetalleDTO>>;
+    readonly getCatalog: () => Promise<
+      BridgeResult<{
+        readonly categories: readonly CatalogCategoryDTO[];
+        readonly products: readonly CatalogProductDTO[];
+      }>
+    >;
+    readonly openMesa: (params: OpenMesaDTO) => Promise<BridgeResult<CuentaDetalleDTO>>;
+    readonly enviarComanda: (params: EnviarComandaDTO) => Promise<BridgeResult<CuentaDetalleDTO>>;
     readonly cancelItem: (
       params: CancelCuentaItemDTO,
     ) => Promise<BridgeResult<{ readonly success: boolean }>>;
@@ -204,13 +329,355 @@ export function createMockTridentBridge(initialSession: SessionView | null = nul
   let sessionState: SessionView | null = initialSession;
   const eventListeners = new Set<(event: DomainEvent) => void>();
 
+  // In-memory mock database for Salón
+  const catalogCategories: readonly CatalogCategoryDTO[] = [
+    { id: 'cat-1', code: 'ENT', name: 'Entradas', sortOrder: 1 },
+    { id: 'cat-2', code: 'PRIN', name: 'Platos Fuertes', sortOrder: 2 },
+    { id: 'cat-3', code: 'BEB', name: 'Bebidas & Coctelería', sortOrder: 3 },
+    { id: 'cat-4', code: 'POS', name: 'Postres', sortOrder: 4 },
+  ];
+
+  const catalogProducts: readonly CatalogProductDTO[] = [
+    {
+      id: 'prod-1',
+      categoryId: 'cat-1',
+      code: 'E01',
+      name: 'Guacamole Rústico con Totopos',
+      description: 'Aguacate hass, pico de gallo, cilantro fresco y totopos artesanales.',
+      basePrice: '120.0000',
+      taxRate: '0.1600',
+      modifierGroups: [
+        {
+          id: 'modg-picante',
+          name: 'Nivel de Picante',
+          required: true,
+          minSelect: 1,
+          maxSelect: 1,
+          options: [
+            { id: 'opt-sin', name: 'Sin picante', extraPrice: '0.0000' },
+            { id: 'opt-medio', name: 'Medio (Serrano picado)', extraPrice: '0.0000' },
+            { id: 'opt-bravo', name: 'Muy bravo (Habanero)', extraPrice: '10.0000' },
+          ],
+        },
+      ],
+    },
+    {
+      id: 'prod-2',
+      categoryId: 'cat-2',
+      code: 'P01',
+      name: 'Rib Eye Prime 400g',
+      description: 'Corte prime al carbón con papas al romero y vegetales grill.',
+      basePrice: '480.0000',
+      taxRate: '0.1600',
+      modifierGroups: [
+        {
+          id: 'modg-termino',
+          name: 'Término de la Carne',
+          required: true,
+          minSelect: 1,
+          maxSelect: 1,
+          options: [
+            { id: 'opt-t1', name: 'Término Medio (Rosa)', extraPrice: '0.0000' },
+            { id: 'opt-t2', name: 'Tres Cuartos', extraPrice: '0.0000' },
+            { id: 'opt-t3', name: 'Bien Cocido', extraPrice: '0.0000' },
+          ],
+        },
+        {
+          id: 'modg-guarnicion',
+          name: 'Guarnición Extra',
+          required: false,
+          minSelect: 0,
+          maxSelect: 2,
+          options: [
+            { id: 'opt-g1', name: 'Puré de papa trufado', extraPrice: '65.0000' },
+            { id: 'opt-g2', name: 'Espárragos asados', extraPrice: '55.0000' },
+          ],
+        },
+      ],
+    },
+    {
+      id: 'prod-3',
+      categoryId: 'cat-2',
+      code: 'P02',
+      name: 'Hamburguesa Monumental TRIDENT',
+      description: 'Carne wagyu 220g, queso cheddar añejo, mermelada de tocino y brioche.',
+      basePrice: '260.0000',
+      taxRate: '0.1600',
+      modifierGroups: [
+        {
+          id: 'modg-queso',
+          name: 'Extras Opcionales',
+          required: false,
+          minSelect: 0,
+          maxSelect: 2,
+          options: [
+            { id: 'opt-tocino', name: 'Doble Tocino Crujiente', extraPrice: '35.0000' },
+            { id: 'opt-queso', name: 'Queso Gouda Adicional', extraPrice: '25.0000' },
+          ],
+        },
+      ],
+    },
+    {
+      id: 'prod-4',
+      categoryId: 'cat-3',
+      code: 'B01',
+      name: 'Cerveza Artesanal IPA 355ml',
+      description: 'Notas cítricas y herbales, amargor balanceado.',
+      basePrice: '95.0000',
+      taxRate: '0.1600',
+    },
+    {
+      id: 'prod-5',
+      categoryId: 'cat-3',
+      code: 'B02',
+      name: 'Limonada Natural con Hierbabuena',
+      description: 'Refrescante, endulzada al gusto.',
+      basePrice: '55.0000',
+      taxRate: '0.1600',
+    },
+    {
+      id: 'prod-6',
+      categoryId: 'cat-4',
+      code: 'D01',
+      name: 'Cheesecake Vasco Caramelizado',
+      description: 'Textura cremosa fundente con reducción de frutos rojos silvestres.',
+      basePrice: '135.0000',
+      taxRate: '0.1600',
+    },
+  ];
+
+  // Mock accounts and tables state
+  const mockCuentas = new Map<string, CuentaDetalleDTO>();
+
+  // Pre-seed cuenta-2
+  mockCuentas.set('cuenta-2', {
+    id: 'cuenta-2',
+    folioNumber: 1042,
+    mesaId: 'mesa-2',
+    tableNumber: '2',
+    roomName: 'Principal',
+    accountType: 'COMEDOR',
+    status: 'ABIERTA',
+    subtotal: '550.0000',
+    taxTotal: '88.0000',
+    discountsTotal: '0.0000',
+    tipsTotal: '0.0000',
+    totalAmount: '638.0000',
+    guestCount: 2,
+    openedByUserId: 'usr-1',
+    currentWaiterUserId: 'usr-1',
+    openedAt: new Date(Date.now() - 42 * 60 * 1000).toISOString(),
+    version: 3,
+    updatedAt: new Date().toISOString(),
+    items: [
+      {
+        id: 'item-1',
+        cuentaId: 'cuenta-2',
+        productId: 'prod-1',
+        productNameSnapshot: 'Guacamole Rústico con Totopos',
+        unitPriceApplied: '120.0000',
+        quantity: '1.0000',
+        taxRateApplied: '0.1600',
+        taxAmountApplied: '19.2000',
+        discountAmountApplied: '0.0000',
+        subtotal: '120.0000',
+        total: '139.2000',
+        status: 'PREPARADO',
+        createdAt: new Date(Date.now() - 35 * 60 * 1000).toISOString(),
+        modifiers: [
+          {
+            id: 'm-1',
+            modifierId: 'opt-medio',
+            modifierNameSnapshot: 'Medio (Serrano picado)',
+            modifierPriceApplied: '0.0000',
+          },
+        ],
+      },
+      {
+        id: 'item-2',
+        cuentaId: 'cuenta-2',
+        productId: 'prod-2',
+        productNameSnapshot: 'Rib Eye Prime 400g',
+        unitPriceApplied: '480.0000',
+        quantity: '1.0000',
+        taxRateApplied: '0.1600',
+        taxAmountApplied: '76.8000',
+        discountAmountApplied: '0.0000',
+        subtotal: '480.0000',
+        total: '556.8000',
+        status: 'EN_COCINA',
+        createdAt: new Date(Date.now() - 20 * 60 * 1000).toISOString(),
+        modifiers: [
+          {
+            id: 'm-2',
+            modifierId: 'opt-t1',
+            modifierNameSnapshot: 'Término Medio (Rosa)',
+            modifierPriceApplied: '0.0000',
+          },
+        ],
+      },
+    ],
+  });
+
+  // Pre-seed cuenta-3 (En Cuenta)
+  mockCuentas.set('cuenta-3', {
+    id: 'cuenta-3',
+    folioNumber: 1043,
+    mesaId: 'mesa-3',
+    tableNumber: '3',
+    roomName: 'Principal',
+    accountType: 'COMEDOR',
+    status: 'IMPRESA',
+    subtotal: '835.0000',
+    taxTotal: '133.6000',
+    discountsTotal: '0.0000',
+    tipsTotal: '0.0000',
+    totalAmount: '968.6000',
+    guestCount: 4,
+    openedByUserId: 'usr-1',
+    currentWaiterUserId: 'usr-1',
+    openedAt: new Date(Date.now() - 75 * 60 * 1000).toISOString(),
+    printedAt: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
+    version: 4,
+    updatedAt: new Date().toISOString(),
+    items: [],
+  });
+
+  // Salon room structure
+  let roomsState: { readonly name: string; readonly tables: readonly MesaSummaryDTO[] }[] = [
+    {
+      name: 'Salón Principal',
+      tables: [
+        {
+          id: 'mesa-1',
+          roomName: 'Salón Principal',
+          tableNumber: '1',
+          status: 'DISPONIBLE' as const,
+          currentAccountId: null,
+          assignedWaiterUserId: null,
+          guestCount: 0,
+          subtotal: '0.0000',
+          totalAmount: '0.0000',
+          openedAt: null,
+          attentionSignal: { flagged: false, reason: null, elapsedMinutes: 0 },
+          version: 1,
+          updatedAt: new Date().toISOString(),
+        },
+        {
+          id: 'mesa-2',
+          roomName: 'Salón Principal',
+          tableNumber: '2',
+          status: 'OCUPADA' as const,
+          currentAccountId: 'cuenta-2',
+          assignedWaiterUserId: 'usr-1',
+          guestCount: 2,
+          subtotal: '550.0000',
+          totalAmount: '638.0000',
+          openedAt: new Date(Date.now() - 42 * 60 * 1000).toISOString(),
+          attentionSignal: { flagged: false, reason: null, elapsedMinutes: 42 },
+          version: 3,
+          updatedAt: new Date().toISOString(),
+        },
+        {
+          id: 'mesa-3',
+          roomName: 'Salón Principal',
+          tableNumber: '3',
+          status: 'EN_CUENTA' as const,
+          currentAccountId: 'cuenta-3',
+          assignedWaiterUserId: 'usr-1',
+          guestCount: 4,
+          subtotal: '835.0000',
+          totalAmount: '968.6000',
+          openedAt: new Date(Date.now() - 75 * 60 * 1000).toISOString(),
+          attentionSignal: {
+            flagged: true,
+            reason: 'Ticket de precuenta solicitado hace >5 min',
+            elapsedMinutes: 75,
+          },
+          version: 4,
+          updatedAt: new Date().toISOString(),
+        },
+        {
+          id: 'mesa-4',
+          roomName: 'Salón Principal',
+          tableNumber: '4',
+          status: 'BLOQUEADA' as const,
+          currentAccountId: null,
+          assignedWaiterUserId: null,
+          guestCount: 0,
+          subtotal: '0.0000',
+          totalAmount: '0.0000',
+          openedAt: null,
+          attentionSignal: { flagged: false, reason: null, elapsedMinutes: 0 },
+          version: 1,
+          updatedAt: new Date().toISOString(),
+        },
+      ],
+    },
+    {
+      name: 'Terraza',
+      tables: [
+        {
+          id: 'mesa-5',
+          roomName: 'Terraza',
+          tableNumber: '5',
+          status: 'DISPONIBLE' as const,
+          currentAccountId: null,
+          assignedWaiterUserId: null,
+          guestCount: 0,
+          subtotal: '0.0000',
+          totalAmount: '0.0000',
+          openedAt: null,
+          attentionSignal: { flagged: false, reason: null, elapsedMinutes: 0 },
+          version: 1,
+          updatedAt: new Date().toISOString(),
+        },
+        {
+          id: 'mesa-6',
+          roomName: 'Terraza',
+          tableNumber: '6',
+          status: 'DISPONIBLE' as const,
+          currentAccountId: null,
+          assignedWaiterUserId: null,
+          guestCount: 0,
+          subtotal: '0.0000',
+          totalAmount: '0.0000',
+          openedAt: null,
+          attentionSignal: { flagged: false, reason: null, elapsedMinutes: 0 },
+          version: 1,
+          updatedAt: new Date().toISOString(),
+        },
+      ],
+    },
+    {
+      name: 'Barra',
+      tables: [
+        {
+          id: 'mesa-7',
+          roomName: 'Barra',
+          tableNumber: 'B1',
+          status: 'DISPONIBLE' as const,
+          currentAccountId: null,
+          assignedWaiterUserId: null,
+          guestCount: 0,
+          subtotal: '0.0000',
+          totalAmount: '0.0000',
+          openedAt: null,
+          attentionSignal: { flagged: false, reason: null, elapsedMinutes: 0 },
+          version: 1,
+          updatedAt: new Date().toISOString(),
+        },
+      ],
+    },
+  ];
+
   return {
     session: {
       async login({ userCode, pin }) {
         if (pin === '0000' || pin === '1234') {
           sessionState = {
             userId: 'usr-1',
-            displayName: userCode === 'admin' ? 'Gerente Principal' : 'Mesero / Cajero',
+            displayName: userCode === 'admin' ? 'Gerente Principal' : 'Carlos Mesero',
             roles: userCode === 'admin' ? ['GERENTE', 'CAJERO'] : ['MESERO'],
             permissions: ['pos.access', 'caja.access', 'salon.access'],
             branchId: 'branch-1',
@@ -263,58 +730,465 @@ export function createMockTridentBridge(initialSession: SessionView | null = nul
     },
     salon: {
       async getSalonReadModel() {
+        const allTables = roomsState.flatMap((r) => r.tables);
         return {
           ok: true,
           data: {
-            rooms: [
-              {
-                name: 'Principal',
-                tables: [
-                  {
-                    id: 'mesa-1',
-                    roomName: 'Principal',
-                    tableNumber: '1',
-                    status: 'DISPONIBLE',
-                    currentAccountId: null,
-                    assignedWaiterUserId: null,
-                    guestCount: 0,
-                    subtotal: '0.0000',
-                    totalAmount: '0.0000',
-                    openedAt: null,
-                    attentionSignal: { flagged: false, reason: null, elapsedMinutes: 0 },
-                    version: 1,
-                    updatedAt: new Date().toISOString(),
-                  },
-                ],
-              },
-            ],
-            totalTables: 1,
-            occupiedTables: 0,
-            inCheckTables: 0,
-            availableTables: 1,
+            rooms: roomsState,
+            totalTables: allTables.length,
+            occupiedTables: allTables.filter((t) => t.status === 'OCUPADA').length,
+            inCheckTables: allTables.filter((t) => t.status === 'EN_CUENTA').length,
+            availableTables: allTables.filter((t) => t.status === 'DISPONIBLE').length,
             generatedAt: new Date().toISOString(),
           },
         };
       },
-      async cancelItem() {
-        return { ok: true, data: { success: true } };
+
+      async getCatalog() {
+        return {
+          ok: true,
+          data: {
+            categories: catalogCategories,
+            products: catalogProducts,
+          },
+        };
       },
-      async transferCuenta() {
-        return { ok: true, data: { success: true } };
+
+      async getCuentaDetalle(cuentaId: string) {
+        const c = mockCuentas.get(cuentaId);
+        if (!c) {
+          return {
+            ok: false,
+            error: {
+              code: 'NOT_FOUND',
+              message: `Cuenta con ID ${cuentaId} no encontrada`,
+              retryable: false,
+            },
+          };
+        }
+        return { ok: true, data: c, version: c.version };
       },
+
+      async openMesa({ mesaId, guestCount, waiterUserId }) {
+        const table = roomsState.flatMap((r) => r.tables).find((t) => t.id === mesaId);
+        if (!table) {
+          return {
+            ok: false,
+            error: { code: 'NOT_FOUND', message: 'Mesa no encontrada', retryable: false },
+          };
+        }
+        if (table.status !== 'DISPONIBLE') {
+          return {
+            ok: false,
+            error: {
+              code: 'CONFLICT_VERSION',
+              message: 'La mesa no está disponible para apertura',
+              retryable: false,
+            },
+          };
+        }
+
+        const newCuentaId = `cuenta-${Date.now()}`;
+        const newCuenta: CuentaDetalleDTO = {
+          id: newCuentaId,
+          folioNumber: Math.floor(1000 + Math.random() * 9000),
+          mesaId: table.id,
+          tableNumber: table.tableNumber,
+          roomName: table.roomName,
+          accountType: 'COMEDOR',
+          status: 'ABIERTA',
+          subtotal: '0.0000',
+          taxTotal: '0.0000',
+          discountsTotal: '0.0000',
+          tipsTotal: '0.0000',
+          totalAmount: '0.0000',
+          guestCount: guestCount > 0 ? guestCount : 1,
+          openedByUserId: waiterUserId ?? sessionState?.userId ?? 'usr-1',
+          currentWaiterUserId: waiterUserId ?? sessionState?.userId ?? 'usr-1',
+          openedAt: new Date().toISOString(),
+          version: 1,
+          updatedAt: new Date().toISOString(),
+          items: [],
+        };
+
+        mockCuentas.set(newCuentaId, newCuenta);
+
+        // Update table in roomState
+        roomsState = roomsState.map((room) => ({
+          ...room,
+          tables: room.tables.map((t) =>
+            t.id === mesaId
+              ? {
+                  ...t,
+                  status: 'OCUPADA' as const,
+                  currentAccountId: newCuentaId,
+                  assignedWaiterUserId: newCuenta.currentWaiterUserId ?? null,
+                  guestCount: newCuenta.guestCount,
+                  openedAt: newCuenta.openedAt,
+                  version: t.version + 1,
+                  updatedAt: new Date().toISOString(),
+                }
+              : t,
+          ),
+        }));
+
+        return { ok: true, data: newCuenta, version: newCuenta.version };
+      },
+
+      async enviarComanda({ cuentaId, expectedVersion, items }) {
+        const cuenta = mockCuentas.get(cuentaId);
+        if (!cuenta) {
+          return {
+            ok: false,
+            error: { code: 'NOT_FOUND', message: 'Cuenta no encontrada', retryable: false },
+          };
+        }
+        if (cuenta.version !== expectedVersion) {
+          return {
+            ok: false,
+            error: {
+              code: 'CONFLICT_VERSION',
+              message: 'La cuenta fue modificada en otra estación. Se requiere recargar.',
+              retryable: true,
+              conflict: {
+                expectedVersion,
+                serverVersion: cuenta.version,
+                entityId: cuentaId,
+              },
+            },
+          };
+        }
+
+        // Calculate additions
+        let addedSubtotal = 0n;
+        let addedTax = 0n;
+        const newItems: CuentaItemDTO[] = items.map((it, idx) => {
+          const qty = BigInt(Math.round(parseFloat(it.quantity) * 10000));
+          const unitPrice = BigInt(Math.round(parseFloat(it.unitPriceApplied) * 10000));
+          const taxRate = BigInt(Math.round(parseFloat(it.taxRateApplied) * 10000));
+
+          let modTotal = 0n;
+          const mappedMods: CuentaItemModificadorDTO[] = (it.modifiers ?? []).map((m, mIdx) => {
+            const mPrice = BigInt(Math.round(parseFloat(m.modifierPriceApplied) * 10000));
+            modTotal += mPrice;
+            return {
+              id: `mod-${Date.now()}-${idx}-${mIdx}`,
+              modifierId: m.modifierId,
+              modifierNameSnapshot: m.modifierNameSnapshot,
+              modifierPriceApplied: m.modifierPriceApplied,
+            };
+          });
+
+          const itemSubtotal = ((unitPrice + modTotal) * qty) / 10000n;
+          const itemTax = (itemSubtotal * taxRate) / 10000n;
+          const itemTotal = itemSubtotal + itemTax;
+
+          addedSubtotal += itemSubtotal;
+          addedTax += itemTax;
+
+          return {
+            id: `item-${Date.now()}-${idx}`,
+            cuentaId,
+            productId: it.productId,
+            productNameSnapshot: it.productNameSnapshot,
+            unitPriceApplied: it.unitPriceApplied,
+            quantity: it.quantity,
+            taxRateApplied: it.taxRateApplied,
+            taxAmountApplied: (Number(itemTax) / 10000).toFixed(4),
+            discountAmountApplied: '0.0000',
+            subtotal: (Number(itemSubtotal) / 10000).toFixed(4),
+            total: (Number(itemTotal) / 10000).toFixed(4),
+            status: 'EN_COCINA' as const,
+            notes: it.notes ?? null,
+            createdAt: new Date().toISOString(),
+            modifiers: mappedMods,
+          };
+        });
+
+        const currentSubtotal = BigInt(Math.round(parseFloat(cuenta.subtotal) * 10000));
+        const currentTax = BigInt(Math.round(parseFloat(cuenta.taxTotal) * 10000));
+
+        const updatedSubtotal = currentSubtotal + addedSubtotal;
+        const updatedTax = currentTax + addedTax;
+        const updatedTotal = updatedSubtotal + updatedTax;
+
+        const updatedCuenta: CuentaDetalleDTO = {
+          ...cuenta,
+          version: cuenta.version + 1,
+          updatedAt: new Date().toISOString(),
+          subtotal: (Number(updatedSubtotal) / 10000).toFixed(4),
+          taxTotal: (Number(updatedTax) / 10000).toFixed(4),
+          totalAmount: (Number(updatedTotal) / 10000).toFixed(4),
+          items: [...cuenta.items, ...newItems],
+        };
+
+        mockCuentas.set(cuentaId, updatedCuenta);
+
+        // Update table in roomState
+        roomsState = roomsState.map((room) => ({
+          ...room,
+          tables: room.tables.map((t) =>
+            t.currentAccountId === cuentaId
+              ? {
+                  ...t,
+                  subtotal: updatedCuenta.subtotal,
+                  totalAmount: updatedCuenta.totalAmount,
+                  version: t.version + 1,
+                  updatedAt: new Date().toISOString(),
+                }
+              : t,
+          ),
+        }));
+
+        return { ok: true, data: updatedCuenta, version: updatedCuenta.version };
+      },
+
+      async cancelItem({ cuentaId, itemId, expectedVersion, reason }) {
+        const cuenta = mockCuentas.get(cuentaId);
+        if (!cuenta) {
+          return {
+            ok: false,
+            error: { code: 'NOT_FOUND', message: 'Cuenta no encontrada', retryable: false },
+          };
+        }
+        if (cuenta.version !== expectedVersion) {
+          return {
+            ok: false,
+            error: {
+              code: 'CONFLICT_VERSION',
+              message: 'La cuenta cambió de versión. Recargue antes de cancelar.',
+              retryable: true,
+              conflict: {
+                expectedVersion,
+                serverVersion: cuenta.version,
+                entityId: cuentaId,
+              },
+            },
+          };
+        }
+
+        const item = cuenta.items.find((i) => i.id === itemId);
+        if (!item) {
+          return {
+            ok: false,
+            error: { code: 'NOT_FOUND', message: 'Partida no encontrada', retryable: false },
+          };
+        }
+
+        // Deduct item total from subtotal and tax
+        const itemSub = BigInt(Math.round(parseFloat(item.subtotal) * 10000));
+        const itemTax = BigInt(Math.round(parseFloat(item.taxAmountApplied) * 10000));
+        const curSub = BigInt(Math.round(parseFloat(cuenta.subtotal) * 10000));
+        const curTax = BigInt(Math.round(parseFloat(cuenta.taxTotal) * 10000));
+
+        const newSub = curSub >= itemSub ? curSub - itemSub : 0n;
+        const newTax = curTax >= itemTax ? curTax - itemTax : 0n;
+        const newTotal = newSub + newTax;
+
+        const updatedCuenta: CuentaDetalleDTO = {
+          ...cuenta,
+          version: cuenta.version + 1,
+          updatedAt: new Date().toISOString(),
+          subtotal: (Number(newSub) / 10000).toFixed(4),
+          taxTotal: (Number(newTax) / 10000).toFixed(4),
+          totalAmount: (Number(newTotal) / 10000).toFixed(4),
+          items: cuenta.items.map((i) =>
+            i.id === itemId
+              ? {
+                  ...i,
+                  status: 'CANCELADO' as const,
+                  cancellationReason: reason,
+                  cancelledByUserId: sessionState?.userId ?? 'usr-supervisor',
+                }
+              : i,
+          ),
+        };
+
+        mockCuentas.set(cuentaId, updatedCuenta);
+
+        // Update table in roomState
+        roomsState = roomsState.map((room) => ({
+          ...room,
+          tables: room.tables.map((t) =>
+            t.currentAccountId === cuentaId
+              ? {
+                  ...t,
+                  subtotal: updatedCuenta.subtotal,
+                  totalAmount: updatedCuenta.totalAmount,
+                  version: t.version + 1,
+                  updatedAt: new Date().toISOString(),
+                }
+              : t,
+          ),
+        }));
+
+        return { ok: true, data: { success: true }, version: updatedCuenta.version };
+      },
+
+      async transferCuenta({ cuentaId, targetMesaId, sourceMesaId }) {
+        const cuenta = mockCuentas.get(cuentaId);
+        if (!cuenta) {
+          return {
+            ok: false,
+            error: { code: 'NOT_FOUND', message: 'Cuenta no encontrada', retryable: false },
+          };
+        }
+
+        const targetTable = roomsState.flatMap((r) => r.tables).find((t) => t.id === targetMesaId);
+        if (!targetTable || targetTable.status !== 'DISPONIBLE') {
+          return {
+            ok: false,
+            error: {
+              code: 'VALIDATION',
+              message: 'La mesa destino no está disponible',
+              retryable: false,
+            },
+          };
+        }
+
+        const updatedCuenta: CuentaDetalleDTO = {
+          ...cuenta,
+          mesaId: targetMesaId,
+          tableNumber: targetTable.tableNumber,
+          roomName: targetTable.roomName,
+          version: cuenta.version + 1,
+          updatedAt: new Date().toISOString(),
+        };
+        mockCuentas.set(cuentaId, updatedCuenta);
+
+        // Update source and target tables
+        roomsState = roomsState.map((room) => ({
+          ...room,
+          tables: room.tables.map((t) => {
+            if (t.id === sourceMesaId) {
+              return {
+                ...t,
+                status: 'DISPONIBLE' as const,
+                currentAccountId: null,
+                assignedWaiterUserId: null,
+                guestCount: 0,
+                subtotal: '0.0000',
+                totalAmount: '0.0000',
+                openedAt: null,
+                version: t.version + 1,
+                updatedAt: new Date().toISOString(),
+              };
+            }
+            if (t.id === targetMesaId) {
+              return {
+                ...t,
+                status: 'OCUPADA' as const,
+                currentAccountId: cuentaId,
+                assignedWaiterUserId: cuenta.currentWaiterUserId ?? null,
+                guestCount: cuenta.guestCount,
+                subtotal: cuenta.subtotal,
+                totalAmount: cuenta.totalAmount,
+                openedAt: cuenta.openedAt,
+                version: t.version + 1,
+                updatedAt: new Date().toISOString(),
+              };
+            }
+            return t;
+          }),
+        }));
+
+        return { ok: true, data: { success: true }, version: updatedCuenta.version };
+      },
+
       async splitCuenta() {
         return { ok: true, data: { success: true } };
       },
-      async reassignWaiter() {
-        return { ok: true, data: { success: true } };
+
+      async reassignWaiter({ cuentaId, newWaiterUserId }) {
+        const cuenta = mockCuentas.get(cuentaId);
+        if (!cuenta) {
+          return {
+            ok: false,
+            error: { code: 'NOT_FOUND', message: 'Cuenta no encontrada', retryable: false },
+          };
+        }
+        const updated: CuentaDetalleDTO = {
+          ...cuenta,
+          currentWaiterUserId: newWaiterUserId,
+          version: cuenta.version + 1,
+          updatedAt: new Date().toISOString(),
+        };
+        mockCuentas.set(cuentaId, updated);
+        return { ok: true, data: { success: true }, version: updated.version };
       },
-      async changeGuestCount() {
-        return { ok: true, data: { success: true } };
+
+      async changeGuestCount({ cuentaId, guestCount }) {
+        const cuenta = mockCuentas.get(cuentaId);
+        if (!cuenta) {
+          return {
+            ok: false,
+            error: { code: 'NOT_FOUND', message: 'Cuenta no encontrada', retryable: false },
+          };
+        }
+        const updated: CuentaDetalleDTO = {
+          ...cuenta,
+          guestCount,
+          version: cuenta.version + 1,
+          updatedAt: new Date().toISOString(),
+        };
+        mockCuentas.set(cuentaId, updated);
+
+        // Also update table guestCount
+        roomsState = roomsState.map((r) => ({
+          ...r,
+          tables: r.tables.map((t) => (t.currentAccountId === cuentaId ? { ...t, guestCount } : t)),
+        }));
+
+        return { ok: true, data: { success: true }, version: updated.version };
       },
-      async requestCheck() {
-        return { ok: true, data: { success: true } };
+
+      async requestCheck({ cuentaId }) {
+        const cuenta = mockCuentas.get(cuentaId);
+        if (!cuenta) {
+          return {
+            ok: false,
+            error: { code: 'NOT_FOUND', message: 'Cuenta no encontrada', retryable: false },
+          };
+        }
+        const updated: CuentaDetalleDTO = {
+          ...cuenta,
+          status: 'IMPRESA',
+          printedAt: new Date().toISOString(),
+          version: cuenta.version + 1,
+          updatedAt: new Date().toISOString(),
+        };
+        mockCuentas.set(cuentaId, updated);
+
+        roomsState = roomsState.map((r) => ({
+          ...r,
+          tables: r.tables.map((t) =>
+            t.currentAccountId === cuentaId ? { ...t, status: 'EN_CUENTA' as const } : t,
+          ),
+        }));
+
+        return { ok: true, data: { success: true }, version: updated.version };
       },
-      async releaseMesa() {
+
+      async releaseMesa({ mesaId }) {
+        roomsState = roomsState.map((r) => ({
+          ...r,
+          tables: r.tables.map((t) =>
+            t.id === mesaId
+              ? {
+                  ...t,
+                  status: 'DISPONIBLE' as const,
+                  currentAccountId: null,
+                  assignedWaiterUserId: null,
+                  guestCount: 0,
+                  subtotal: '0.0000',
+                  totalAmount: '0.0000',
+                  openedAt: null,
+                  version: t.version + 1,
+                  updatedAt: new Date().toISOString(),
+                }
+              : t,
+          ),
+        }));
         return { ok: true, data: { success: true } };
       },
     },

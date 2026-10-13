@@ -1,7 +1,7 @@
 /**
  * @trident/pos-renderer
  * React 19 Native POS App Shell, Typed Bridge, Routing & Feature Modules
- * Authoritative implementation per FRONTEND_ARCHITECTURE.md (ARCH-FE-001) & WP-026A
+ * Authoritative implementation per FRONTEND_ARCHITECTURE.md (ARCH-FE-001) & WP-026A/B
  */
 
 export const POS_RENDERER_PACKAGE_NAME = '@trident/pos-renderer';
@@ -46,6 +46,16 @@ export * from './routes/SalonRoute.js';
 export * from './routes/KdsRoute.js';
 export * from './routes/CajaRoute.js';
 export * from './routes/DiagnosticsRoute.js';
+
+// Feature: Salón & Comandero (WP-026B)
+export * from './features/salon/TableCard.js';
+export * from './features/salon/OpenTableDialog.js';
+export * from './features/salon/ModifierSelectorDialog.js';
+export * from './features/salon/CancelItemDialog.js';
+export * from './features/salon/TransferTableDialog.js';
+export * from './features/salon/ChangeGuestsDialog.js';
+export * from './features/salon/SplitAccountDialog.js';
+export * from './features/salon/ComanderoView.js';
 
 // Root Router
 export * from './router.js';

@@ -23,7 +23,9 @@ export interface PosRouterProps {
 }
 
 export function PosRouter({ initialPath }: PosRouterProps): React.JSX.Element {
-  const [currentPath, setCurrentPath] = React.useState<string>(() => initialPath ?? getInitialRouteFromHash());
+  const [currentPath, setCurrentPath] = React.useState<string>(
+    () => initialPath ?? getInitialRouteFromHash(),
+  );
   const { mode } = useStation();
 
   // Listen to hash changes in browser / Electron
@@ -123,9 +125,7 @@ export function PosRouter({ initialPath }: PosRouterProps): React.JSX.Element {
 
   return (
     <ErrorBoundary>
-      <AppShell onOpenDiagnostics={() => navigate('/sistema')}>
-        {renderRouteContent()}
-      </AppShell>
+      <AppShell onOpenDiagnostics={() => navigate('/sistema')}>{renderRouteContent()}</AppShell>
     </ErrorBoundary>
   );
 }
