@@ -1,0 +1,25 @@
+{
+  "name": "@trident/delivery",
+  "version": "0.1.0",
+  "description": "TRIDENTPOS Delivery Hub & Aggregator Webhook Integration Engine",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src/",
+    "test": "node --test dist/index.test.js",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@trident/core": "*"
+  }
+}
