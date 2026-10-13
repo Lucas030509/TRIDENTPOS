@@ -156,6 +156,7 @@ export const ALLOWED_INTERNAL_DEPENDENCIES = {
 
   // Layer 4: Composition Roots (Explicit wiring allowlists)
   '@trident/pos-edge-runtime': ['@trident/core', '@trident/pos', '@trident/edge'],
+  '@trident/pos-renderer': ['@trident/core', '@trident/ui'],
   '@trident/cloud-server': [
     '@trident/core',
     '@trident/database',

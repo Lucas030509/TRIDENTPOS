@@ -1,0 +1,30 @@
+{
+  "name": "@trident/pos-renderer",
+  "version": "0.1.0",
+  "description": "TRIDENTPOS Native POS Renderer App Shell & Feature Modules",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "dependencies": {
+    "@trident/core": "*",
+    "@trident/ui": "*",
+    "@types/react": "19.0.0",
+    "@types/react-dom": "19.0.0",
+    "react": "19.0.0",
+    "react-dom": "19.0.0"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src/",
+    "test": "node --test dist/index.test.js",
+    "clean": "rm -rf dist"
+  }
+}
