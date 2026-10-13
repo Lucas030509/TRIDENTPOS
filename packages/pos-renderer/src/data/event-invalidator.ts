@@ -72,14 +72,17 @@ export class EventInvalidator {
       case 'TurnoCajaAbierto':
       case 'TurnoCajaCerrado':
       case 'MovimientoCajaRegistrado':
+      case 'ArqueoCiegoRegistrado':
       case 'CorteCajaGenerado':
         this.cacheHandler.invalidateQueries(['caja', 'shift']);
+        this.cacheHandler.invalidateQueries(['caja', 'cuentas']);
         break;
 
       // Payment & Settlement (WP-016C)
       case 'PagoRegistrado':
       case 'CuentaPagada':
         this.cacheHandler.invalidateQueries(['caja', 'shift']);
+        this.cacheHandler.invalidateQueries(['caja', 'cuentas']);
         this.cacheHandler.invalidateQueries(['salon', 'floor-plan']);
         if (event.entityId) {
           this.cacheHandler.invalidateQueries(['caja', 'payments', event.entityId]);

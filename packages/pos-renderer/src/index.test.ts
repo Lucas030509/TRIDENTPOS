@@ -153,11 +153,12 @@ describe('@trident/pos-renderer Architecture & Shell Harness', () => {
       };
 
       invalidator.handleDomainEvent(paidEvent);
-      assert.equal(invalidatedKeys.length, 4);
+      assert.equal(invalidatedKeys.length, 5);
       assert.deepEqual(invalidatedKeys[0], ['caja', 'shift']);
-      assert.deepEqual(invalidatedKeys[1], ['salon', 'floor-plan']);
-      assert.deepEqual(invalidatedKeys[2], ['caja', 'payments', 'cuenta-55']);
-      assert.deepEqual(invalidatedKeys[3], ['salon', 'cuenta', 'cuenta-55']);
+      assert.deepEqual(invalidatedKeys[1], ['caja', 'cuentas']);
+      assert.deepEqual(invalidatedKeys[2], ['salon', 'floor-plan']);
+      assert.deepEqual(invalidatedKeys[3], ['caja', 'payments', 'cuenta-55']);
+      assert.deepEqual(invalidatedKeys[4], ['salon', 'cuenta', 'cuenta-55']);
     });
 
     it('triggers full resync (invalidateAll) on connectivity.restored (ADR-005)', () => {
@@ -729,6 +730,408 @@ describe('@trident/pos-renderer Architecture & Shell Harness', () => {
             }
           }
         }
+      }
+    });
+  });
+
+  describe('WP-026D Terminal de Caja & Cobro Táctil Integration Suite', () => {
+    it('retrieves active cash shift status with zero-float balances and enrolled cashier details', async () => {
+      const bridge = createMockTridentBridge();
+      const shiftRes = await bridge.caja.getShiftStatus();
+
+      assert.ok(shiftRes.ok);
+      if (shiftRes.ok) {
+        assert.equal(shiftRes.data.status, 'ABIERTO');
+        assert.equal(shiftRes.data.cashierUserId, 'usr-1');
+        assert.equal(shiftRes.data.startingCash, '1000.0000');
+        assert.equal(shiftRes.data.currentBalance, '1000.0000');
+        assert.ok(shiftRes.data.turnoCajaId);
+      }
+    });
+
+    it('lists pending accounts to settle across Comedor and Mostrador channels', async () => {
+      const bridge = createMockTridentBridge();
+      const ctasRes = await bridge.caja.getCuentasPorCobrar();
+
+      assert.ok(ctasRes.ok);
+      if (ctasRes.ok) {
+        assert.ok(ctasRes.data.length >= 2);
+        const cuenta2 = ctasRes.data.find((c) => c.id === 'cuenta-2');
+        assert.ok(cuenta2);
+        assert.equal(cuenta2.accountType, 'COMEDOR');
+        assert.equal(cuenta2.status, 'ABIERTA');
+
+        const mostrador = ctasRes.data.find((c) => c.id === 'cuenta-mostrador-1');
+        assert.ok(mostrador);
+        assert.equal(mostrador.accountType, 'MOSTRADOR');
+        assert.equal(mostrador.status, 'IMPRESA');
+        assert.match(mostrador.totalAmount, /^\d+\.\d{4}$/);
+      }
+    });
+
+    it('processes full cash tender with tip, exact change due calculation and settles account', async () => {
+      const bridge = createMockTridentBridge();
+      const emittedEvents: DomainEvent[] = [];
+      const unsub = bridge.events.subscribe((e) => emittedEvents.push(e));
+
+      // Settle cuenta-mostrador-1 (Total: 278.4000)
+      // Customer gives $500.0000 bill and adds $24.0000 tip
+      const tenderRes = await bridge.caja.submitTender({
+        cuentaId: 'cuenta-mostrador-1',
+        turnoCajaId: 'turno-1',
+        operatorUserId: 'usr-1',
+        operatorPin: '1234',
+        paymentMethod: 'EFECTIVO',
+        amount: '278.4000',
+        tipAmount: '24.0000',
+        cashGiven: '500.0000',
+        clientOpId: crypto.randomUUID(),
+      });
+
+      assert.ok(tenderRes.ok);
+      if (tenderRes.ok) {
+        assert.equal(tenderRes.data.accountSettled, true);
+        assert.equal(tenderRes.data.accountStatus, 'CERRADA_PAGADA');
+        assert.equal(tenderRes.data.amount, '278.4000');
+        assert.equal(tenderRes.data.tipAmount, '24.0000');
+        assert.equal(tenderRes.data.remainingBalance, '0.0000');
+        // Change due: 500.0000 - 278.4000 = 221.6000 (note tip can be given from cash given or separate)
+        assert.equal(tenderRes.data.changeDue, '221.6000');
+      }
+
+      // Verify cash balance increased in drawer by the tender amount
+      const shiftRes = await bridge.caja.getShiftStatus();
+      assert.ok(shiftRes.ok);
+      if (shiftRes.ok) {
+        assert.equal(shiftRes.data.currentBalance, '1278.4000');
+      }
+
+      // Verify CuentaPagada and PagoRegistrado canonical events were broadcast
+      const cuentaPagadaEvent = emittedEvents.find((e) => e.eventType === 'CuentaPagada');
+      assert.ok(cuentaPagadaEvent, 'CuentaPagada must be broadcast on settlement');
+      assert.equal(cuentaPagadaEvent.entityId, 'cuenta-mostrador-1');
+
+      const pagoEvent = emittedEvents.find((e) => e.eventType === 'PagoRegistrado');
+      assert.ok(pagoEvent, 'PagoRegistrado must be broadcast on tender');
+
+      unsub();
+    });
+
+    it('processes card payment with reference auth code, closing account and releasing dining table', async () => {
+      const bridge = createMockTridentBridge();
+
+      // Settle cuenta-3 (table 3, Total: 968.6000) with card
+      const tenderRes = await bridge.caja.submitTender({
+        cuentaId: 'cuenta-3',
+        turnoCajaId: 'turno-1',
+        operatorUserId: 'usr-1',
+        operatorPin: '1234',
+        paymentMethod: 'TARJETA',
+        amount: '968.6000',
+        tipAmount: '0.0000',
+        referenceAuthCode: 'AUTH-VISA-9941',
+        clientOpId: crypto.randomUUID(),
+      });
+
+      assert.ok(tenderRes.ok);
+      if (tenderRes.ok) {
+        assert.equal(tenderRes.data.accountSettled, true);
+        assert.equal(tenderRes.data.paymentMethod, 'TARJETA');
+        assert.equal(tenderRes.data.referenceAuthCode, 'AUTH-VISA-9941');
+        assert.equal(tenderRes.data.remainingBalance, '0.0000');
+      }
+
+      // Check account payments summary
+      const summaryRes = await bridge.caja.getAccountPayments('cuenta-3');
+      assert.ok(summaryRes.ok);
+      if (summaryRes.ok) {
+        assert.equal(summaryRes.data.isSettled, true);
+        assert.equal(summaryRes.data.totalPaid, '968.6000');
+        assert.equal(summaryRes.data.remainingBalance, '0.0000');
+        assert.equal(summaryRes.data.payments.length, 1);
+      }
+
+      // Verify table 3 is freed in salon
+      const salonRes = await bridge.salon.getSalonReadModel();
+      assert.ok(salonRes.ok);
+      if (salonRes.ok) {
+        const mesa3 = salonRes.data.rooms.flatMap((r) => r.tables).find((t) => t.id === 'mesa-3');
+        assert.ok(mesa3);
+        assert.equal(mesa3.status, 'DISPONIBLE');
+      }
+    });
+
+    it('handles partial / multi-tender split payment with remaining balance (WP-016C)', async () => {
+      const bridge = createMockTridentBridge();
+
+      // cuenta-2 total is 638.0000
+      // 1st Tender: Pay 300.0000 with Card
+      const part1 = await bridge.caja.submitTender({
+        cuentaId: 'cuenta-2',
+        turnoCajaId: 'turno-1',
+        operatorUserId: 'usr-1',
+        operatorPin: '1234',
+        paymentMethod: 'TARJETA',
+        amount: '300.0000',
+        tipAmount: '0.0000',
+        referenceAuthCode: 'AUTH-MASTERCARD-1122',
+        clientOpId: crypto.randomUUID(),
+      });
+
+      assert.ok(part1.ok);
+      if (part1.ok) {
+        assert.equal(part1.data.accountSettled, false);
+        assert.equal(part1.data.remainingBalance, '338.0000');
+        assert.equal(part1.data.accountStatus, 'ABIERTA');
+      }
+
+      // Verify account payments summary mid-split
+      const midSummary = await bridge.caja.getAccountPayments('cuenta-2');
+      assert.ok(midSummary.ok);
+      if (midSummary.ok) {
+        assert.equal(midSummary.data.isSettled, false);
+        assert.equal(midSummary.data.totalPaid, '300.0000');
+        assert.equal(midSummary.data.remainingBalance, '338.0000');
+        assert.equal(midSummary.data.payments.length, 1);
+      }
+
+      // 2nd Tender: Pay remaining 338.0000 in Cash
+      const part2 = await bridge.caja.submitTender({
+        cuentaId: 'cuenta-2',
+        turnoCajaId: 'turno-1',
+        operatorUserId: 'usr-1',
+        operatorPin: '1234',
+        paymentMethod: 'EFECTIVO',
+        amount: '338.0000',
+        tipAmount: '0.0000',
+        cashGiven: '400.0000',
+        clientOpId: crypto.randomUUID(),
+      });
+
+      assert.ok(part2.ok);
+      if (part2.ok) {
+        assert.equal(part2.data.accountSettled, true);
+        assert.equal(part2.data.remainingBalance, '0.0000');
+        assert.equal(part2.data.changeDue, '62.0000');
+        assert.equal(part2.data.accountStatus, 'CERRADA_PAGADA');
+      }
+
+      // Final summary check
+      const finalSummary = await bridge.caja.getAccountPayments('cuenta-2');
+      assert.ok(finalSummary.ok);
+      if (finalSummary.ok) {
+        assert.equal(finalSummary.data.isSettled, true);
+        assert.equal(finalSummary.data.totalPaid, '638.0000');
+        assert.equal(finalSummary.data.remainingBalance, '0.0000');
+        assert.equal(finalSummary.data.payments.length, 2);
+      }
+    });
+
+    it('registers cash movements (ingreso and egreso) with audit trail and balance validation', async () => {
+      const bridge = createMockTridentBridge();
+      const emittedEvents: DomainEvent[] = [];
+      const unsub = bridge.events.subscribe((e) => emittedEvents.push(e));
+
+      // Register cash ingress: +$200.0000
+      const inRes = await bridge.caja.registerMovement({
+        turnoCajaId: 'turno-1',
+        operatorUserId: 'usr-1',
+        movementType: 'INGRESO',
+        amount: '200.0000',
+        reason: 'Dotación de cambio / morralla matutina',
+        operatorPin: '1234',
+        clientOpId: crypto.randomUUID(),
+      });
+
+      assert.ok(inRes.ok);
+      if (inRes.ok) {
+        assert.equal(inRes.data.movementType, 'INGRESO');
+        assert.equal(inRes.data.amount, '200.0000');
+      }
+
+      // Check balance updated: 1000 + 200 = 1200
+      const shiftAfterIn = await bridge.caja.getShiftStatus();
+      assert.ok(shiftAfterIn.ok);
+      if (shiftAfterIn.ok) {
+        assert.equal(shiftAfterIn.data.currentBalance, '1200.0000');
+      }
+
+      // Register cash egress: -$50.0000
+      const outRes = await bridge.caja.registerMovement({
+        turnoCajaId: 'turno-1',
+        operatorUserId: 'usr-1',
+        movementType: 'EGRESO',
+        amount: '50.0000',
+        reason: 'Compra de hielo de emergencia en oxxo',
+        operatorPin: '1234',
+        clientOpId: crypto.randomUUID(),
+      });
+
+      assert.ok(outRes.ok);
+      if (outRes.ok) {
+        assert.equal(outRes.data.movementType, 'EGRESO');
+        assert.equal(outRes.data.amount, '50.0000');
+      }
+
+      const shiftAfterOut = await bridge.caja.getShiftStatus();
+      assert.ok(shiftAfterOut.ok);
+      if (shiftAfterOut.ok) {
+        assert.equal(shiftAfterOut.data.currentBalance, '1150.0000');
+      }
+
+      // Attempting egress exceeding balance must fail
+      const excessiveOut = await bridge.caja.registerMovement({
+        turnoCajaId: 'turno-1',
+        operatorUserId: 'usr-1',
+        movementType: 'EGRESO',
+        amount: '9999.0000',
+        reason: 'Retiro no autorizado',
+        operatorPin: '1234',
+        clientOpId: crypto.randomUUID(),
+      });
+      assert.equal(excessiveOut.ok, false);
+
+      unsub();
+    });
+
+    it('executes strict blind cash count (Arqueo Ciego DEC-017) without prior total disclosure, calculates variance and generates Corte Z', async () => {
+      const bridge = createMockTridentBridge();
+      const emittedEvents: DomainEvent[] = [];
+      const unsub = bridge.events.subscribe((e) => emittedEvents.push(e));
+
+      // Balance is 1000.0000. Cashier counts 1020.0000 blind
+      const arqueoRes = await bridge.caja.realizarArqueoCiego({
+        shiftId: 'turno-1',
+        performedByUserId: 'usr-1',
+        performedByPin: '1234',
+        declaredCash: '1020.0000',
+        expectedVersion: 1,
+        clientOpId: crypto.randomUUID(),
+      });
+
+      assert.ok(arqueoRes.ok);
+      if (arqueoRes.ok) {
+        assert.equal(arqueoRes.data.arqueo.declaredCash, '1020.0000');
+        assert.equal(arqueoRes.data.arqueo.calculatedCash, '1000.0000');
+        // Surplus: 1020.0000 - 1000.0000 = +20.0000
+        assert.equal(arqueoRes.data.arqueo.difference, '20.0000');
+        assert.equal(arqueoRes.data.turno.status, 'CERRADO');
+      }
+
+      const arqEvent = emittedEvents.find((e) => e.eventType === 'ArqueoCiegoRegistrado');
+      assert.ok(arqEvent);
+
+      // Final closure via Corte Z
+      const corteZRes = await bridge.caja.generarCorteZ({
+        shiftId: 'turno-1',
+        closedByUserId: 'usr-1',
+        closedByPin: '1234',
+        expectedVersion: 2,
+        clientOpId: crypto.randomUUID(),
+      });
+
+      assert.ok(corteZRes.ok);
+      if (corteZRes.ok) {
+        assert.equal(corteZRes.data.turno.status, 'CERRADO');
+        assert.equal(corteZRes.data.corte.tipoCorte, 'CORTE_Z');
+      }
+
+      const corteZEvent = emittedEvents.find((e) => e.eventType === 'TurnoCajaCerrado');
+      assert.ok(corteZEvent);
+
+      unsub();
+    });
+
+    it('generates intermediate Corte X without closing active cash shift', async () => {
+      const bridge = createMockTridentBridge();
+
+      const corteXRes = await bridge.caja.generarCorteX({
+        shiftId: 'turno-1',
+        operatorUserId: 'usr-1',
+        operatorPin: '1234',
+        clientOpId: crypto.randomUUID(),
+      });
+
+      assert.ok(corteXRes.ok);
+      if (corteXRes.ok) {
+        assert.equal(corteXRes.data.tipoCorte, 'CORTE_X');
+        assert.equal(corteXRes.data.turnoCajaId, 'turno-1');
+        assert.match(corteXRes.data.totalCalculado, /^\d+\.\d{4}$/);
+      }
+
+      // Verify shift remains open
+      const shiftRes = await bridge.caja.getShiftStatus();
+      assert.ok(shiftRes.ok);
+      if (shiftRes.ok) {
+        assert.equal(shiftRes.data.status, 'ABIERTO');
+      }
+    });
+
+    it('fails closed and rejects payments when cash shift is closed', async () => {
+      const bridge = createMockTridentBridge();
+
+      // Close shift first
+      await bridge.caja.realizarArqueoCiego({
+        shiftId: 'turno-1',
+        performedByUserId: 'usr-1',
+        declaredCash: '1000.0000',
+        expectedVersion: 1,
+        clientOpId: crypto.randomUUID(),
+      });
+
+      // Attempt to submit tender with closed shift
+      const tenderRes = await bridge.caja.submitTender({
+        cuentaId: 'cuenta-2',
+        turnoCajaId: 'turno-1',
+        operatorUserId: 'usr-1',
+        operatorPin: '1234',
+        paymentMethod: 'EFECTIVO',
+        amount: '100.0000',
+        tipAmount: '0.0000',
+        clientOpId: crypto.randomUUID(),
+      });
+
+      assert.equal(tenderRes.ok, false);
+      if (!tenderRes.ok) {
+        assert.equal(tenderRes.error.code, 'VALIDATION');
+        assert.match(tenderRes.error.message, /cerrado/i);
+      }
+    });
+
+    it('opens a new cash shift after closure with fresh initial cash float', async () => {
+      const bridge = createMockTridentBridge();
+
+      // Close current shift
+      await bridge.caja.realizarArqueoCiego({
+        shiftId: 'turno-1',
+        performedByUserId: 'usr-1',
+        declaredCash: '1000.0000',
+        expectedVersion: 1,
+        clientOpId: crypto.randomUUID(),
+      });
+
+      // Open new shift with $1500 float
+      const openRes = await bridge.caja.openShift({
+        startingCash: '1500.0000',
+        cashierUserId: 'usr-2',
+        cashierPin: '1234',
+        clientOpId: crypto.randomUUID(),
+      });
+
+      assert.ok(openRes.ok);
+      if (openRes.ok) {
+        assert.equal(openRes.data.status, 'ABIERTO');
+        assert.equal(openRes.data.startingCash, '1500.0000');
+        assert.equal(openRes.data.currentBalance, '1500.0000');
+        assert.equal(openRes.data.cashierUserId, 'usr-2');
+      }
+
+      // Verify active shift is now the new one
+      const currentShift = await bridge.caja.getShiftStatus();
+      assert.ok(currentShift.ok);
+      if (currentShift.ok) {
+        assert.equal(currentShift.data.status, 'ABIERTO');
+        assert.equal(currentShift.data.currentBalance, '1500.0000');
       }
     });
   });

@@ -17,6 +17,7 @@ import type {
   SubmitTenderRequestDTO,
   TenderResultDTO,
   AccountPaymentsSummaryDTO,
+  PaymentMethod,
 } from '@trident/core';
 
 export type {
@@ -32,6 +33,7 @@ export type {
   SubmitTenderRequestDTO,
   TenderResultDTO,
   AccountPaymentsSummaryDTO,
+  PaymentMethod,
 };
 
 export type ErrorCode =
@@ -144,6 +146,92 @@ export interface CashShiftStatusDTO {
   readonly cashierUserId: string | null;
   readonly startingCash: string;
   readonly currentBalance: string;
+  readonly version?: number;
+}
+
+export interface OpenShiftDTO {
+  readonly startingCash: string;
+  readonly cashierUserId: string;
+  readonly cashierPin: string;
+  readonly clientOpId: string;
+}
+
+export interface MovimientoCajaDTO {
+  readonly id: string;
+  readonly turnoCajaId: string;
+  readonly operatorUserId: string;
+  readonly movementType: 'INGRESO' | 'EGRESO';
+  readonly amount: string; // Scale 4
+  readonly reason: string;
+  readonly createdAt: string;
+}
+
+export interface RegisterMovementDTO {
+  readonly turnoCajaId: string;
+  readonly operatorUserId: string;
+  readonly movementType: 'INGRESO' | 'EGRESO';
+  readonly amount: string; // Scale 4
+  readonly reason: string;
+  readonly operatorPin: string;
+  readonly clientOpId: string;
+}
+
+export interface ArqueoCiegoInputDTO {
+  readonly shiftId: string;
+  readonly performedByUserId: string;
+  readonly declaredCash: string; // Scale 4
+  readonly expectedVersion: number;
+  readonly performedByPin?: string;
+  readonly clientOpId: string;
+}
+
+export interface ArqueoCiegoResultDTO {
+  readonly turno: CashShiftStatusDTO;
+  readonly arqueo: {
+    readonly id: string;
+    readonly declaredCash: string; // Scale 4
+    readonly calculatedCash: string; // Scale 4
+    readonly difference: string; // Scale 4
+    readonly createdAt: string;
+  };
+}
+
+export interface CorteCajaDTO {
+  readonly id: string;
+  readonly turnoCajaId: string;
+  readonly tipoCorte: 'CORTE_X' | 'CORTE_Z';
+  readonly openingCashFloat: string; // Scale 4
+  readonly totalIngresos: string; // Scale 4
+  readonly totalEgresos: string; // Scale 4
+  readonly totalVentasEfectivo: string; // Scale 4
+  readonly totalVentasTarjeta: string; // Scale 4
+  readonly totalVentasTransferencia: string; // Scale 4
+  readonly totalCalculado: string; // Scale 4
+  readonly totalDeclarado: string | null; // Scale 4
+  readonly diferencia: string | null; // Scale 4
+  readonly totalPropinas: string; // Scale 4
+  readonly ticketsCount: number;
+  readonly generatedAt: string;
+}
+
+export interface GenerarCorteInputDTO {
+  readonly shiftId: string;
+  readonly operatorUserId: string;
+  readonly operatorPin: string;
+  readonly clientOpId: string;
+}
+
+export interface GenerarCorteZInputDTO {
+  readonly shiftId: string;
+  readonly closedByUserId: string;
+  readonly expectedVersion: number;
+  readonly closedByPin?: string;
+  readonly clientOpId: string;
+}
+
+export interface CorteZResultDTO {
+  readonly turno: CashShiftStatusDTO;
+  readonly corte: CorteCajaDTO;
 }
 
 // ==========================================
@@ -343,6 +431,18 @@ export interface TridentApi {
   };
   readonly caja: {
     readonly getShiftStatus: () => Promise<BridgeResult<CashShiftStatusDTO>>;
+    readonly getCuentasPorCobrar: () => Promise<BridgeResult<readonly CuentaDetalleDTO[]>>;
+    readonly openShift: (params: OpenShiftDTO) => Promise<BridgeResult<CashShiftStatusDTO>>;
+    readonly registerMovement: (
+      params: RegisterMovementDTO,
+    ) => Promise<BridgeResult<MovimientoCajaDTO>>;
+    readonly realizarArqueoCiego: (
+      params: ArqueoCiegoInputDTO,
+    ) => Promise<BridgeResult<ArqueoCiegoResultDTO>>;
+    readonly generarCorteX: (params: GenerarCorteInputDTO) => Promise<BridgeResult<CorteCajaDTO>>;
+    readonly generarCorteZ: (
+      params: GenerarCorteZInputDTO,
+    ) => Promise<BridgeResult<CorteZResultDTO>>;
     readonly submitTender: (
       request: SubmitTenderRequestDTO,
     ) => Promise<BridgeResult<TenderResultDTO>>;
@@ -881,6 +981,82 @@ export function createMockTridentBridge(initialSession: SessionView | null = nul
       ],
     },
   ];
+
+  // Pre-seed cuenta de mostrador
+  mockCuentas.set('cuenta-mostrador-1', {
+    id: 'cuenta-mostrador-1',
+    folioNumber: 1044,
+    mesaId: null,
+    tableNumber: 'Mostrador',
+    roomName: 'Para Llevar',
+    accountType: 'MOSTRADOR',
+    status: 'IMPRESA',
+    subtotal: '240.0000',
+    taxTotal: '38.4000',
+    discountsTotal: '0.0000',
+    tipsTotal: '0.0000',
+    totalAmount: '278.4000',
+    guestCount: 1,
+    openedByUserId: 'usr-1',
+    currentWaiterUserId: 'usr-1',
+    openedAt: new Date(Date.now() - 15 * 60 * 1000).toISOString(),
+    printedAt: new Date(Date.now() - 2 * 60 * 1000).toISOString(),
+    version: 1,
+    updatedAt: new Date().toISOString(),
+    items: [
+      {
+        id: 'item-m-1',
+        cuentaId: 'cuenta-mostrador-1',
+        productId: 'prod-3',
+        productNameSnapshot: 'Hamburguesa Monumental TRIDENT',
+        unitPriceApplied: '240.0000',
+        quantity: '1.0000',
+        taxRateApplied: '0.1600',
+        taxAmountApplied: '38.4000',
+        discountAmountApplied: '0.0000',
+        subtotal: '240.0000',
+        total: '278.4000',
+        status: 'PREPARADO',
+        createdAt: new Date(Date.now() - 15 * 60 * 1000).toISOString(),
+        modifiers: [],
+      },
+    ],
+  });
+
+  // Cash / Shift state for mock
+  let mockShiftState: CashShiftStatusDTO = {
+    turnoCajaId: 'turno-1',
+    status: 'ABIERTO',
+    openedAt: new Date(Date.now() - 4 * 3600 * 1000).toISOString(),
+    cashierUserId: 'usr-1',
+    startingCash: '1000.0000',
+    currentBalance: '1000.0000',
+    version: 1,
+  };
+
+  const mockMovimientos: MovimientoCajaDTO[] = [];
+  const mockAccountPayments = new Map<string, TenderResultDTO[]>();
+  let ventasEfectivoTotal = 0n;
+  let ventasTarjetaTotal = 0n;
+  let ventasTransferenciaTotal = 0n;
+  let totalPropinas = 0n;
+  let ticketsCount = 0;
+
+  function toScale4BigInt(val: string): bigint {
+    const parts = val.split('.');
+    const intPart = BigInt(parts[0] || '0');
+    const fracPart = (parts[1] || '').padEnd(4, '0').slice(0, 4);
+    const frac = BigInt(fracPart);
+    return intPart < 0n ? -(intPart * 10000n - frac) : intPart * 10000n + frac;
+  }
+
+  function fromScale4BigInt(val: bigint): string {
+    const isNegative = val < 0n;
+    const absVal = isNegative ? -val : val;
+    const intPart = absVal / 10000n;
+    const fracPart = (absVal % 10000n).toString().padStart(4, '0');
+    return `${isNegative ? '-' : ''}${intPart.toString()}.${fracPart}`;
+  }
 
   return {
     session: {
@@ -1621,53 +1797,430 @@ export function createMockTridentBridge(initialSession: SessionView | null = nul
     },
     caja: {
       async getShiftStatus() {
+        return { ok: true, data: mockShiftState };
+      },
+
+      async getCuentasPorCobrar() {
+        const result: CuentaDetalleDTO[] = [];
+        for (const cuenta of mockCuentas.values()) {
+          if (cuenta.status === 'ABIERTA' || cuenta.status === 'IMPRESA') {
+            result.push(cuenta);
+          }
+        }
+        return { ok: true, data: result };
+      },
+
+      async openShift(params) {
+        if (mockShiftState.status === 'ABIERTO') {
+          return {
+            ok: false,
+            error: {
+              code: 'VALIDATION',
+              message: 'Ya existe un turno de caja abierto en esta terminal.',
+              retryable: false,
+            },
+          };
+        }
+
+        mockShiftState = {
+          turnoCajaId: 'turno-' + Date.now(),
+          status: 'ABIERTO',
+          openedAt: new Date().toISOString(),
+          cashierUserId: params.cashierUserId,
+          startingCash: params.startingCash,
+          currentBalance: params.startingCash,
+          version: 1,
+        };
+
+        broadcastEvent({
+          eventType: 'TurnoCajaAbierto',
+          eventContractVersion: 1,
+          entityId: mockShiftState.turnoCajaId!,
+          payload: { shift: mockShiftState },
+          timestamp: new Date().toISOString(),
+        });
+
+        return { ok: true, data: mockShiftState };
+      },
+
+      async registerMovement(params) {
+        if (mockShiftState.status !== 'ABIERTO') {
+          return {
+            ok: false,
+            error: {
+              code: 'VALIDATION',
+              message: 'No es posible registrar movimientos sin un turno de caja abierto.',
+              retryable: false,
+            },
+          };
+        }
+
+        const curBal = toScale4BigInt(mockShiftState.currentBalance);
+        const movAmt = toScale4BigInt(params.amount);
+
+        if (params.movementType === 'EGRESO' && movAmt > curBal) {
+          return {
+            ok: false,
+            error: {
+              code: 'VALIDATION',
+              message: 'Saldo insuficiente en caja para realizar el retiro de efectivo solicitado.',
+              retryable: false,
+            },
+          };
+        }
+
+        const nextBal = params.movementType === 'INGRESO' ? curBal + movAmt : curBal - movAmt;
+
+        mockShiftState = {
+          ...mockShiftState,
+          currentBalance: fromScale4BigInt(nextBal),
+          version: (mockShiftState.version ?? 1) + 1,
+        };
+
+        const mov: MovimientoCajaDTO = {
+          id: 'mov-' + Date.now(),
+          turnoCajaId: mockShiftState.turnoCajaId!,
+          operatorUserId: params.operatorUserId,
+          movementType: params.movementType,
+          amount: params.amount,
+          reason: params.reason,
+          createdAt: new Date().toISOString(),
+        };
+
+        mockMovimientos.push(mov);
+
+        broadcastEvent({
+          eventType: 'MovimientoCajaRegistrado',
+          eventContractVersion: 1,
+          entityId: mov.id,
+          payload: { movimiento: mov, newBalance: mockShiftState.currentBalance },
+          timestamp: new Date().toISOString(),
+        });
+
+        return { ok: true, data: mov };
+      },
+
+      async realizarArqueoCiego(params) {
+        if (mockShiftState.status !== 'ABIERTO') {
+          return {
+            ok: false,
+            error: {
+              code: 'VALIDATION',
+              message: 'El turno no se encuentra abierto para realizar arqueo.',
+              retryable: false,
+            },
+          };
+        }
+
+        const declared = toScale4BigInt(params.declaredCash);
+        const calculated = toScale4BigInt(mockShiftState.currentBalance);
+        const difference = declared - calculated;
+
+        const arqueoRecord = {
+          id: 'arq-' + Date.now(),
+          declaredCash: params.declaredCash,
+          calculatedCash: mockShiftState.currentBalance,
+          difference: fromScale4BigInt(difference),
+          createdAt: new Date().toISOString(),
+        };
+
+        mockShiftState = {
+          ...mockShiftState,
+          status: 'CERRADO',
+          version: (mockShiftState.version ?? 1) + 1,
+        };
+
+        broadcastEvent({
+          eventType: 'ArqueoCiegoRegistrado',
+          eventContractVersion: 1,
+          entityId: arqueoRecord.id,
+          payload: { arqueo: arqueoRecord, shift: mockShiftState },
+          timestamp: new Date().toISOString(),
+        });
+
         return {
           ok: true,
           data: {
-            turnoCajaId: 'turno-1',
-            status: 'ABIERTO',
-            openedAt: new Date().toISOString(),
-            cashierUserId: 'usr-1',
-            startingCash: '1000.0000',
-            currentBalance: '1000.0000',
+            turno: mockShiftState,
+            arqueo: arqueoRecord,
           },
         };
       },
+
+      async generarCorteX(_params) {
+        const turnoId = mockShiftState.turnoCajaId;
+        if (!turnoId) {
+          return {
+            ok: false,
+            error: {
+              code: 'NOT_FOUND',
+              message: 'No hay turno activo para generar Corte X',
+              retryable: false,
+            },
+          };
+        }
+
+        const ingresosTot = mockMovimientos
+          .filter((m) => m.movementType === 'INGRESO')
+          .reduce((acc, m) => acc + toScale4BigInt(m.amount), 0n);
+        const egresosTot = mockMovimientos
+          .filter((m) => m.movementType === 'EGRESO')
+          .reduce((acc, m) => acc + toScale4BigInt(m.amount), 0n);
+
+        const corte: CorteCajaDTO = {
+          id: 'corte-x-' + Date.now(),
+          turnoCajaId: turnoId,
+          tipoCorte: 'CORTE_X',
+          openingCashFloat: mockShiftState.startingCash,
+          totalIngresos: fromScale4BigInt(ingresosTot),
+          totalEgresos: fromScale4BigInt(egresosTot),
+          totalVentasEfectivo: fromScale4BigInt(ventasEfectivoTotal),
+          totalVentasTarjeta: fromScale4BigInt(ventasTarjetaTotal),
+          totalVentasTransferencia: fromScale4BigInt(ventasTransferenciaTotal),
+          totalCalculado: mockShiftState.currentBalance,
+          totalDeclarado: null,
+          diferencia: null,
+          totalPropinas: fromScale4BigInt(totalPropinas),
+          ticketsCount,
+          generatedAt: new Date().toISOString(),
+        };
+
+        broadcastEvent({
+          eventType: 'CorteCajaGenerado',
+          eventContractVersion: 1,
+          entityId: corte.id,
+          payload: { corte },
+          timestamp: new Date().toISOString(),
+        });
+
+        return { ok: true, data: corte };
+      },
+
+      async generarCorteZ(_params) {
+        const turnoId = mockShiftState.turnoCajaId;
+        if (!turnoId) {
+          return {
+            ok: false,
+            error: {
+              code: 'NOT_FOUND',
+              message: 'No hay turno activo para generar Corte Z',
+              retryable: false,
+            },
+          };
+        }
+
+        const ingresosTot = mockMovimientos
+          .filter((m) => m.movementType === 'INGRESO')
+          .reduce((acc, m) => acc + toScale4BigInt(m.amount), 0n);
+        const egresosTot = mockMovimientos
+          .filter((m) => m.movementType === 'EGRESO')
+          .reduce((acc, m) => acc + toScale4BigInt(m.amount), 0n);
+
+        mockShiftState = {
+          ...mockShiftState,
+          status: 'CERRADO',
+          version: (mockShiftState.version ?? 1) + 1,
+        };
+
+        const corte: CorteCajaDTO = {
+          id: 'corte-z-' + Date.now(),
+          turnoCajaId: turnoId,
+          tipoCorte: 'CORTE_Z',
+          openingCashFloat: mockShiftState.startingCash,
+          totalIngresos: fromScale4BigInt(ingresosTot),
+          totalEgresos: fromScale4BigInt(egresosTot),
+          totalVentasEfectivo: fromScale4BigInt(ventasEfectivoTotal),
+          totalVentasTarjeta: fromScale4BigInt(ventasTarjetaTotal),
+          totalVentasTransferencia: fromScale4BigInt(ventasTransferenciaTotal),
+          totalCalculado: mockShiftState.currentBalance,
+          totalDeclarado: mockShiftState.currentBalance,
+          diferencia: '0.0000',
+          totalPropinas: fromScale4BigInt(totalPropinas),
+          ticketsCount,
+          generatedAt: new Date().toISOString(),
+        };
+
+        broadcastEvent({
+          eventType: 'CorteCajaGenerado',
+          eventContractVersion: 1,
+          entityId: corte.id,
+          payload: { corte },
+          timestamp: new Date().toISOString(),
+        });
+
+        broadcastEvent({
+          eventType: 'TurnoCajaCerrado',
+          eventContractVersion: 1,
+          entityId: turnoId,
+          payload: { shift: mockShiftState, corte },
+          timestamp: new Date().toISOString(),
+        });
+
+        return { ok: true, data: { turno: mockShiftState, corte } };
+      },
+
       async submitTender(req) {
-        return {
-          ok: true,
-          data: {
-            id: 'pago-1',
-            cuentaId: req.cuentaId,
-            turnoCajaId: req.turnoCajaId,
-            operatorUserId: req.operatorUserId,
-            paymentMethod: req.paymentMethod,
-            amount: req.amount,
-            tipAmount: req.tipAmount ?? '0.0000',
-            cashGiven: req.cashGiven ?? null,
-            changeDue: '0.0000',
-            referenceAuthCode: req.referenceAuthCode ?? null,
-            clientOpId: req.clientOpId,
-            remainingBalance: '0.0000',
-            accountSettled: true,
-            accountStatus: 'CERRADA_PAGADA',
-            closedAt: new Date().toISOString(),
-            createdAt: new Date().toISOString(),
-          },
+        if (mockShiftState.status !== 'ABIERTO') {
+          return {
+            ok: false,
+            error: {
+              code: 'VALIDATION',
+              message: 'No es posible cobrar cuentas con el turno de caja cerrado.',
+              retryable: false,
+            },
+          };
+        }
+
+        const cuenta = mockCuentas.get(req.cuentaId);
+        if (!cuenta) {
+          return {
+            ok: false,
+            error: {
+              code: 'NOT_FOUND',
+              message: `Cuenta ${req.cuentaId} no encontrada`,
+              retryable: false,
+            },
+          };
+        }
+
+        const prevPayments = mockAccountPayments.get(req.cuentaId) ?? [];
+        const prevPaid = prevPayments.reduce((acc, p) => acc + toScale4BigInt(p.amount), 0n);
+        const ctaTotal = toScale4BigInt(cuenta.totalAmount);
+        const tenderAmt = toScale4BigInt(req.amount);
+        const tipAmt = toScale4BigInt(req.tipAmount ?? '0.0000');
+        const remaining = ctaTotal - prevPaid - tenderAmt;
+        const isSettled = remaining <= 0n;
+
+        if (req.paymentMethod === 'EFECTIVO') {
+          const curCash = toScale4BigInt(mockShiftState.currentBalance);
+          mockShiftState = {
+            ...mockShiftState,
+            currentBalance: fromScale4BigInt(curCash + tenderAmt),
+            version: (mockShiftState.version ?? 1) + 1,
+          };
+          ventasEfectivoTotal += tenderAmt;
+        } else if (req.paymentMethod === 'TARJETA') {
+          ventasTarjetaTotal += tenderAmt;
+        } else if (req.paymentMethod === 'TRANSFERENCIA') {
+          ventasTransferenciaTotal += tenderAmt;
+        }
+
+        totalPropinas += tipAmt;
+        ticketsCount += 1;
+
+        let changeDue = '0.0000';
+        if (req.paymentMethod === 'EFECTIVO' && req.cashGiven) {
+          const given = toScale4BigInt(req.cashGiven);
+          if (given > tenderAmt) {
+            changeDue = fromScale4BigInt(given - tenderAmt);
+          }
+        }
+
+        const tenderRes: TenderResultDTO = {
+          id: 'tender-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6),
+          cuentaId: req.cuentaId,
+          turnoCajaId: req.turnoCajaId,
+          operatorUserId: req.operatorUserId,
+          paymentMethod: req.paymentMethod,
+          amount: req.amount,
+          tipAmount: req.tipAmount ?? '0.0000',
+          cashGiven: req.cashGiven ?? null,
+          changeDue,
+          referenceAuthCode: req.referenceAuthCode ?? null,
+          clientOpId: req.clientOpId,
+          remainingBalance: fromScale4BigInt(remaining < 0n ? 0n : remaining),
+          accountSettled: isSettled,
+          accountStatus: isSettled ? 'CERRADA_PAGADA' : 'ABIERTA',
+          closedAt: isSettled ? new Date().toISOString() : null,
+          createdAt: new Date().toISOString(),
         };
+
+        mockAccountPayments.set(req.cuentaId, [...prevPayments, tenderRes]);
+
+        if (isSettled) {
+          const updatedCuenta: CuentaDetalleDTO = {
+            ...cuenta,
+            status: 'PAGADA',
+            tipsTotal: fromScale4BigInt(toScale4BigInt(cuenta.tipsTotal) + tipAmt),
+            closedAt: new Date().toISOString(),
+            version: cuenta.version + 1,
+            updatedAt: new Date().toISOString(),
+          };
+          mockCuentas.set(req.cuentaId, updatedCuenta);
+
+          if (cuenta.mesaId) {
+            roomsState = roomsState.map((r) => ({
+              ...r,
+              tables: r.tables.map((t) =>
+                t.id === cuenta.mesaId
+                  ? {
+                      ...t,
+                      status: 'DISPONIBLE' as const,
+                      currentAccountId: null,
+                      subtotal: '0.0000',
+                      totalAmount: '0.0000',
+                    }
+                  : t,
+              ),
+            }));
+          }
+
+          broadcastEvent({
+            eventType: 'CuentaPagada',
+            eventContractVersion: 1,
+            entityId: req.cuentaId,
+            payload: {
+              organizacionId: 'org-test',
+              sucursalId: 'suc-test',
+              estacionId: 'st-01',
+              cuentaId: req.cuentaId,
+              folioVenta: cuenta.folioNumber,
+              montos: {
+                subtotal: cuenta.subtotal,
+                taxTotal: cuenta.taxTotal,
+                discountsTotal: cuenta.discountsTotal,
+                total: cuenta.totalAmount,
+              },
+              impuestos: [{ rate: '0.1600', amount: cuenta.taxTotal }],
+            },
+            timestamp: new Date().toISOString(),
+          });
+        }
+
+        broadcastEvent({
+          eventType: 'PagoRegistrado',
+          eventContractVersion: 1,
+          entityId: req.cuentaId,
+          payload: tenderRes,
+          timestamp: new Date().toISOString(),
+        });
+
+        return { ok: true, data: tenderRes };
       },
+
       async getAccountPayments(cuentaId) {
+        const payments = mockAccountPayments.get(cuentaId) ?? [];
+        const cuenta = mockCuentas.get(cuentaId);
+        const totalAmount = cuenta?.totalAmount ?? '0.0000';
+        const totalPaid = fromScale4BigInt(
+          payments.reduce((acc, p) => acc + toScale4BigInt(p.amount), 0n),
+        );
+        const totTips = fromScale4BigInt(
+          payments.reduce((acc, p) => acc + toScale4BigInt(p.tipAmount), 0n),
+        );
+        const remaining = fromScale4BigInt(toScale4BigInt(totalAmount) - toScale4BigInt(totalPaid));
+
         return {
           ok: true,
           data: {
             cuentaId,
-            totalAmount: '0.0000',
-            totalPaid: '0.0000',
-            totalTips: '0.0000',
-            remainingBalance: '0.0000',
-            isSettled: true,
-            accountStatus: 'ABIERTA',
-            payments: [],
+            totalAmount,
+            totalPaid,
+            totalTips: totTips,
+            remainingBalance: remaining,
+            isSettled: toScale4BigInt(remaining) <= 0n,
+            accountStatus: cuenta?.status ?? 'ABIERTA',
+            payments,
           },
         };
       },
