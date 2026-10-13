@@ -28,6 +28,9 @@ interface MesaRow {
   table_number: string;
   status: string;
   current_account_id: string | null;
+  pos_x?: number | null;
+  pos_y?: number | null;
+  capacity?: number | null;
   version: number;
   updated_at: string;
 }
@@ -45,8 +48,13 @@ interface CuentaRow {
   tips_total: number | bigint;
   total_amount: number | bigint;
   opened_by_user_id: string;
+  current_waiter_user_id?: string | null;
+  guest_count?: number | null;
   opened_at: string;
+  printed_at?: string | null;
   closed_at: string | null;
+  parent_cuenta_id?: string | null;
+  split_sequence?: number | null;
   version: number;
   updated_at: string;
 }
@@ -64,6 +72,10 @@ interface CuentaItemRow {
   subtotal: number | bigint;
   total: number | bigint;
   status: string;
+  cancellation_reason?: string | null;
+  cancelled_by_user_id?: string | null;
+  cancelled_at?: string | null;
+  requires_waste_record?: number | null;
   created_at: string;
 }
 
@@ -85,6 +97,30 @@ export class SqliteDiningRoomRepository implements DiningRoomRepositoryPort, Acc
 
   public bootstrapSchema(): void {
     this.#db.executeSchema(POS_EDGE_SQLITE_SCHEMA);
+
+    // Additive non-breaking column migrations for existing tables
+    const migrations = [
+      'ALTER TABLE mesas ADD COLUMN pos_x INTEGER NULL;',
+      'ALTER TABLE mesas ADD COLUMN pos_y INTEGER NULL;',
+      'ALTER TABLE mesas ADD COLUMN capacity INTEGER NULL;',
+      'ALTER TABLE cuentas ADD COLUMN current_waiter_user_id TEXT NULL;',
+      'ALTER TABLE cuentas ADD COLUMN guest_count INTEGER NULL DEFAULT 1;',
+      'ALTER TABLE cuentas ADD COLUMN printed_at TEXT NULL;',
+      'ALTER TABLE cuentas ADD COLUMN parent_cuenta_id TEXT NULL;',
+      'ALTER TABLE cuentas ADD COLUMN split_sequence INTEGER NULL;',
+      'ALTER TABLE cuenta_items ADD COLUMN cancellation_reason TEXT NULL;',
+      'ALTER TABLE cuenta_items ADD COLUMN cancelled_by_user_id TEXT NULL;',
+      'ALTER TABLE cuenta_items ADD COLUMN cancelled_at TEXT NULL;',
+      'ALTER TABLE cuenta_items ADD COLUMN requires_waste_record INTEGER NULL DEFAULT 0;',
+    ];
+
+    for (const sql of migrations) {
+      try {
+        this.#db.executeSchema(sql);
+      } catch {
+        // Column already exists in schema, continue safely
+      }
+    }
   }
 
   // ==========================================
@@ -93,7 +129,7 @@ export class SqliteDiningRoomRepository implements DiningRoomRepositoryPort, Acc
 
   public getMesaByIdSync(id: string): Mesa | null {
     const row = this.#db.queryRowSafe<MesaRow>(
-      'SELECT id, room_name, table_number, status, current_account_id, version, updated_at FROM mesas WHERE id = ?;',
+      'SELECT id, room_name, table_number, status, current_account_id, pos_x, pos_y, capacity, version, updated_at FROM mesas WHERE id = ?;',
       id,
     );
 
@@ -107,6 +143,9 @@ export class SqliteDiningRoomRepository implements DiningRoomRepositoryPort, Acc
       tableNumber: row.table_number,
       status: row.status as MesaStatus,
       currentAccountId: row.current_account_id,
+      posX: row.pos_x !== undefined && row.pos_x !== null ? Number(row.pos_x) : null,
+      posY: row.pos_y !== undefined && row.pos_y !== null ? Number(row.pos_y) : null,
+      capacity: row.capacity !== undefined && row.capacity !== null ? Number(row.capacity) : null,
       version: Number(row.version),
       updatedAt: row.updated_at,
     };
@@ -125,13 +164,16 @@ export class SqliteDiningRoomRepository implements DiningRoomRepositoryPort, Acc
       }
 
       this.#db.executeMutation(
-        `INSERT INTO mesas (id, room_name, table_number, status, current_account_id, version, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?);`,
+        `INSERT INTO mesas (id, room_name, table_number, status, current_account_id, pos_x, pos_y, capacity, version, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
         mesa.id,
         mesa.roomName,
         mesa.tableNumber,
         mesa.status,
         mesa.currentAccountId,
+        mesa.posX ?? null,
+        mesa.posY ?? null,
+        mesa.capacity ?? null,
         mesa.version,
         mesa.updatedAt,
       );
@@ -142,12 +184,15 @@ export class SqliteDiningRoomRepository implements DiningRoomRepositoryPort, Acc
     // OCC update with CAS (Compare-And-Swap)
     const result = this.#db.executeMutation(
       `UPDATE mesas
-       SET room_name = ?, table_number = ?, status = ?, current_account_id = ?, version = ?, updated_at = ?
+       SET room_name = ?, table_number = ?, status = ?, current_account_id = ?, pos_x = ?, pos_y = ?, capacity = ?, version = ?, updated_at = ?
        WHERE id = ? AND version = ?;`,
       mesa.roomName,
       mesa.tableNumber,
       mesa.status,
       mesa.currentAccountId,
+      mesa.posX ?? null,
+      mesa.posY ?? null,
+      mesa.capacity ?? null,
       mesa.version,
       mesa.updatedAt,
       mesa.id,
@@ -166,9 +211,9 @@ export class SqliteDiningRoomRepository implements DiningRoomRepositoryPort, Acc
     return this.saveMesaSync(mesa, expectedVersion);
   }
 
-  public async listMesas(): Promise<readonly Mesa[]> {
+  public listMesasSync(): readonly Mesa[] {
     const rows = this.#db.queryRowsSafe<MesaRow>(
-      'SELECT id, room_name, table_number, status, current_account_id, version, updated_at FROM mesas ORDER BY table_number ASC;',
+      'SELECT id, room_name, table_number, status, current_account_id, pos_x, pos_y, capacity, version, updated_at FROM mesas ORDER BY table_number ASC;',
     );
 
     return rows.map((row) => ({
@@ -177,9 +222,16 @@ export class SqliteDiningRoomRepository implements DiningRoomRepositoryPort, Acc
       tableNumber: row.table_number,
       status: row.status as MesaStatus,
       currentAccountId: row.current_account_id,
+      posX: row.pos_x !== undefined && row.pos_x !== null ? Number(row.pos_x) : null,
+      posY: row.pos_y !== undefined && row.pos_y !== null ? Number(row.pos_y) : null,
+      capacity: row.capacity !== undefined && row.capacity !== null ? Number(row.capacity) : null,
       version: Number(row.version),
       updatedAt: row.updated_at,
     }));
+  }
+
+  public async listMesas(): Promise<readonly Mesa[]> {
+    return this.listMesasSync();
   }
 
   // ==========================================
@@ -190,7 +242,9 @@ export class SqliteDiningRoomRepository implements DiningRoomRepositoryPort, Acc
     const row = this.#db.queryRowSafe<CuentaRow>(
       `SELECT id, folio_number, epoch_id, mesa_id, account_type, status,
               subtotal, tax_total, discounts_total, tips_total, total_amount,
-              opened_by_user_id, opened_at, closed_at, version, updated_at
+              opened_by_user_id, current_waiter_user_id, guest_count,
+              opened_at, printed_at, closed_at, parent_cuenta_id, split_sequence,
+              version, updated_at
        FROM cuentas WHERE id = ?;`,
       id,
     );
@@ -202,7 +256,9 @@ export class SqliteDiningRoomRepository implements DiningRoomRepositoryPort, Acc
     const itemRows = this.#db.queryRowsSafe<CuentaItemRow>(
       `SELECT id, cuenta_id, product_id, product_name_snapshot,
               unit_price_applied, quantity, tax_rate_applied, tax_amount_applied,
-              discount_amount_applied, subtotal, total, status, created_at
+              discount_amount_applied, subtotal, total, status,
+              cancellation_reason, cancelled_by_user_id, cancelled_at, requires_waste_record,
+              created_at
        FROM cuenta_items WHERE cuenta_id = ? ORDER BY created_at ASC;`,
       id,
     );
@@ -236,6 +292,10 @@ export class SqliteDiningRoomRepository implements DiningRoomRepositoryPort, Acc
         subtotal: BigInt(itemRow.subtotal),
         total: BigInt(itemRow.total),
         status: itemRow.status as CuentaItemStatus,
+        cancellationReason: itemRow.cancellation_reason ?? null,
+        cancelledByUserId: itemRow.cancelled_by_user_id ?? null,
+        cancelledAt: itemRow.cancelled_at ?? null,
+        requiresWasteRecord: Boolean(itemRow.requires_waste_record),
         createdAt: itemRow.created_at,
         modifiers,
       });
@@ -257,8 +317,17 @@ export class SqliteDiningRoomRepository implements DiningRoomRepositoryPort, Acc
       tipsTotal: BigInt(row.tips_total),
       totalAmount: BigInt(row.total_amount),
       openedByUserId: row.opened_by_user_id,
+      currentWaiterUserId: row.current_waiter_user_id ?? null,
+      guestCount:
+        row.guest_count !== undefined && row.guest_count !== null ? Number(row.guest_count) : 1,
       openedAt: row.opened_at,
+      printedAt: row.printed_at ?? null,
       closedAt: row.closed_at,
+      parentCuentaId: row.parent_cuenta_id ?? null,
+      splitSequence:
+        row.split_sequence !== undefined && row.split_sequence !== null
+          ? Number(row.split_sequence)
+          : null,
       version: Number(row.version),
       updatedAt: row.updated_at,
       items,
@@ -281,8 +350,10 @@ export class SqliteDiningRoomRepository implements DiningRoomRepositoryPort, Acc
         `INSERT INTO cuentas (
            id, folio_number, epoch_id, mesa_id, account_type, status,
            subtotal, tax_total, discounts_total, tips_total, total_amount,
-           opened_by_user_id, opened_at, closed_at, version, updated_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+           opened_by_user_id, current_waiter_user_id, guest_count,
+           opened_at, printed_at, closed_at, parent_cuenta_id, split_sequence,
+           version, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
         cuenta.id,
         cuenta.folioNumber,
         cuenta.epochId,
@@ -295,8 +366,13 @@ export class SqliteDiningRoomRepository implements DiningRoomRepositoryPort, Acc
         cuenta.tipsTotal,
         cuenta.totalAmount,
         cuenta.openedByUserId,
+        cuenta.currentWaiterUserId ?? null,
+        cuenta.guestCount ?? 1,
         cuenta.openedAt,
+        cuenta.printedAt ?? null,
         cuenta.closedAt,
+        cuenta.parentCuentaId ?? null,
+        cuenta.splitSequence ?? null,
         cuenta.version,
         cuenta.updatedAt,
       );
@@ -310,7 +386,8 @@ export class SqliteDiningRoomRepository implements DiningRoomRepositoryPort, Acc
       `UPDATE cuentas
        SET folio_number = ?, epoch_id = ?, mesa_id = ?, account_type = ?, status = ?,
            subtotal = ?, tax_total = ?, discounts_total = ?, tips_total = ?, total_amount = ?,
-           closed_at = ?, version = ?, updated_at = ?
+           current_waiter_user_id = ?, guest_count = ?, printed_at = ?, closed_at = ?,
+           parent_cuenta_id = ?, split_sequence = ?, version = ?, updated_at = ?
        WHERE id = ? AND version = ?;`,
       cuenta.folioNumber,
       cuenta.epochId,
@@ -322,7 +399,12 @@ export class SqliteDiningRoomRepository implements DiningRoomRepositoryPort, Acc
       cuenta.discountsTotal,
       cuenta.tipsTotal,
       cuenta.totalAmount,
+      cuenta.currentWaiterUserId ?? null,
+      cuenta.guestCount ?? 1,
+      cuenta.printedAt ?? null,
       cuenta.closedAt,
+      cuenta.parentCuentaId ?? null,
+      cuenta.splitSequence ?? null,
       cuenta.version,
       cuenta.updatedAt,
       cuenta.id,
@@ -353,8 +435,10 @@ export class SqliteDiningRoomRepository implements DiningRoomRepositoryPort, Acc
         `INSERT INTO cuenta_items (
            id, cuenta_id, product_id, product_name_snapshot,
            unit_price_applied, quantity, tax_rate_applied, tax_amount_applied,
-           discount_amount_applied, subtotal, total, status, created_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           discount_amount_applied, subtotal, total, status,
+           cancellation_reason, cancelled_by_user_id, cancelled_at, requires_waste_record,
+           created_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
            status = excluded.status,
            unit_price_applied = excluded.unit_price_applied,
@@ -363,7 +447,11 @@ export class SqliteDiningRoomRepository implements DiningRoomRepositoryPort, Acc
            tax_amount_applied = excluded.tax_amount_applied,
            discount_amount_applied = excluded.discount_amount_applied,
            subtotal = excluded.subtotal,
-           total = excluded.total;`,
+           total = excluded.total,
+           cancellation_reason = excluded.cancellation_reason,
+           cancelled_by_user_id = excluded.cancelled_by_user_id,
+           cancelled_at = excluded.cancelled_at,
+           requires_waste_record = excluded.requires_waste_record;`,
         item.id,
         item.cuentaId,
         item.productId,
@@ -376,6 +464,10 @@ export class SqliteDiningRoomRepository implements DiningRoomRepositoryPort, Acc
         item.subtotal,
         item.total,
         item.status,
+        item.cancellationReason ?? null,
+        item.cancelledByUserId ?? null,
+        item.cancelledAt ?? null,
+        item.requiresWasteRecord ? 1 : 0,
         item.createdAt,
       );
 
@@ -397,18 +489,22 @@ export class SqliteDiningRoomRepository implements DiningRoomRepositoryPort, Acc
     }
   }
 
-  public async listOpenCuentas(): Promise<readonly Cuenta[]> {
+  public listOpenCuentasSync(): readonly Cuenta[] {
     const rows = this.#db.queryRowsSafe<CuentaRow>(
-      `SELECT id FROM cuentas WHERE status = 'ABIERTA' ORDER BY opened_at ASC;`,
+      `SELECT id FROM cuentas WHERE status = 'ABIERTA' OR status = 'IMPRESA' ORDER BY opened_at ASC;`,
     );
 
     const cuentas: Cuenta[] = [];
     for (const r of rows) {
-      const c = await this.getCuentaById(r.id);
+      const c = this.getCuentaByIdSync(r.id);
       if (c) {
         cuentas.push(c);
       }
     }
     return cuentas;
+  }
+
+  public async listOpenCuentas(): Promise<readonly Cuenta[]> {
+    return this.listOpenCuentasSync();
   }
 }

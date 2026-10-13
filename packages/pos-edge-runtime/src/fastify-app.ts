@@ -40,6 +40,7 @@ export interface FastifyAppOptions {
   readonly organizationId: string;
   readonly branchId: string;
   readonly stationId?: string;
+  readonly diningService?: DiningDomainService;
   readonly cashShiftRepository?: CashShiftRepositoryPort;
   readonly cashShiftService?: CashShiftDomainService;
   readonly shiftAssignmentStrategy?: ShiftAssignmentStrategy;
@@ -62,8 +63,13 @@ export function serializeCuentaToDTO(cuenta: Cuenta): Record<string, unknown> {
     tipsTotal: scaledBigIntToDecimalString(cuenta.tipsTotal),
     totalAmount: scaledBigIntToDecimalString(cuenta.totalAmount),
     openedByUserId: cuenta.openedByUserId,
+    currentWaiterUserId: cuenta.currentWaiterUserId ?? null,
+    guestCount: cuenta.guestCount ?? 1,
     openedAt: cuenta.openedAt,
+    printedAt: cuenta.printedAt ?? null,
     closedAt: cuenta.closedAt,
+    parentCuentaId: cuenta.parentCuentaId ?? null,
+    splitSequence: cuenta.splitSequence ?? null,
     version: cuenta.version,
     updatedAt: cuenta.updatedAt,
     items: cuenta.items.map((item) => serializeCuentaItemToDTO(item)),
@@ -84,6 +90,10 @@ export function serializeCuentaItemToDTO(item: CuentaItem): Record<string, unkno
     subtotal: scaledBigIntToDecimalString(item.subtotal),
     total: scaledBigIntToDecimalString(item.total),
     status: item.status,
+    cancellationReason: item.cancellationReason ?? null,
+    cancelledByUserId: item.cancelledByUserId ?? null,
+    cancelledAt: item.cancelledAt ?? null,
+    requiresWasteRecord: Boolean(item.requiresWasteRecord),
     createdAt: item.createdAt,
     modifiers: item.modifiers.map((mod) => serializeModifierToDTO(mod)),
   };
@@ -106,6 +116,9 @@ export function serializeMesaToDTO(mesa: Mesa): Record<string, unknown> {
     tableNumber: mesa.tableNumber,
     status: mesa.status,
     currentAccountId: mesa.currentAccountId,
+    posX: mesa.posX ?? null,
+    posY: mesa.posY ?? null,
+    capacity: mesa.capacity ?? null,
     version: mesa.version,
     updatedAt: mesa.updatedAt,
   };
@@ -224,21 +237,30 @@ export function serializeSnapshotToDTO(snapshot: unknown): {
 export async function createPosFastifyApp(options: FastifyAppOptions): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
 
-  // Dining Room & Account Service
-  const diningRepo = new SqliteDiningRoomRepository(options.edgeDb);
-  const diningService = new DiningDomainService({
-    diningRepo,
-    accountRepo: diningRepo,
-  });
-
-  // Cash Shift Service (WP-016 / DEC-017)
-  const shiftRepo = options.cashShiftRepository ?? new SqliteCashShiftRepository(options.edgeDb);
+  // PIN Validator (WP-016 / WP-010 / DEC-017 / DEC-010 / DEC-011 / DEC-013)
   const pinValidator =
     options.pinValidator ??
     (options.offlineIamService
       ? new OfflineIamPinValidatorAdapter(options.offlineIamService)
       : undefined);
 
+  const failClosedPinValidator: IamPinValidatorPort = {
+    validatePin: () => false,
+  };
+  const effectivePinValidator: IamPinValidatorPort = pinValidator ?? failClosedPinValidator;
+
+  // Dining Room & Account Service
+  const diningRepo = new SqliteDiningRoomRepository(options.edgeDb);
+  const diningService =
+    options.diningService ??
+    new DiningDomainService({
+      diningRepo,
+      accountRepo: diningRepo,
+      pinValidator: effectivePinValidator,
+    });
+
+  // Cash Shift Service (WP-016 / DEC-017)
+  const shiftRepo = options.cashShiftRepository ?? new SqliteCashShiftRepository(options.edgeDb);
   let shiftService = options.cashShiftService;
   if (!shiftService && pinValidator) {
     shiftService = new CashShiftDomainService({

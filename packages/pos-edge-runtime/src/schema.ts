@@ -11,6 +11,9 @@ CREATE TABLE IF NOT EXISTS mesas (
     table_number TEXT NOT NULL,
     status TEXT NOT NULL,
     current_account_id TEXT NULL,
+    pos_x INTEGER NULL,
+    pos_y INTEGER NULL,
+    capacity INTEGER NULL,
     version INTEGER NOT NULL DEFAULT 1,
     updated_at TEXT NOT NULL
 );
@@ -28,8 +31,13 @@ CREATE TABLE IF NOT EXISTS cuentas (
     tips_total INTEGER NOT NULL DEFAULT 0,
     total_amount INTEGER NOT NULL DEFAULT 0,
     opened_by_user_id TEXT NOT NULL,
+    current_waiter_user_id TEXT NULL,
+    guest_count INTEGER NULL DEFAULT 1,
     opened_at TEXT NOT NULL,
+    printed_at TEXT NULL,
     closed_at TEXT NULL,
+    parent_cuenta_id TEXT NULL,
+    split_sequence INTEGER NULL,
     version INTEGER NOT NULL DEFAULT 1,
     updated_at TEXT NOT NULL
 );
@@ -47,6 +55,10 @@ CREATE TABLE IF NOT EXISTS cuenta_items (
     subtotal INTEGER NOT NULL,
     total INTEGER NOT NULL,
     status TEXT NOT NULL,
+    cancellation_reason TEXT NULL,
+    cancelled_by_user_id TEXT NULL,
+    cancelled_at TEXT NULL,
+    requires_waste_record INTEGER NULL DEFAULT 0,
     created_at TEXT NOT NULL
 );
 
