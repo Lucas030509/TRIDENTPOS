@@ -60,5 +60,8 @@ export * from './features/salon/ComanderoView.js';
 // Feature: KDS Cocina Táctil (WP-026C)
 export * from './features/kds/index.js';
 
+// Feature: Terminal de Caja & Cobro Táctil (WP-026D)
+export * from './features/caja/index.js';
+
 // Root Router
 export * from './router.js';

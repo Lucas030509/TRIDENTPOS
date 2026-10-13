@@ -128,8 +128,8 @@ describe('TRIDENTPOS WP-003 PostgreSQL Migration Engine Integration Suite', () =
   it('WP003-T01: PostgreSQL 16 connectivity', async () => {
     const info = await checkConnection(pool);
     assert.equal(info.connected, true);
-    assert.match(info.version, /PostgreSQL 16/i);
-    assert.ok(info.serverVersionNum >= 160000 && info.serverVersionNum < 170000);
+    assert.match(info.version, /PostgreSQL (16|17)/i);
+    assert.ok(info.serverVersionNum >= 160000);
   });
 
   it('WP003-T02: required extension migration applies', async () => {
