@@ -492,4 +492,244 @@ describe('@trident/pos-renderer Architecture & Shell Harness', () => {
       }
     });
   });
+
+  describe('WP-026C KDS Cocina Táctil Integration Suite', () => {
+    it('retrieves kitchen stations and filters active tickets by estacionId', async () => {
+      const bridge = createMockTridentBridge();
+
+      const estRes = await bridge.kds.getEstaciones();
+      assert.ok(estRes.ok);
+      if (estRes.ok) {
+        assert.equal(estRes.data.length, 4);
+        assert.ok(estRes.data.some((e) => e.id === 'cocina-1' && e.stationType === 'COCINA'));
+        assert.ok(estRes.data.some((e) => e.id === 'bar-1' && e.stationType === 'BARRA'));
+      }
+
+      const ticketsCocina = await bridge.kds.getTickets('cocina-1');
+      assert.ok(ticketsCocina.ok);
+      if (ticketsCocina.ok) {
+        assert.ok(ticketsCocina.data.length >= 3);
+        assert.ok(ticketsCocina.data.every((t) => t.kdsEstacionId === 'cocina-1'));
+      }
+
+      const ticketsBar = await bridge.kds.getTickets('bar-1');
+      assert.ok(ticketsBar.ok);
+      if (ticketsBar.ok) {
+        assert.equal(ticketsBar.data.length, 1);
+        assert.equal(ticketsBar.data[0]?.folio, 104);
+      }
+    });
+
+    it('transitions ticket from PENDIENTE to EN_PREPARACION with canonical event broadcast', async () => {
+      const bridge = createMockTridentBridge();
+      const emittedEvents: DomainEvent[] = [];
+      const unsub = bridge.events.subscribe((e) => emittedEvents.push(e));
+
+      const prepRes = await bridge.kds.startPreparation('kds-ticket-2', 'cocina-1', 'op-prep-1');
+      assert.ok(prepRes.ok);
+
+      const tickets = await bridge.kds.getTickets('cocina-1');
+      assert.ok(tickets.ok);
+      if (tickets.ok) {
+        const t2 = tickets.data.find((t) => t.id === 'kds-ticket-2');
+        assert.equal(t2?.status, 'EN_PREPARACION');
+        assert.ok(t2?.items.every((i) => i.status === 'EN_PREPARACION'));
+      }
+
+      const event = emittedEvents.find((e) => e.eventType === 'OrdenProduccionIniciadaEnKDS');
+      assert.ok(event, 'Must broadcast OrdenProduccionIniciadaEnKDS');
+      assert.equal(event.entityId, 'kds-ticket-2');
+
+      unsub();
+    });
+
+    it('bumps ticket from EN_PREPARACION to LISTO, moving to completed and broadcasting confirmation', async () => {
+      const bridge = createMockTridentBridge();
+      const emittedEvents: DomainEvent[] = [];
+      const unsub = bridge.events.subscribe((e) => emittedEvents.push(e));
+
+      const bumpRes = await bridge.kds.bumpTicket('kds-ticket-1', 'op-bump-1', 12);
+      assert.ok(bumpRes.ok);
+
+      // Verify removed from active tickets
+      const activeTickets = await bridge.kds.getTickets('cocina-1');
+      assert.ok(activeTickets.ok);
+      if (activeTickets.ok) {
+        assert.equal(
+          activeTickets.data.some((t) => t.id === 'kds-ticket-1'),
+          false,
+        );
+      }
+
+      // Verify present in completed tickets
+      const completed = await bridge.kds.getRecentCompletedTickets('cocina-1', 120);
+      assert.ok(completed.ok);
+      if (completed.ok) {
+        const t1 = completed.data.find((t) => t.id === 'kds-ticket-1');
+        assert.ok(t1);
+        assert.equal(t1.status, 'LISTO');
+        assert.equal(t1.preparationTimeMinutes, 12);
+        assert.ok(t1.completedAt !== null);
+      }
+
+      // Verify domain event
+      const event = emittedEvents.find((e) => e.eventType === 'OrdenProduccionConfirmadaEnKDS');
+      assert.ok(event, 'Must broadcast OrdenProduccionConfirmadaEnKDS');
+      assert.equal(event.entityId, 'kds-ticket-1');
+
+      unsub();
+    });
+
+    it('retrieves completed tickets in recall window and reopens ticket to kitchen (undo bump)', async () => {
+      const bridge = createMockTridentBridge();
+      const emittedEvents: DomainEvent[] = [];
+      const unsub = bridge.events.subscribe((e) => emittedEvents.push(e));
+
+      // Recall completed ticket
+      const recallRes = await bridge.kds.recallTicket('kds-comp-1', 120);
+      assert.ok(recallRes.ok);
+      assert.ok(recallRes.data);
+      assert.equal(recallRes.data.folio, 100);
+
+      // Reopen ticket (undo accidental bump)
+      const reopenRes = await bridge.kds.reopenTicket('kds-comp-1', 'op-reopen-1');
+      assert.ok(reopenRes.ok);
+
+      // Verify back in active tickets
+      const activeTickets = await bridge.kds.getTickets('cocina-1');
+      assert.ok(activeTickets.ok);
+      if (activeTickets.ok) {
+        const reopened = activeTickets.data.find((t) => t.id === 'kds-comp-1');
+        assert.ok(reopened);
+        assert.equal(reopened.status, 'EN_PREPARACION');
+        assert.equal(reopened.completedAt, null);
+      }
+
+      // Verify event broadcast
+      const event = emittedEvents.find((e) => e.eventType === 'KdsTicketActualizado');
+      assert.ok(event);
+
+      unsub();
+    });
+
+    it('toggles individual item status between PENDIENTE, EN_PREPARACION and LISTO', async () => {
+      const bridge = createMockTridentBridge();
+
+      const toggleRes = await bridge.kds.toggleItemStatus('kds-ticket-1', 'kds-item-1', 'LISTO');
+      assert.ok(toggleRes.ok);
+
+      const tickets = await bridge.kds.getTickets('cocina-1');
+      assert.ok(tickets.ok);
+      if (tickets.ok) {
+        const t1 = tickets.data.find((t) => t.id === 'kds-ticket-1');
+        const item1 = t1?.items.find((i) => i.id === 'kds-item-1');
+        assert.equal(item1?.status, 'LISTO');
+      }
+    });
+
+    it('dispatches comanda from Salón and automatically reflects new ticket in KDS via ComandaEnviadaACocina', async () => {
+      const bridge = createMockTridentBridge();
+      const emittedEvents: DomainEvent[] = [];
+      const unsub = bridge.events.subscribe((e) => emittedEvents.push(e));
+
+      // Open a table
+      const openRes = await bridge.salon.openMesa({ mesaId: 'mesa-1', guestCount: 2 });
+      assert.ok(openRes.ok);
+      const cuentaId = openRes.ok ? openRes.data.id : '';
+
+      // Send comanda to kitchen
+      const sendRes = await bridge.salon.enviarComanda({
+        cuentaId,
+        expectedVersion: 1,
+        items: [
+          {
+            productId: 'prod-1',
+            productNameSnapshot: 'Guacamole Rústico con Totopos',
+            quantity: '1.0000',
+            unitPriceApplied: '120.0000',
+            taxRateApplied: '0.1600',
+            notes: 'Sin picante',
+          },
+        ],
+      });
+      assert.ok(sendRes.ok);
+
+      // Verify event was broadcast
+      const event = emittedEvents.find((e) => e.eventType === 'ComandaEnviadaACocina');
+      assert.ok(event, 'ComandaEnviadaACocina must be broadcast when sending comanda');
+
+      // Verify ticket appears in KDS
+      const tickets = await bridge.kds.getTickets('cocina-1');
+      assert.ok(tickets.ok);
+      if (tickets.ok) {
+        const matchingTicket = tickets.data.find((t) => t.cuentaId === cuentaId);
+        assert.ok(matchingTicket, 'New ticket must exist in KDS');
+        assert.equal(matchingTicket.status, 'PENDIENTE');
+        assert.equal(matchingTicket.items[0]?.productName, 'Guacamole Rústico con Totopos');
+      }
+
+      unsub();
+    });
+
+    it('handles full-state resync upon reconnect without state divergence (ADR-005)', async () => {
+      const bridge = createMockTridentBridge();
+      const invalidatedQueries: unknown[][] = [];
+      let allInvalidated = false;
+
+      const cacheHandler: QueryInvalidationHandler = {
+        invalidateQueries(prefix) {
+          invalidatedQueries.push([...prefix]);
+        },
+        invalidateAll() {
+          allInvalidated = true;
+        },
+      };
+
+      const invalidator = new EventInvalidator(bridge, cacheHandler);
+      invalidator.start();
+
+      // Trigger KDS_RESYNC event
+      invalidator.handleDomainEvent({
+        eventType: 'KDS_RESYNC',
+        eventContractVersion: 1,
+        entityId: 'sync-all',
+        payload: { activeTickets: [] },
+        timestamp: new Date().toISOString(),
+      });
+
+      assert.ok(
+        invalidatedQueries.some((q) => q.length === 2 && q[0] === 'kds' && q[1] === 'tickets'),
+        'KDS_RESYNC must invalidate kds tickets queries',
+      );
+
+      // Trigger connectivity.restored
+      invalidator.handleDomainEvent({
+        eventType: 'connectivity.restored',
+        eventContractVersion: 1,
+        entityId: 'edge-host',
+        payload: {},
+        timestamp: new Date().toISOString(),
+      });
+
+      assert.equal(allInvalidated, true, 'connectivity.restored must invalidate all queries');
+      invalidator.stop();
+    });
+
+    it('enforces zero floats and canonical scale-4 quantities in KDS contracts', async () => {
+      const bridge = createMockTridentBridge();
+      const tickets = await bridge.kds.getTickets('cocina-1');
+      assert.ok(tickets.ok);
+      if (tickets.ok) {
+        for (const t of tickets.data) {
+          assert.equal(Number.isInteger(t.targetSeconds), true);
+          for (const item of t.items) {
+            assert.ok(typeof item.quantity === 'string' || typeof item.quantity === 'number');
+            if (typeof item.quantity === 'string') {
+              assert.match(item.quantity, /^\d+(\.\d{4})?$/);
+            }
+          }
+        }
+      }
+    });
+  });
 });

@@ -56,11 +56,15 @@ export class EventInvalidator {
         }
         break;
 
-      // KDS Ticket Events
+      // KDS Ticket Events (Canonical WP-015 + UI events)
       case 'KdsTicketCreado':
       case 'KdsTicketActualizado':
       case 'KdsTicketListo':
       case 'KdsTicketBumped':
+      case 'ComandaEnviadaACocina':
+      case 'OrdenProduccionIniciadaEnKDS':
+      case 'OrdenProduccionConfirmadaEnKDS':
+      case 'KDS_RESYNC':
         this.cacheHandler.invalidateQueries(['kds', 'tickets']);
         break;
 
