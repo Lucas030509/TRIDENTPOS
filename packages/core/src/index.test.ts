@@ -1122,9 +1122,14 @@ describe('TRIDENTPOS WP-012 Idempotency Identity & Trust Provider Boundary Suite
         performedByUserId: 'usr_waiter',
       };
       assert.equal(core.ChangeGuestCountSchema.safeParse(valid).success, true);
-      assert.equal(core.ChangeGuestCountSchema.safeParse({ ...valid, guestCount: 0 }).success, false);
-      assert.equal(core.ChangeGuestCountSchema.safeParse({ ...valid, guestCount: 1000 }).success, false);
+      assert.equal(
+        core.ChangeGuestCountSchema.safeParse({ ...valid, guestCount: 0 }).success,
+        false,
+      );
+      assert.equal(
+        core.ChangeGuestCountSchema.safeParse({ ...valid, guestCount: 1000 }).success,
+        false,
+      );
     });
   });
 });
-
