@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type pg from 'pg';
 import { getPool } from './connection.js';
-import { migrateUp, migrateDown } from './runner.js';
+import { migrateUp, migrateDown, getAppliedMigrations } from './runner.js';
 import { setTenantContext } from './tenant.js';
 
 dotenv.config();
@@ -74,12 +74,17 @@ describe('TRIDENTPOS WP-021 Billing & Fiscal Invoicing Database Suite', { concur
     const initClient = await pool.connect();
     try {
       await initClient.query(`
-        DROP TABLE IF EXISTS consumer_restore_pending_markers, consumer_inbox_events, fiscal_stamping_operations, lotes_facturacion_global, fiscal_invoice_items, fiscal_invoices, emisor_fiscal_config, tax_schemes CASCADE;
-        DROP FUNCTION IF EXISTS protect_fiscal_event_envelope, protect_fiscal_outbox_envelope CASCADE;
         DO $$
         BEGIN
-          IF to_regclass('_migrations') IS NOT NULL THEN
-            DELETE FROM _migrations WHERE id IN ('20260905030000','20261001000000','20261002000000') OR name = 'billing_fiscal_invoicing';
+          IF to_regclass('fiscal_invoices') IS NOT NULL THEN
+            DELETE FROM fiscal_invoice_items;
+            DELETE FROM fiscal_invoices;
+            DELETE FROM lotes_facturacion_global;
+            DELETE FROM fiscal_stamping_operations;
+            DELETE FROM emisor_fiscal_config;
+            DELETE FROM tax_schemes;
+            DELETE FROM consumer_restore_pending_markers;
+            DELETE FROM consumer_inbox_events;
           END IF;
         END $$;
       `);
@@ -378,6 +383,20 @@ describe('TRIDENTPOS WP-021 Billing & Fiscal Invoicing Database Suite', { concur
   });
 
   it('WP021-DOWN-01: Non-production rollback of WP-021 fails closed when fiscal records exist (SEC-WP021-R4-HIGH-03)', async () => {
+    // Roll down any migrations newer than WP-021 first (e.g. WP-022)
+    const checkClientBefore = await pool.connect();
+    try {
+      const appliedBefore = await getAppliedMigrations(checkClientBefore);
+      for (let i = appliedBefore.length - 1; i >= 0; i--) {
+        const entry = appliedBefore[i];
+        if (entry && entry.id > '20261002000000') {
+          await migrateDown(pool, { allowDestructiveDown: true });
+        }
+      }
+    } finally {
+      checkClientBefore.release();
+    }
+
     // 1. Verify that down migration fails closed when fiscal records exist
     await assert.rejects(
       async () => {
