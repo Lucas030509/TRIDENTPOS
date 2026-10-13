@@ -21,3 +21,6 @@ export * from './cash-shift-schema.js';
 export * from './cash-shift-sqlite-repository.js';
 export * from './escpos-cash-drawer.js';
 export * from './offline-iam-pin-validator.js';
+
+// WP-016C: Payment Orchestration & Account Settlement
+export * from './payment-sqlite-repository.js';

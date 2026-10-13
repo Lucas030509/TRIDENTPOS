@@ -105,3 +105,32 @@ export class InvalidOperatorPinError extends DomainError {
     this.name = 'InvalidOperatorPinError';
   }
 }
+
+export class PaymentValidationError extends DomainError {
+  constructor(message: string) {
+    super(message, 'PAYMENT_VALIDATION_ERROR', 400);
+    this.name = 'PaymentValidationError';
+  }
+}
+
+export class AccountNotPayableError extends DomainError {
+  constructor(cuentaId: string, currentStatus: string) {
+    super(
+      `Account '${cuentaId}' is in status '${currentStatus}' and cannot receive payments`,
+      'ACCOUNT_NOT_PAYABLE',
+      400,
+    );
+    this.name = 'AccountNotPayableError';
+  }
+}
+
+export class ShiftNotOpenError extends DomainError {
+  constructor(shiftId: string, currentStatus: string) {
+    super(
+      `Shift '${shiftId}' is in status '${currentStatus}' and cannot process payments (must be ABIERTO)`,
+      'SHIFT_NOT_OPEN',
+      400,
+    );
+    this.name = 'ShiftNotOpenError';
+  }
+}

@@ -1131,5 +1131,64 @@ describe('TRIDENTPOS WP-012 Idempotency Identity & Trust Provider Boundary Suite
         false,
       );
     });
+
+    it('PaymentMethodSchema accepts EFECTIVO, TARJETA, TRANSFERENCIA and rejects RESTCARD, CXC in slice 1', () => {
+      assert.equal(core.PaymentMethodSchema.safeParse('EFECTIVO').success, true);
+      assert.equal(core.PaymentMethodSchema.safeParse('TARJETA').success, true);
+      assert.equal(core.PaymentMethodSchema.safeParse('TRANSFERENCIA').success, true);
+      assert.equal(core.PaymentMethodSchema.safeParse('RESTCARD').success, false);
+      assert.equal(core.PaymentMethodSchema.safeParse('CXC').success, false);
+      assert.equal(core.PaymentMethodSchema.safeParse('BITCOIN').success, false);
+    });
+
+    it('SubmitTenderRequestSchema validates scale-4 amounts and operator PIN (DEC-017)', () => {
+      const valid = {
+        cuentaId: 'cta_456',
+        turnoCajaId: 'shift_789',
+        operatorUserId: 'usr_cajero',
+        operatorPin: '4321',
+        paymentMethod: 'EFECTIVO',
+        amount: '250.5000',
+        tipAmount: '25.0000',
+        cashGiven: '300.0000',
+        clientOpId: '550e8400-e29b-41d4-a716-446655440099',
+      };
+      assert.equal(core.SubmitTenderRequestSchema.safeParse(valid).success, true);
+
+      // Missing PIN
+      assert.equal(
+        core.SubmitTenderRequestSchema.safeParse({ ...valid, operatorPin: '' }).success,
+        false,
+      );
+
+      // Invalid scale amount
+      assert.equal(
+        core.SubmitTenderRequestSchema.safeParse({ ...valid, amount: 'invalid' }).success,
+        false,
+      );
+    });
+
+    it('CuentaPagadaEventPayloadSchema validates canonical domain event contract', () => {
+      const valid = {
+        organizacionId: 'org_1',
+        sucursalId: 'suc_1',
+        estacionId: 'pos_1',
+        cuentaId: 'cta_456',
+        folioVenta: 1042,
+        montos: {
+          subtotal: '200.0000',
+          taxTotal: '32.0000',
+          discountsTotal: '0.0000',
+          total: '232.0000',
+        },
+        impuestos: [{ rate: '0.1600', amount: '32.0000' }],
+        propina: '20.0000',
+        formasPago: [{ method: 'EFECTIVO', amount: '252.0000', reference: null }],
+        meseroId: 'usr_waiter',
+        clienteId: null,
+        settledAt: new Date().toISOString(),
+      };
+      assert.equal(core.CuentaPagadaEventPayloadSchema.safeParse(valid).success, true);
+    });
   });
 });

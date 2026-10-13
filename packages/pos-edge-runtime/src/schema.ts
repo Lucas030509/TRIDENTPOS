@@ -70,8 +70,27 @@ CREATE TABLE IF NOT EXISTS cuenta_item_modificadores (
     modifier_price_applied INTEGER NOT NULL DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS pagos (
+    id TEXT PRIMARY KEY,
+    cuenta_id TEXT NOT NULL REFERENCES cuentas(id),
+    turno_caja_id TEXT NOT NULL,
+    operator_user_id TEXT NOT NULL,
+    payment_method TEXT NOT NULL,
+    amount INTEGER NOT NULL,
+    tip_amount INTEGER NOT NULL DEFAULT 0,
+    cash_given INTEGER NULL,
+    change_due INTEGER NULL,
+    reference_auth_code TEXT NULL,
+    client_op_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(cuenta_id, client_op_id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_cuentas_mesa ON cuentas(mesa_id);
 CREATE INDEX IF NOT EXISTS idx_cuentas_status ON cuentas(status);
 CREATE INDEX IF NOT EXISTS idx_cuenta_items_cuenta ON cuenta_items(cuenta_id);
 CREATE INDEX IF NOT EXISTS idx_cuenta_item_modificadores_item ON cuenta_item_modificadores(cuenta_item_id);
+CREATE INDEX IF NOT EXISTS idx_pagos_cuenta ON pagos(cuenta_id);
+CREATE INDEX IF NOT EXISTS idx_pagos_turno ON pagos(turno_caja_id);
+CREATE INDEX IF NOT EXISTS idx_pagos_client_op ON pagos(cuenta_id, client_op_id);
 `;
