@@ -27,10 +27,7 @@ class MockPaymentRepository implements PaymentRepositoryPort {
     return this.payments.find((p) => p.id === id) ?? null;
   }
 
-  public async findPaymentByClientOpId(
-    cuentaId: string,
-    clientOpId: string,
-  ): Promise<Pago | null> {
+  public async findPaymentByClientOpId(cuentaId: string, clientOpId: string): Promise<Pago | null> {
     return (
       this.payments.find((p) => p.cuentaId === cuentaId && p.clientOpId === clientOpId) ?? null
     );
@@ -303,22 +300,24 @@ describe('PaymentDomainService (WP-016C)', () => {
     const shift = createTestShift();
     shiftLookup.shifts.set(shift.id, shift);
 
-    const service = new PaymentDomainService(paymentRepo, accountRepo, shiftLookup, alwaysInvalidPin);
-
-    await assert.rejects(
-      async () => {
-        await service.submitTender({
-          cuentaId: cuenta.id,
-          turnoCajaId: shift.id,
-          operatorUserId: 'usr_cajero',
-          operatorPin: 'wrong_pin',
-          paymentMethod: 'EFECTIVO',
-          amount: 100_0000n,
-          clientOpId: '550e8400-e29b-41d4-a716-446655440033',
-        });
-      },
-      InvalidOperatorPinError,
+    const service = new PaymentDomainService(
+      paymentRepo,
+      accountRepo,
+      shiftLookup,
+      alwaysInvalidPin,
     );
+
+    await assert.rejects(async () => {
+      await service.submitTender({
+        cuentaId: cuenta.id,
+        turnoCajaId: shift.id,
+        operatorUserId: 'usr_cajero',
+        operatorPin: 'wrong_pin',
+        paymentMethod: 'EFECTIVO',
+        amount: 100_0000n,
+        clientOpId: '550e8400-e29b-41d4-a716-446655440033',
+      });
+    }, InvalidOperatorPinError);
   });
 
   it('fails closed when shift is closed or does not exist (shift-gating)', async () => {
@@ -335,36 +334,30 @@ describe('PaymentDomainService (WP-016C)', () => {
     const service = new PaymentDomainService(paymentRepo, accountRepo, shiftLookup, alwaysValidPin);
 
     // Non-existent shift
-    await assert.rejects(
-      async () => {
-        await service.submitTender({
-          cuentaId: cuenta.id,
-          turnoCajaId: 'non_existent_shift',
-          operatorUserId: 'usr_cajero',
-          operatorPin: '1234',
-          paymentMethod: 'EFECTIVO',
-          amount: 100_0000n,
-          clientOpId: '550e8400-e29b-41d4-a716-446655440044',
-        });
-      },
-      ShiftNotFoundError,
-    );
+    await assert.rejects(async () => {
+      await service.submitTender({
+        cuentaId: cuenta.id,
+        turnoCajaId: 'non_existent_shift',
+        operatorUserId: 'usr_cajero',
+        operatorPin: '1234',
+        paymentMethod: 'EFECTIVO',
+        amount: 100_0000n,
+        clientOpId: '550e8400-e29b-41d4-a716-446655440044',
+      });
+    }, ShiftNotFoundError);
 
     // Closed shift
-    await assert.rejects(
-      async () => {
-        await service.submitTender({
-          cuentaId: cuenta.id,
-          turnoCajaId: closedShift.id,
-          operatorUserId: 'usr_cajero',
-          operatorPin: '1234',
-          paymentMethod: 'EFECTIVO',
-          amount: 100_0000n,
-          clientOpId: '550e8400-e29b-41d4-a716-446655440045',
-        });
-      },
-      ShiftNotOpenError,
-    );
+    await assert.rejects(async () => {
+      await service.submitTender({
+        cuentaId: cuenta.id,
+        turnoCajaId: closedShift.id,
+        operatorUserId: 'usr_cajero',
+        operatorPin: '1234',
+        paymentMethod: 'EFECTIVO',
+        amount: 100_0000n,
+        clientOpId: '550e8400-e29b-41d4-a716-446655440045',
+      });
+    }, ShiftNotOpenError);
   });
 
   it('rejects tender when operator is not participating in shared shift (DEC-017)', async () => {
@@ -379,20 +372,17 @@ describe('PaymentDomainService (WP-016C)', () => {
 
     const service = new PaymentDomainService(paymentRepo, accountRepo, shiftLookup, alwaysValidPin);
 
-    await assert.rejects(
-      async () => {
-        await service.submitTender({
-          cuentaId: cuenta.id,
-          turnoCajaId: shift.id,
-          operatorUserId: 'usr_unauthorized_intruder',
-          operatorPin: '1234',
-          paymentMethod: 'EFECTIVO',
-          amount: 100_0000n,
-          clientOpId: '550e8400-e29b-41d4-a716-446655440055',
-        });
-      },
-      UnauthorizedShiftOperatorError,
-    );
+    await assert.rejects(async () => {
+      await service.submitTender({
+        cuentaId: cuenta.id,
+        turnoCajaId: shift.id,
+        operatorUserId: 'usr_unauthorized_intruder',
+        operatorPin: '1234',
+        paymentMethod: 'EFECTIVO',
+        amount: 100_0000n,
+        clientOpId: '550e8400-e29b-41d4-a716-446655440055',
+      });
+    }, UnauthorizedShiftOperatorError);
   });
 
   it('rejects tender when account is already PAGADA or CANCELADA', async () => {
@@ -407,20 +397,17 @@ describe('PaymentDomainService (WP-016C)', () => {
 
     const service = new PaymentDomainService(paymentRepo, accountRepo, shiftLookup, alwaysValidPin);
 
-    await assert.rejects(
-      async () => {
-        await service.submitTender({
-          cuentaId: cuenta.id,
-          turnoCajaId: shift.id,
-          operatorUserId: 'usr_cajero',
-          operatorPin: '1234',
-          paymentMethod: 'EFECTIVO',
-          amount: 100_0000n,
-          clientOpId: '550e8400-e29b-41d4-a716-446655440066',
-        });
-      },
-      AccountNotPayableError,
-    );
+    await assert.rejects(async () => {
+      await service.submitTender({
+        cuentaId: cuenta.id,
+        turnoCajaId: shift.id,
+        operatorUserId: 'usr_cajero',
+        operatorPin: '1234',
+        paymentMethod: 'EFECTIVO',
+        amount: 100_0000n,
+        clientOpId: '550e8400-e29b-41d4-a716-446655440066',
+      });
+    }, AccountNotPayableError);
   });
 
   it('rejects tender exceeding account remaining balance', async () => {
@@ -435,20 +422,17 @@ describe('PaymentDomainService (WP-016C)', () => {
 
     const service = new PaymentDomainService(paymentRepo, accountRepo, shiftLookup, alwaysValidPin);
 
-    await assert.rejects(
-      async () => {
-        await service.submitTender({
-          cuentaId: cuenta.id,
-          turnoCajaId: shift.id,
-          operatorUserId: 'usr_cajero',
-          operatorPin: '1234',
-          paymentMethod: 'TARJETA',
-          amount: 300_0000n, // Exceeds 200
-          clientOpId: '550e8400-e29b-41d4-a716-446655440077',
-        });
-      },
-      PaymentValidationError,
-    );
+    await assert.rejects(async () => {
+      await service.submitTender({
+        cuentaId: cuenta.id,
+        turnoCajaId: shift.id,
+        operatorUserId: 'usr_cajero',
+        operatorPin: '1234',
+        paymentMethod: 'TARJETA',
+        amount: 300_0000n, // Exceeds 200
+        clientOpId: '550e8400-e29b-41d4-a716-446655440077',
+      });
+    }, PaymentValidationError);
   });
 
   it('getAccountPayments returns summary with all previous tenders and balance', async () => {

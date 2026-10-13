@@ -254,13 +254,9 @@ export function serializeTenderResultToDTO(
     amount: scaledBigIntToDecimalString(result.pago.amount),
     tipAmount: scaledBigIntToDecimalString(result.pago.tipAmount),
     cashGiven:
-      result.pago.cashGiven !== null
-        ? scaledBigIntToDecimalString(result.pago.cashGiven)
-        : null,
+      result.pago.cashGiven !== null ? scaledBigIntToDecimalString(result.pago.cashGiven) : null,
     changeDue:
-      result.pago.changeDue !== null
-        ? scaledBigIntToDecimalString(result.pago.changeDue)
-        : null,
+      result.pago.changeDue !== null ? scaledBigIntToDecimalString(result.pago.changeDue) : null,
     referenceAuthCode: result.pago.referenceAuthCode ?? null,
     clientOpId: result.pago.clientOpId,
     remainingBalance: scaledBigIntToDecimalString(result.remainingBalance),
@@ -353,17 +349,11 @@ export async function createPosFastifyApp(options: FastifyAppOptions): Promise<F
 
   const paymentService =
     options.paymentService ??
-    new PaymentDomainService(
-      paymentRepo,
-      diningRepo,
-      shiftRepo,
-      effectivePinValidator,
-      {
-        organizationId: options.organizationId,
-        branchId: options.branchId,
-        stationId: options.stationId,
-      },
-    );
+    new PaymentDomainService(paymentRepo, diningRepo, shiftRepo, effectivePinValidator, {
+      organizationId: options.organizationId,
+      branchId: options.branchId,
+      stationId: options.stationId,
+    });
 
   function getRequiredShiftService(reply: FastifyReply): CashShiftDomainService | null {
     if (!shiftService) {

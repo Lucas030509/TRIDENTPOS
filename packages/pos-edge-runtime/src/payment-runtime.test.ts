@@ -4,10 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
-import {
-  EdgeDatabaseService,
-  EdgeOutboxPersistence,
-} from '@trident/edge';
+import { EdgeDatabaseService, EdgeOutboxPersistence } from '@trident/edge';
 import type { CuentaStatus } from '@trident/pos';
 import {
   createPosFastifyApp,
@@ -108,11 +105,7 @@ describe('TRIDENTPOS WP-016C Payment Orchestration & Account Settlement Integrat
     return data.turno.id;
   }
 
-  function seedTestCuenta(
-    cuentaId: string,
-    totalAmount: bigint,
-    status: CuentaStatus = 'ABIERTA',
-  ) {
+  function seedTestCuenta(cuentaId: string, totalAmount: bigint, status: CuentaStatus = 'ABIERTA') {
     const now = new Date().toISOString();
     return diningRepo.saveCuentaSync(
       {

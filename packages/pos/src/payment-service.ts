@@ -111,8 +111,7 @@ export class PaymentDomainService {
     const isResponsible = shift.responsibleUserId === command.operatorUserId;
     const isOpener = shift.openedByUserId === command.operatorUserId;
     const isParticipant =
-      shift.participatingOperators &&
-      shift.participatingOperators.includes(command.operatorUserId);
+      shift.participatingOperators && shift.participatingOperators.includes(command.operatorUserId);
     if (!isResponsible && !isOpener && !isParticipant) {
       throw new UnauthorizedShiftOperatorError(command.operatorUserId, shift.id);
     }
@@ -162,9 +161,7 @@ export class PaymentDomainService {
     if (command.paymentMethod === 'EFECTIVO') {
       if (command.cashGiven !== undefined && command.cashGiven !== null) {
         if (command.cashGiven < command.amount + tipAmount) {
-          throw new PaymentValidationError(
-            'Cash given cannot be less than tender amount plus tip',
-          );
+          throw new PaymentValidationError('Cash given cannot be less than tender amount plus tip');
         }
         cashGiven = command.cashGiven;
         changeDue = command.cashGiven - (command.amount + tipAmount);

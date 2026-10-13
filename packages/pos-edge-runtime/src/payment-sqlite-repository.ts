@@ -186,13 +186,9 @@ export class SqlitePaymentRepository implements PaymentRepositoryPort {
       // 5. Atomically enqueue CuentaPagada outbox event if settled
       if (params.cuentaPagadaEvent) {
         const orgId =
-          this.#options.organizationId ??
-          params.cuentaPagadaEvent.organizacionId ??
-          'org_default';
+          this.#options.organizationId ?? params.cuentaPagadaEvent.organizacionId ?? 'org_default';
         const branchId =
-          this.#options.branchId ??
-          params.cuentaPagadaEvent.sucursalId ??
-          'branch_default';
+          this.#options.branchId ?? params.cuentaPagadaEvent.sucursalId ?? 'branch_default';
 
         this.#outboxPersistence.enqueue({
           organizationId: orgId,
