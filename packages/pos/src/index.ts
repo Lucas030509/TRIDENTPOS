@@ -38,3 +38,8 @@ export * from './cash-shift-types.js';
 export * from './cash-shift-ports.js';
 export * from './cash-shift-strategy.js';
 export * from './cash-shift-service.js';
+
+// Re-export Payment Orchestration & Settlement domain model (WP-016C / DEC-012 / DEC-017)
+export * from './payment-types.js';
+export * from './payment-ports.js';
+export * from './payment-service.js';

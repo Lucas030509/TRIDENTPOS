@@ -4,11 +4,12 @@
  * Enforces canonical fixed-four-decimal transport format and OCC conflict resolution.
  */
 
-import Fastify, { FastifyInstance, FastifyReply } from 'fastify';
+import Fastify, { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import {
   decimalStringToScaledBigInt,
   isValidUuidV4,
   scaledBigIntToDecimalString,
+  SubmitTenderRequestSchema,
 } from '@trident/core';
 import {
   type AccountType,
@@ -24,14 +25,19 @@ import {
   type MovimientoCaja,
   type ShiftAssignmentStrategy,
   type TurnoCaja,
+  type PaymentRepositoryPort,
+  type PaymentSettlementResult,
+  type AccountPaymentsSummary,
   CashShiftDomainService,
   DiningDomainService,
+  PaymentDomainService,
   DomainError,
   OCCConflictError,
 } from '@trident/pos';
 import { EdgeDatabaseService, EdgeOutboxPersistence, OfflineIamService } from '@trident/edge';
 import { SqliteDiningRoomRepository } from './dining-sqlite-repository.js';
 import { SqliteCashShiftRepository } from './cash-shift-sqlite-repository.js';
+import { SqlitePaymentRepository } from './payment-sqlite-repository.js';
 import { OfflineIamPinValidatorAdapter } from './offline-iam-pin-validator.js';
 
 export interface FastifyAppOptions {
@@ -47,6 +53,8 @@ export interface FastifyAppOptions {
   readonly cashDrawerPort?: CashDrawerPort;
   readonly pinValidator?: IamPinValidatorPort;
   readonly offlineIamService?: OfflineIamService;
+  readonly paymentRepository?: PaymentRepositoryPort;
+  readonly paymentService?: PaymentDomainService;
 }
 
 export function serializeCuentaToDTO(cuenta: Cuenta): Record<string, unknown> {
@@ -234,6 +242,67 @@ export function serializeSnapshotToDTO(snapshot: unknown): {
   return { aggregateType: 'UNKNOWN', snapshot: null };
 }
 
+export function serializeTenderResultToDTO(
+  result: PaymentSettlementResult,
+): Record<string, unknown> {
+  return {
+    id: result.pago.id,
+    cuentaId: result.pago.cuentaId,
+    turnoCajaId: result.pago.turnoCajaId,
+    operatorUserId: result.pago.operatorUserId,
+    paymentMethod: result.pago.paymentMethod,
+    amount: scaledBigIntToDecimalString(result.pago.amount),
+    tipAmount: scaledBigIntToDecimalString(result.pago.tipAmount),
+    cashGiven:
+      result.pago.cashGiven !== null
+        ? scaledBigIntToDecimalString(result.pago.cashGiven)
+        : null,
+    changeDue:
+      result.pago.changeDue !== null
+        ? scaledBigIntToDecimalString(result.pago.changeDue)
+        : null,
+    referenceAuthCode: result.pago.referenceAuthCode ?? null,
+    clientOpId: result.pago.clientOpId,
+    remainingBalance: scaledBigIntToDecimalString(result.remainingBalance),
+    accountSettled: result.accountSettled,
+    accountStatus: result.accountStatus,
+    closedAt: result.closedAt ?? null,
+    createdAt: result.pago.createdAt,
+  };
+}
+
+export function serializeAccountPaymentsSummaryToDTO(
+  summary: AccountPaymentsSummary,
+): Record<string, unknown> {
+  return {
+    cuentaId: summary.cuentaId,
+    totalAmount: scaledBigIntToDecimalString(summary.totalAmount),
+    totalPaid: scaledBigIntToDecimalString(summary.totalPaid),
+    totalTips: scaledBigIntToDecimalString(summary.totalTips),
+    remainingBalance: scaledBigIntToDecimalString(summary.remainingBalance),
+    isSettled: summary.isSettled,
+    accountStatus: summary.accountStatus,
+    payments: summary.payments.map((p) => ({
+      id: p.id,
+      cuentaId: p.cuentaId,
+      turnoCajaId: p.turnoCajaId,
+      operatorUserId: p.operatorUserId,
+      paymentMethod: p.paymentMethod,
+      amount: scaledBigIntToDecimalString(p.amount),
+      tipAmount: scaledBigIntToDecimalString(p.tipAmount),
+      cashGiven: p.cashGiven !== null ? scaledBigIntToDecimalString(p.cashGiven) : null,
+      changeDue: p.changeDue !== null ? scaledBigIntToDecimalString(p.changeDue) : null,
+      referenceAuthCode: p.referenceAuthCode ?? null,
+      clientOpId: p.clientOpId,
+      remainingBalance: scaledBigIntToDecimalString(summary.remainingBalance),
+      accountSettled: summary.isSettled,
+      accountStatus: summary.accountStatus,
+      closedAt: null,
+      createdAt: p.createdAt,
+    })),
+  };
+}
+
 export async function createPosFastifyApp(options: FastifyAppOptions): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
 
@@ -270,6 +339,31 @@ export async function createPosFastifyApp(options: FastifyAppOptions): Promise<F
       pinValidator,
     });
   }
+
+  // Payment Service (WP-016C / DEC-015 / DEC-017)
+  const paymentRepo =
+    options.paymentRepository ??
+    new SqlitePaymentRepository(options.edgeDb, {
+      organizationId: options.organizationId,
+      branchId: options.branchId,
+      stationId: options.stationId,
+      outboxPersistence: options.outbox,
+      diningRepo,
+    });
+
+  const paymentService =
+    options.paymentService ??
+    new PaymentDomainService(
+      paymentRepo,
+      diningRepo,
+      shiftRepo,
+      effectivePinValidator,
+      {
+        organizationId: options.organizationId,
+        branchId: options.branchId,
+        stationId: options.stationId,
+      },
+    );
 
   function getRequiredShiftService(reply: FastifyReply): CashShiftDomainService | null {
     if (!shiftService) {
@@ -525,6 +619,73 @@ export async function createPosFastifyApp(options: FastifyAppOptions): Promise<F
       mesa: op.mesa ? serializeMesaToDTO(op.mesa) : undefined,
     });
   });
+
+  // ==========================================
+  // Payment Orchestration & Settlement API (WP-016C / DEC-015 / DEC-017)
+  // ==========================================
+
+  const handlePostPago = async (req: FastifyRequest, reply: FastifyReply) => {
+    const { id } = req.params as { id: string };
+    const body = (req.body as Record<string, unknown>) ?? {};
+    const payload = { ...body, cuentaId: body.cuentaId ?? id };
+    const parseResult = SubmitTenderRequestSchema.safeParse(payload);
+    if (!parseResult.success) {
+      return reply.status(400).send({
+        error: 'VALIDATION_ERROR',
+        message: 'Invalid tender request payload',
+        details: parseResult.error.format(),
+      });
+    }
+
+    const parsed = parseResult.data;
+    if (parsed.cuentaId !== id) {
+      return reply.status(400).send({
+        error: 'VALIDATION_ERROR',
+        message: `Mismatched cuentaId in path ('${id}') and body ('${parsed.cuentaId}')`,
+      });
+    }
+
+    const amount = decimalStringToScaledBigInt(parsed.amount);
+    const tipAmount = parsed.tipAmount ? decimalStringToScaledBigInt(parsed.tipAmount) : 0n;
+    const cashGiven = parsed.cashGiven ? decimalStringToScaledBigInt(parsed.cashGiven) : undefined;
+
+    const result = await paymentService.submitTender({
+      cuentaId: parsed.cuentaId,
+      turnoCajaId: parsed.turnoCajaId,
+      operatorUserId: parsed.operatorUserId,
+      operatorPin: parsed.operatorPin,
+      paymentMethod: parsed.paymentMethod,
+      amount,
+      tipAmount,
+      cashGiven,
+      referenceAuthCode: parsed.referenceAuthCode,
+      clientOpId: parsed.clientOpId,
+    });
+
+    // Fire-and-forget drawer kick on cash tender if drawer port configured
+    if (parsed.paymentMethod === 'EFECTIVO' && options.cashDrawerPort) {
+      try {
+        await options.cashDrawerPort.kickDrawer();
+      } catch {
+        // Safe fault containment: physical drawer error must not abort successful payment settlement
+      }
+    }
+
+    return reply
+      .status(result.isIdempotentReplay ? 200 : 201)
+      .send(serializeTenderResultToDTO(result));
+  };
+
+  const handleGetPagos = async (req: FastifyRequest, reply: FastifyReply) => {
+    const { id } = req.params as { id: string };
+    const summary = await paymentService.getAccountPayments(id);
+    return reply.status(200).send(serializeAccountPaymentsSummaryToDTO(summary));
+  };
+
+  app.post('/cuentas/:id/pagos', handlePostPago);
+  app.post('/api/v1/pos/cuentas/:id/pagos', handlePostPago);
+  app.get('/cuentas/:id/pagos', handleGetPagos);
+  app.get('/api/v1/pos/cuentas/:id/pagos', handleGetPagos);
 
   // ==========================================
   // Cash Management & Shifts API (WP-016 / DEC-017)
