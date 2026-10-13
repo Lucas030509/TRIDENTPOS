@@ -57,5 +57,8 @@ export * from './features/salon/ChangeGuestsDialog.js';
 export * from './features/salon/SplitAccountDialog.js';
 export * from './features/salon/ComanderoView.js';
 
+// Feature: KDS Cocina Táctil (WP-026C)
+export * from './features/kds/index.js';
+
 // Root Router
 export * from './router.js';

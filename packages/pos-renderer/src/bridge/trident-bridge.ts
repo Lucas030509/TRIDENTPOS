@@ -97,23 +97,44 @@ export interface DomainEvent {
   readonly timestamp: string;
 }
 
+export interface KdsTicketPartidaModifierDTO {
+  readonly modifierId: string;
+  readonly modifierNameSnapshot: string;
+}
+
 export interface KdsTicketItemDTO {
   readonly id: string;
   readonly productName: string;
-  readonly quantity: number;
-  readonly notes?: string;
+  readonly quantity: number | string;
+  readonly notes?: string | null;
   readonly status: 'PENDIENTE' | 'EN_PREPARACION' | 'LISTO' | 'ENTREGADO';
+  readonly modifiers?: readonly KdsTicketPartidaModifierDTO[];
 }
 
 export interface KdsTicketDTO {
   readonly id: string;
-  readonly folio: number;
+  readonly folio: number | string;
+  readonly cuentaId?: string;
   readonly tableNumber: string;
-  readonly waiterName: string;
+  readonly waiterName?: string;
+  readonly kdsEstacionId?: string;
+  readonly urgencyLevel?: 'NORMAL' | 'ALTA' | 'URGENTE';
   readonly items: readonly KdsTicketItemDTO[];
   readonly status: 'PENDIENTE' | 'EN_PREPARACION' | 'LISTO';
+  readonly printStatus?: 'PENDING' | 'QUEUED' | 'PRINTING' | 'PRINTED' | 'FAILED';
+  readonly printerId?: string | null;
   readonly createdAt: string;
+  readonly updatedAt?: string;
+  readonly completedAt?: string | null;
+  readonly preparationTimeMinutes?: number | null;
   readonly targetSeconds: number;
+}
+
+export interface KdsEstacionDTO {
+  readonly id: string;
+  readonly name: string;
+  readonly stationType: 'COCINA' | 'BARRA';
+  readonly status: 'ACTIVA' | 'INACTIVA';
 }
 
 export interface CashShiftStatusDTO {
@@ -291,9 +312,33 @@ export interface TridentApi {
   };
   readonly kds: {
     readonly getTickets: (estacionId: string) => Promise<BridgeResult<readonly KdsTicketDTO[]>>;
+    readonly getEstaciones: () => Promise<BridgeResult<readonly KdsEstacionDTO[]>>;
+    readonly startPreparation: (
+      ticketId: string,
+      estacionId: string,
+      clientOpId: string,
+    ) => Promise<BridgeResult<{ readonly success: boolean }>>;
     readonly bumpTicket: (
       ticketId: string,
       clientOpId: string,
+      preparationTimeMinutes?: number,
+    ) => Promise<BridgeResult<{ readonly success: boolean }>>;
+    readonly recallTicket: (
+      ticketId: string,
+      windowMinutes?: number,
+    ) => Promise<BridgeResult<KdsTicketDTO | null>>;
+    readonly getRecentCompletedTickets: (
+      estacionId: string,
+      windowMinutes?: number,
+    ) => Promise<BridgeResult<readonly KdsTicketDTO[]>>;
+    readonly reopenTicket: (
+      ticketId: string,
+      clientOpId: string,
+    ) => Promise<BridgeResult<{ readonly success: boolean }>>;
+    readonly toggleItemStatus: (
+      ticketId: string,
+      itemId: string,
+      newStatus: 'PENDIENTE' | 'EN_PREPARACION' | 'LISTO',
     ) => Promise<BridgeResult<{ readonly success: boolean }>>;
   };
   readonly caja: {
@@ -328,6 +373,172 @@ declare global {
 export function createMockTridentBridge(initialSession: SessionView | null = null): TridentApi {
   let sessionState: SessionView | null = initialSession;
   const eventListeners = new Set<(event: DomainEvent) => void>();
+
+  const broadcastEvent = (event: DomainEvent) => {
+    for (const listener of eventListeners) {
+      try {
+        listener(event);
+      } catch {
+        // ignore listener errors in mock
+      }
+    }
+  };
+
+  // In-memory mock database for KDS
+  const mockEstaciones: readonly KdsEstacionDTO[] = [
+    { id: 'cocina-1', name: 'Cocina Caliente', stationType: 'COCINA', status: 'ACTIVA' },
+    { id: 'cocina-2', name: 'Cocina Fría & Ensaladas', stationType: 'COCINA', status: 'ACTIVA' },
+    { id: 'parrilla-1', name: 'Parrilla & Cortes', stationType: 'COCINA', status: 'ACTIVA' },
+    { id: 'bar-1', name: 'Bar & Bebidas', stationType: 'BARRA', status: 'ACTIVA' },
+  ];
+
+  const mockKdsTickets: KdsTicketDTO[] = [
+    {
+      id: 'kds-ticket-1',
+      folio: 101,
+      cuentaId: 'cta-1',
+      tableNumber: 'Mesa 4',
+      waiterName: 'Carlos Mendoza',
+      kdsEstacionId: 'cocina-1',
+      urgencyLevel: 'NORMAL',
+      status: 'EN_PREPARACION',
+      printStatus: 'PRINTED',
+      printerId: 'prn-cocina',
+      targetSeconds: 900,
+      createdAt: new Date(Date.now() - 4 * 60 * 1000).toISOString(),
+      updatedAt: new Date(Date.now() - 3 * 60 * 1000).toISOString(),
+      items: [
+        {
+          id: 'kds-item-1',
+          productName: 'Tacos de Ribeye (Orden 3 pzas)',
+          quantity: '2.0000',
+          status: 'EN_PREPARACION',
+          notes: 'Término medio, salsa verde aparte',
+          modifiers: [
+            { modifierId: 'm-1', modifierNameSnapshot: 'Término Medio' },
+            { modifierId: 'm-2', modifierNameSnapshot: 'Salsa Verde Aparte' },
+          ],
+        },
+        {
+          id: 'kds-item-2',
+          productName: 'Guacamole Rústico con Totopos',
+          quantity: '1.0000',
+          status: 'LISTO',
+          notes: 'Sin cebolla',
+          modifiers: [{ modifierId: 'm-3', modifierNameSnapshot: 'Sin Cebolla' }],
+        },
+      ],
+    },
+    {
+      id: 'kds-ticket-2',
+      folio: 102,
+      cuentaId: 'cta-2',
+      tableNumber: 'Mesa 2',
+      waiterName: 'Ana Rojas',
+      kdsEstacionId: 'cocina-1',
+      urgencyLevel: 'ALTA',
+      status: 'PENDIENTE',
+      printStatus: 'PRINTED',
+      printerId: 'prn-cocina',
+      targetSeconds: 600,
+      createdAt: new Date(Date.now() - 8 * 60 * 1000).toISOString(),
+      updatedAt: new Date(Date.now() - 8 * 60 * 1000).toISOString(),
+      items: [
+        {
+          id: 'kds-item-3',
+          productName: 'Hamburguesa Trident Wagyu',
+          quantity: '1.0000',
+          status: 'PENDIENTE',
+          notes: 'Término 3/4, Extra Queso Gouda',
+          modifiers: [{ modifierId: 'm-4', modifierNameSnapshot: 'Extra Queso Gouda' }],
+        },
+        {
+          id: 'kds-item-4',
+          productName: 'Papas Trufadas con Parmesano',
+          quantity: '1.0000',
+          status: 'PENDIENTE',
+          modifiers: [],
+        },
+      ],
+    },
+    {
+      id: 'kds-ticket-3',
+      folio: 103,
+      cuentaId: 'cta-3',
+      tableNumber: 'Para Llevar / Rappi',
+      waiterName: 'Repartidor #482',
+      kdsEstacionId: 'cocina-1',
+      urgencyLevel: 'URGENTE',
+      status: 'EN_PREPARACION',
+      printStatus: 'PRINTED',
+      printerId: 'prn-cocina',
+      targetSeconds: 720,
+      createdAt: new Date(Date.now() - 15 * 60 * 1000).toISOString(),
+      updatedAt: new Date(Date.now() - 14 * 60 * 1000).toISOString(),
+      items: [
+        {
+          id: 'kds-item-5',
+          productName: 'Corte New York 400g',
+          quantity: '1.0000',
+          status: 'EN_PREPARACION',
+          notes: 'URGENTE: Lleva 15 min en comanda',
+          modifiers: [{ modifierId: 'm-5', modifierNameSnapshot: 'Término Tres Cuartos' }],
+        },
+      ],
+    },
+    {
+      id: 'kds-ticket-4',
+      folio: 104,
+      cuentaId: 'cta-1',
+      tableNumber: 'Mesa 4',
+      waiterName: 'Carlos Mendoza',
+      kdsEstacionId: 'bar-1',
+      urgencyLevel: 'NORMAL',
+      status: 'PENDIENTE',
+      printStatus: 'PRINTED',
+      printerId: 'prn-bar',
+      targetSeconds: 300,
+      createdAt: new Date(Date.now() - 2 * 60 * 1000).toISOString(),
+      updatedAt: new Date(Date.now() - 2 * 60 * 1000).toISOString(),
+      items: [
+        {
+          id: 'kds-item-6',
+          productName: 'Margarita de la Casa (Mezcal)',
+          quantity: '2.0000',
+          status: 'PENDIENTE',
+          notes: 'Escarchada con sal de gusano',
+        },
+      ],
+    },
+  ];
+
+  const mockCompletedKdsTickets: KdsTicketDTO[] = [
+    {
+      id: 'kds-comp-1',
+      folio: 100,
+      cuentaId: 'cta-0',
+      tableNumber: 'Mesa 1',
+      waiterName: 'Carlos Mendoza',
+      kdsEstacionId: 'cocina-1',
+      urgencyLevel: 'NORMAL',
+      status: 'LISTO',
+      printStatus: 'PRINTED',
+      printerId: 'prn-cocina',
+      targetSeconds: 900,
+      createdAt: new Date(Date.now() - 25 * 60 * 1000).toISOString(),
+      updatedAt: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
+      completedAt: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
+      preparationTimeMinutes: 15,
+      items: [
+        {
+          id: 'kds-item-comp-1',
+          productName: 'Tacos de Asada (Orden 3 pzas)',
+          quantity: '1.0000',
+          status: 'LISTO',
+        },
+      ],
+    },
+  ];
 
   // In-memory mock database for Salón
   const catalogCategories: readonly CatalogCategoryDTO[] = [
@@ -940,6 +1151,46 @@ export function createMockTridentBridge(initialSession: SessionView | null = nul
           ),
         }));
 
+        // Broadcast comanda creation to KDS
+        const newTicketId = `kds-t-${Date.now()}`;
+        const nextFolio = mockKdsTickets.length + mockCompletedKdsTickets.length + 101;
+        const newKdsTicket: KdsTicketDTO = {
+          id: newTicketId,
+          folio: nextFolio,
+          cuentaId,
+          tableNumber: updatedCuenta.tableNumber
+            ? `Mesa ${updatedCuenta.tableNumber}`
+            : 'Mostrador',
+          waiterName: sessionState?.displayName ?? 'Mesero en turno',
+          kdsEstacionId: 'cocina-1',
+          urgencyLevel: 'NORMAL',
+          status: 'PENDIENTE',
+          printStatus: 'PRINTED',
+          printerId: 'prn-cocina',
+          targetSeconds: 900,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          items: items.map((it, idx) => ({
+            id: `kds-partida-${Date.now()}-${idx}`,
+            productName: it.productNameSnapshot,
+            quantity: it.quantity,
+            notes: it.notes ?? null,
+            status: 'PENDIENTE',
+            modifiers: it.modifiers?.map((m) => ({
+              modifierId: m.modifierId,
+              modifierNameSnapshot: m.modifierNameSnapshot,
+            })),
+          })),
+        };
+        mockKdsTickets.push(newKdsTicket);
+        broadcastEvent({
+          eventType: 'ComandaEnviadaACocina',
+          eventContractVersion: 1,
+          entityId: newTicketId,
+          payload: newKdsTicket,
+          timestamp: new Date().toISOString(),
+        });
+
         return { ok: true, data: updatedCuenta, version: updatedCuenta.version };
       },
 
@@ -1193,10 +1444,178 @@ export function createMockTridentBridge(initialSession: SessionView | null = nul
       },
     },
     kds: {
-      async getTickets() {
-        return { ok: true, data: [] };
+      async getTickets(estacionId: string) {
+        if (!estacionId || estacionId === 'todos') {
+          return { ok: true, data: [...mockKdsTickets] };
+        }
+        const filtered = mockKdsTickets.filter((t) => t.kdsEstacionId === estacionId);
+        return { ok: true, data: filtered };
       },
-      async bumpTicket() {
+      async getEstaciones() {
+        return { ok: true, data: [...mockEstaciones] };
+      },
+      async startPreparation(ticketId: string, estacionId: string, clientOpId: string) {
+        const ticketIndex = mockKdsTickets.findIndex((t) => t.id === ticketId);
+        const current = ticketIndex >= 0 ? mockKdsTickets[ticketIndex] : undefined;
+        if (!current || ticketIndex === -1) {
+          return {
+            ok: false,
+            error: {
+              code: 'NOT_FOUND',
+              message: `Ticket '${ticketId}' no encontrado`,
+              retryable: false,
+            },
+          };
+        }
+        const updated: KdsTicketDTO = {
+          ...current,
+          status: 'EN_PREPARACION',
+          updatedAt: new Date().toISOString(),
+          items: current.items.map((i) => ({ ...i, status: 'EN_PREPARACION' })),
+        };
+        mockKdsTickets[ticketIndex] = updated;
+        broadcastEvent({
+          eventType: 'OrdenProduccionIniciadaEnKDS',
+          eventContractVersion: 1,
+          entityId: ticketId,
+          payload: { ticket: updated, clientOpId },
+          timestamp: new Date().toISOString(),
+        });
+        return { ok: true, data: { success: true } };
+      },
+      async bumpTicket(ticketId: string, clientOpId: string, preparationTimeMinutes?: number) {
+        const ticketIndex = mockKdsTickets.findIndex((t) => t.id === ticketId);
+        const ticket = ticketIndex >= 0 ? mockKdsTickets[ticketIndex] : undefined;
+        if (!ticket || ticketIndex === -1) {
+          return {
+            ok: false,
+            error: {
+              code: 'NOT_FOUND',
+              message: `Ticket '${ticketId}' no encontrado`,
+              retryable: false,
+            },
+          };
+        }
+        const elapsedMs = Math.max(0, Date.now() - new Date(ticket.createdAt).getTime());
+        const calculatedMins = Math.max(1, Math.round(elapsedMs / 60000));
+        const prepMins = preparationTimeMinutes ?? calculatedMins;
+
+        const completedTicket: KdsTicketDTO = {
+          ...ticket,
+          status: 'LISTO',
+          completedAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          preparationTimeMinutes: prepMins,
+          items: ticket.items.map((i) => ({ ...i, status: 'LISTO' })),
+        };
+
+        mockKdsTickets.splice(ticketIndex, 1);
+        mockCompletedKdsTickets.unshift(completedTicket);
+
+        broadcastEvent({
+          eventType: 'OrdenProduccionConfirmadaEnKDS',
+          eventContractVersion: 1,
+          entityId: ticketId,
+          payload: {
+            ordenProduccionId: ticketId,
+            completedAt: completedTicket.completedAt,
+            tiempoPreparacionMinutos: prepMins,
+            ticket: completedTicket,
+            clientOpId,
+          },
+          timestamp: new Date().toISOString(),
+        });
+
+        return { ok: true, data: { success: true } };
+      },
+      async recallTicket(ticketId: string, windowMinutes: number = 120) {
+        const cutoffTime = Date.now() - windowMinutes * 60 * 1000;
+        const found = mockCompletedKdsTickets.find((t) => {
+          if (t.id !== ticketId) return false;
+          if (!t.completedAt) return true;
+          return new Date(t.completedAt).getTime() >= cutoffTime;
+        });
+        return { ok: true, data: found ?? null };
+      },
+      async getRecentCompletedTickets(estacionId: string, windowMinutes: number = 120) {
+        const cutoffTime = Date.now() - windowMinutes * 60 * 1000;
+        const filtered = mockCompletedKdsTickets.filter((t) => {
+          if (estacionId && estacionId !== 'todos' && t.kdsEstacionId !== estacionId) {
+            return false;
+          }
+          if (!t.completedAt) return true;
+          return new Date(t.completedAt).getTime() >= cutoffTime;
+        });
+        return { ok: true, data: filtered };
+      },
+      async reopenTicket(ticketId: string, clientOpId: string) {
+        const completedIndex = mockCompletedKdsTickets.findIndex((t) => t.id === ticketId);
+        const completed = completedIndex >= 0 ? mockCompletedKdsTickets[completedIndex] : undefined;
+        if (!completed || completedIndex === -1) {
+          return {
+            ok: false,
+            error: {
+              code: 'NOT_FOUND',
+              message: `Ticket recall '${ticketId}' no encontrado`,
+              retryable: false,
+            },
+          };
+        }
+        const reopened: KdsTicketDTO = {
+          ...completed,
+          status: 'EN_PREPARACION',
+          completedAt: null,
+          preparationTimeMinutes: null,
+          updatedAt: new Date().toISOString(),
+        };
+        mockCompletedKdsTickets.splice(completedIndex, 1);
+        mockKdsTickets.unshift(reopened);
+
+        broadcastEvent({
+          eventType: 'KdsTicketActualizado',
+          eventContractVersion: 1,
+          entityId: ticketId,
+          payload: { ticket: reopened, clientOpId, action: 'REOPEN' },
+          timestamp: new Date().toISOString(),
+        });
+
+        return { ok: true, data: { success: true } };
+      },
+      async toggleItemStatus(
+        ticketId: string,
+        itemId: string,
+        newStatus: 'PENDIENTE' | 'EN_PREPARACION' | 'LISTO',
+      ) {
+        const ticketIndex = mockKdsTickets.findIndex((t) => t.id === ticketId);
+        const ticket = ticketIndex >= 0 ? mockKdsTickets[ticketIndex] : undefined;
+        if (!ticket || ticketIndex === -1) {
+          return {
+            ok: false,
+            error: {
+              code: 'NOT_FOUND',
+              message: `Ticket '${ticketId}' no encontrado`,
+              retryable: false,
+            },
+          };
+        }
+        const updatedItems = ticket.items.map((i) =>
+          i.id === itemId ? { ...i, status: newStatus } : i,
+        );
+        const updated: KdsTicketDTO = {
+          ...ticket,
+          items: updatedItems,
+          updatedAt: new Date().toISOString(),
+        };
+        mockKdsTickets[ticketIndex] = updated;
+
+        broadcastEvent({
+          eventType: 'KdsTicketActualizado',
+          eventContractVersion: 1,
+          entityId: ticketId,
+          payload: { ticket: updated, itemId, newStatus },
+          timestamp: new Date().toISOString(),
+        });
+
         return { ok: true, data: { success: true } };
       },
     },
