@@ -119,11 +119,16 @@ function derInt(num: number | Buffer): Buffer {
     }
     return derTag(0x02, Buffer.from([0, num]));
   }
-  const firstByte = num.length > 0 ? (num[0] ?? 0) : 0;
-  if (num.length > 0 && (firstByte & 0x80) !== 0) {
-    return derTag(0x02, Buffer.concat([Buffer.from([0x00]), num]));
+  let buf = num;
+  // Strip redundant leading 0x00 bytes per DER minimal encoding rules
+  while (buf.length > 1 && buf[0] === 0x00 && ((buf[1] ?? 0) & 0x80) === 0) {
+    buf = buf.subarray(1);
   }
-  return derTag(0x02, num);
+  // If high bit is set, prepend 0x00 to mark as positive integer
+  if (buf.length > 0 && ((buf[0] ?? 0) & 0x80) !== 0) {
+    return derTag(0x02, Buffer.concat([Buffer.from([0x00]), buf]));
+  }
+  return derTag(0x02, buf);
 }
 
 function derBitString(buffer: Buffer): Buffer {
@@ -223,7 +228,9 @@ export function generateSelfSignedX509Certificate(
 
   // 7. TBSCertificate Assembly
   const version = derTag(0xa0, derInt(2));
-  const serialNumber = derInt(crypto.randomBytes(16));
+  const rawSerial = crypto.randomBytes(16);
+  rawSerial[0] = rawSerial[0]! & 0x7f || 0x01;
+  const serialNumber = derInt(rawSerial);
   const tbs = derSeq(version, serialNumber, algId, name, validity, name, spki, extensions);
 
   // 8. Sign TBSCertificate using ECDSA SHA-256
