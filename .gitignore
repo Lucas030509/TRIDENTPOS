@@ -35,3 +35,13 @@ Thumbs.db
 .vscode/
 *.sublime-project
 *.sublime-workspace
+
+# Local Data & SQLite
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# Release Build Outputs & Keys
+release/
+tridentpos-sbom.cdx.json
