@@ -303,6 +303,7 @@ describe('Dependency Graph Architectural Integrity Checker', () => {
       '@trident/ui': ['@trident/core'],
       '@trident/pos-edge-runtime': ['@trident/core', '@trident/pos', '@trident/edge'],
       '@trident/pos-renderer': ['@trident/core', '@trident/ui'],
+      '@trident/backoffice-web': ['@trident/core', '@trident/ui'],
       '@trident/cloud-server': [
         '@trident/core',
         '@trident/database',
@@ -340,6 +341,7 @@ describe('Dependency Graph Architectural Integrity Checker', () => {
       '@trident/ui': ['@trident/core'],
       '@trident/pos-edge-runtime': ['@trident/core', '@trident/pos', '@trident/edge'],
       '@trident/pos-renderer': ['@trident/core', '@trident/ui'],
+      '@trident/backoffice-web': ['@trident/core', '@trident/ui'],
       '@trident/cloud-server': [
         '@trident/core',
         '@trident/database',
